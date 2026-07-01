@@ -1,0 +1,4 @@
+[book]
+title = "bam_tide: Fast and Flexible BAM Processing in Rust"
+authors = ["Stefan Lang"]
+language = "en"

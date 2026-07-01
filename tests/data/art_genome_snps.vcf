@@ -1,0 +1,7 @@
+##fileformat=VCFv4.2
+##contig=<ID=chrA>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chrA	125	rs_geneA_125	A	T	.	PASS	GENE=geneA;REGION=exon
+chrA	445	rs_geneB_445	C	G	.	PASS	GENE=geneB;REGION=exon;STRAND=minus;OVERLAPS=geneC_exon1
+chrA	545	rs_geneC_545	G	T	.	PASS	GENE=geneC;REGION=exon
+chrA	835	rs_geneD_835	C	A	.	PASS	GENE=geneD;REGION=exon;STRAND=minus

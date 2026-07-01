@@ -1,0 +1,31 @@
+[package]
+name = "bam_tide"
+version = "0.4.0"
+edition = "2021"
+
+[profile.release]
+strip = true
+opt-level = 3         # Maximum speed
+lto = true              # Best of both worlds
+codegen-units = 1       # Optional: best codegen, slower build
+
+[dependencies]
+bigtools = "0.5.4"
+#bigtools = { git="https://github.com/stela2502/bigtools.git" }
+cigar = { git="https://github.com/stela2502/cigar.git" } 
+clap = { version = "4.0", features = ["derive"] }
+directories = "5"
+flate2 = "*"
+indicatif = {version = "*", features = ["rayon"]}
+lazy_static = "*"
+num_cpus = "1.13"  # Or the latest version
+openssl = { version = "0.10", features = ["vendored"] }
+rayon = "1.5"
+regex = "1.11.2"
+int_to_str = { git = "https://github.com/stela2502/int_to_str" }
+scdata = { git = "https://github.com/stela2502/scdata" }
+mapping_info = { git = "https://github.com/stela2502/mapping_info" }
+rust-htslib = { version = "0.49.0", features = ["static"] }
+#rust-htslib = "0.49.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3.22.0"
