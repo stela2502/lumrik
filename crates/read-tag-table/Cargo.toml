@@ -1,0 +1,36 @@
+[package]
+name = "read-tag-table"
+version = "0.1.0"
+edition = "2024"
+
+authors = ["Stefan Lang"]
+license = "MIT"
+description = "Read tag storage, serialization, and deduplication utilities for single-cell sequencing workflows."
+repository = "https://github.com/stela2502/read-tag-table"
+homepage = "https://github.com/stela2502/read-tag-table"
+documentation = "https://docs.rs/read-tag-table"
+readme = "README.md"
+
+keywords = [
+    "bioinformatics",
+    "single-cell",
+    "sequencing",
+    "fastq",
+    "barcode"
+]
+
+categories = [
+    "science",
+    "data-structures"
+]
+
+rust-version = "1.85"
+
+[dependencies]
+anyhow = "1"
+bincode = "1"
+clap  = { version = "4", features = ["derive"] } 
+csv = "1.4.0"
+flate2 = "1.1.9"
+mapping_info = "0.1.0"
+serde = { version = "1", features = ["derive"] }
