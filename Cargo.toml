@@ -1,0 +1,10 @@
+[package]
+name = "mapping_info"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+atty = "0.2"
+chrono = "0.4.33"
+num-format = "0.4"
+indicatif = {version = "*", features = ["rayon"]}
