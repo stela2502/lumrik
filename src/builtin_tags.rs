@@ -1,0 +1,66 @@
+use clap::ValueEnum;
+
+use crate::{FastTagMapper, FeatureEntry};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BuiltinTagSet {
+    Human,
+    Mouse,
+}
+
+pub const HUMAN_SAMPLE_TAGS: [&[u8]; 12] = [
+    b"ATTCAAGGGCAGCCGCGTCACGATTGGATACGACTGTTGGACCGG",
+    b"TGGATGGGATAAGTGCGTGATGGACCGAAGGGACCTCGTGGCCGG",
+    b"CGGCTCGTGCTGCGTCGTCTCAAGTCCAGAAACTCCGTGTATCCT",
+    b"ATTGGGAGGCTTTCGTACCGCTGCCGCCACCAGGTGATACCCGCT",
+    b"CTCCCTGGTGTTCAATACCCGATGTGGTGGGCAGAATGTGGCTGG",
+    b"TTACCCGCAGGAAGACGTATACCCCTCGTGCCAGGCGACCAATGC",
+    b"TGTCTACGTCGGACCGCAAGAAGTGAGTCAGAGGCTGCACGCTGT",
+    b"CCCCACCAGGTTGCTTTGTCGGACGAGCCCGCACAGCGCTAGGAT",
+    b"GTGATCCGCGCAGGCACACATACCGACTCAGATGGGTTGTCCAGG",
+    b"GCAGCCGGCGTCGTACGAGGCACAGCGGAGACTAGATGAGGCCCC",
+    b"CGCGTCCAATTTCCGAAGCCCCGCCCTAGGAGTTCCCCTGCGTGC",
+    b"GCCCATTCATTGCACCCGCCAGTGATCGACCCTAGTGGAGCTAAG",
+];
+
+pub const MOUSE_SAMPLE_TAGS: [&[u8]; 12] = [
+    b"AAGAGTCGACTGCCATGTCCCCTCCGCGGGTCCGTGCCCCCCAAG",
+    b"ACCGATTAGGTGCGAGGCGCTATAGTCGTACGTCGTTGCCGTGCC",
+    b"AGGAGGCCCCGCGTGAGAGTGATCAATCCAGGATACATTCCCGTC",
+    b"TTAACCGAGGCGTGAGTTTGGAGCGTACCGGCTTTGCGCAGGGCT",
+    b"GGCAAGGTGTCACATTGGGCTACCGCGGGAGGTCGACCAGATCCT",
+    b"GCGGGCACAGCGGCTAGGGTGTTCCGGGTGGACCATGGTTCAGGC",
+    b"ACCGGAGGCGTGTGTACGTGCGTTTCGAATTCCTGTAAGCCCACC",
+    b"TCGCTGCCGTGCTTCATTGTCGCCGTTCTAACCTCCGATGTCTCG",
+    b"GCCTACCCGCTATGCTCGTCGGCTGGTTAGAGTTTACTGCACGCC",
+    b"TCCCATTCGAATCACGAGGCCGGGTGCGTTCTCCTATGCAATCCC",
+    b"GGTTGGCTCAGAGGCCCCAGGCTGCGGACGTCGTCGGACTCGCGT",
+    b"CTGGGTGCCTGGTCGGGTTACGTCGGCCCTCGGGTCGCGAAGGTC",
+];
+
+impl FastTagMapper {
+    pub fn human_samples() -> Self {
+        let mut mapper = Self::new();
+        for (i, seq) in HUMAN_SAMPLE_TAGS.iter().enumerate() {
+            let id = (i + 1) as u64;
+            mapper.add_feature(seq, FeatureEntry::bd_human(id));
+        }
+        mapper
+    }
+
+    pub fn mouse_samples() -> Self {
+        let mut mapper = Self::new();
+        for (i, seq) in MOUSE_SAMPLE_TAGS.iter().enumerate() {
+            let id = (i + 1) as u64;
+            mapper.add_feature(seq, FeatureEntry::bd_mouse(id));
+        }
+        mapper
+    }
+
+    pub fn builtin(set: BuiltinTagSet) -> Self {
+        match set {
+            BuiltinTagSet::Human => Self::human_samples(),
+            BuiltinTagSet::Mouse => Self::mouse_samples(),
+        }
+    }
+}
