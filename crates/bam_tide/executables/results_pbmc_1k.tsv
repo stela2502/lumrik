@@ -1,0 +1,6 @@
+flag	CHR	n_over_eps	frac_n_over_eps	mean_abs	var_abs	rmse	max_abs	pearson_rho	py_elapsed_s	py_max_rss_kb	rs_elapsed_s	rs_max_rss_kb	python_bw	rust_bw
+0	TOTAL	116158	0.001874	7.433e-3	3.566e1	5.971e0	4.129e4	0.9999	721.794	189992	91.253	232384	python_pbmc_1k_flag0.bw	rust_pbmc_1k_flag0.bw
+256	TOTAL	109992	0.001774	6.812e-3	3.521e1	5.934e0	4.129e4	0.9999	613.711	179992	91.377	227288	python_pbmc_1k_flag256.bw	rust_pbmc_1k_flag256.bw
+512	TOTAL	116158	0.001874	7.433e-3	3.566e1	5.971e0	4.129e4	0.9999	737.159	189992	93.362	232392	python_pbmc_1k_flag512.bw	rust_pbmc_1k_flag512.bw
+1024	TOTAL	106777	0.001722	5.741e-3	2.991e1	5.469e0	4.129e4	0.9996	548.207	189316	90.447	232608	python_pbmc_1k_flag1024.bw	rust_pbmc_1k_flag1024.bw
+2048	TOTAL	116158	0.001874	7.433e-3	3.566e1	5.971e0	4.129e4	0.9999	732.888	189004	93.464	232568	python_pbmc_1k_flag2048.bw	rust_pbmc_1k_flag2048.bw

@@ -1,0 +1,41 @@
+FROM rust:1.89-bookworm AS builder
+
+RUN apt-get update && apt-get install -y \
+    clang \
+    libclang-dev \
+    pkg-config \
+    libssl-dev \
+    zlib1g-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libcurl4-openssl-dev \
+    cmake
+
+ARG BAM_TIDE_REPO=https://github.com/stela2502/bam_tide.git
+ARG BAM_TIDE_REF=main
+
+WORKDIR /src
+
+RUN git clone --depth 1 --branch ${BAM_TIDE_REF} ${BAM_TIDE_REPO} bam_tide
+
+WORKDIR /src/bam_tide
+
+RUN cargo install --path . --root /usr/local
+
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    samtools \
+    minimap2 \
+    ca-certificates \
+    bash \
+    coreutils \
+    zlib1g \
+    libbz2-1.0 \
+    liblzma5 \
+    libcurl4 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
+

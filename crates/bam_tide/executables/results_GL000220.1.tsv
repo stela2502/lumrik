@@ -1,0 +1,6 @@
+flag	CHR	n_over_eps	frac_n_over_eps	mean_abs	var_abs	rmse	max_abs	pearson_rho	py_elapsed_s	py_max_rss_kb	rs_elapsed_s	rs_max_rss_kb	python_bw	rust_bw
+0	TOTAL	180	0.000003	2.007e-5	1.093e-3	3.306e-2	1.400e2	1.0000	46.401	73376	4.370	7500	python_GL000220.1_flag0.bw	rust_GL000220.1_flag0.bw
+256	TOTAL	74	0.000001	4.758e-6	7.409e-5	8.607e-3	3.900e1	1.0000	45.545	73356	4.371	7336	python_GL000220.1_flag256.bw	rust_GL000220.1_flag256.bw
+512	TOTAL	180	0.000003	2.007e-5	1.093e-3	3.306e-2	1.400e2	1.0000	49.619	73224	4.169	7360	python_GL000220.1_flag512.bw	rust_GL000220.1_flag512.bw
+1024	TOTAL	180	0.000003	2.007e-5	1.093e-3	3.306e-2	1.400e2	1.0000	46.299	73428	4.370	7532	python_GL000220.1_flag1024.bw	rust_GL000220.1_flag1024.bw
+2048	TOTAL	180	0.000003	2.007e-5	1.093e-3	3.306e-2	1.400e2	1.0000	46.952	73424	4.421	7784	python_GL000220.1_flag2048.bw	rust_GL000220.1_flag2048.bw

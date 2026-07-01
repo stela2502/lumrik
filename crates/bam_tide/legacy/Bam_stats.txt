@@ -1,0 +1,87 @@
+BAM REPORT
+==========
+Generated: 2026-02-04T10:02:01+01:00
+Input:     /home/med-sal/NAS/David.Bryder/UMI_Test/GMLP_S1_R2_001.AGATAG.fastq.gz.sorted.bam
+
+Quick summary
+-------------
+Sort order:          coordinate
+Header @PG records:  2
+
+Header (first 80 lines)
+-----------------------
+@HD	VN:1.0	SO:coordinate
+@SQ	SN:chr10	LN:130694993
+@SQ	SN:chr11	LN:122082543
+@SQ	SN:chr12	LN:120129022
+@SQ	SN:chr13	LN:120421639
+@SQ	SN:chr14	LN:124902244
+@SQ	SN:chr15	LN:104043685
+@SQ	SN:chr16	LN:98207768
+@SQ	SN:chr17	LN:94987271
+@SQ	SN:chr18	LN:90702639
+@SQ	SN:chr19	LN:61431566
+@SQ	SN:chr1	LN:195471971
+@SQ	SN:chr2	LN:182113224
+@SQ	SN:chr3	LN:160039680
+@SQ	SN:chr4	LN:156508116
+@SQ	SN:chr5	LN:151834684
+@SQ	SN:chr6	LN:149736546
+@SQ	SN:chr7	LN:145441459
+@SQ	SN:chr8	LN:129401213
+@SQ	SN:chr9	LN:124595110
+@SQ	SN:chrM	LN:16299
+@SQ	SN:chrX	LN:171031299
+@SQ	SN:chrY	LN:91744698
+@PG	ID:hisat	PN:hisat	VN:0.1.5-beta
+@PG	ID:samtools	PN:samtools	PP:hisat	VN:1.19.2	CL:samtools view -H /home/med-sal/NAS/David.Bryder/UMI_Test/GMLP_S1_R2_001.AGATAG.fastq.gz.sorted.bam
+
+Read summary (from flagstat)
+----------------------------
+Total reads:         20178657
+Mapped reads:        13074466 (64.79%)
+Paired in sequencing:0
+Properly paired:     0
+Duplicates:          0
+
+flagstat
+--------
+20178657 + 0 in total (QC-passed reads + QC-failed reads)
+16286433 + 0 primary
+3892224 + 0 secondary
+0 + 0 supplementary
+0 + 0 duplicates
+0 + 0 primary duplicates
+13074466 + 0 mapped (64.79% : N/A)
+9182242 + 0 primary mapped (56.38% : N/A)
+0 + 0 paired in sequencing
+0 + 0 read1
+0 + 0 read2
+0 + 0 properly paired (N/A : N/A)
+0 + 0 with itself and mate mapped
+0 + 0 singletons (N/A : N/A)
+0 + 0 with mate mapped to a different chr
+0 + 0 with mate mapped to a different chr (mapQ>=5)
+
+idxstats (top 15 chromosomes by mapped reads)
+--------------------------------------------
+chr11	1041870
+chr1	945718
+chr2	902454
+chr5	865417
+chr7	839191
+chr4	767100
+chr3	689622
+chr9	683826
+chr6	673502
+chr17	662542
+chr8	625175
+chr13	571932
+chr14	526552
+chr10	525797
+chr15	479465
+
+samtools stats
+-------------
+Skipped (run with --with-stats to include; can be slow on large BAMs).
+
