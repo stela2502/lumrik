@@ -1,0 +1,21 @@
+[package]
+name = "snp-index"
+version = "0.1.3"
+edition = "2024"
+
+description = "Fast SNP indexing and read matching with scdata integration (cell × SNP sparse matrices)"
+license = "MIT"
+repository = "https://github.com/yourname/snp-index"
+readme = "README.md"
+keywords = ["bioinformatics", "snp", "genomics", "single-cell", "rust"]
+categories = ["science", "data-structures"]
+
+[dependencies]
+anyhow = "1.0.102"
+flate2 = "1"
+#gtf_splice_index = "0.4.0"
+gtf_splice_index = { git = "https://github.com/stela2502/gtf_splice_index" }
+mapping_info = "0.1.0"
+rust-htslib = { git = "https://github.com/stela2502/rust-htslib.git", default-features = false }
+#scdata = { git = "https://github.com/stela2502/scdata" }
+scdata = "0.2.3"
