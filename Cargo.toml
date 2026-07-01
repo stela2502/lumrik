@@ -1,0 +1,23 @@
+[package]
+name = "stela-int-to-str"
+version = "0.2.3"
+edition = "2021"
+
+description = "Fast integer to string conversion utilities optimized for high-throughput data processing."
+license = "MIT"
+repository = "https://github.com/stela2502/int_to_str"
+homepage = "https://github.com/stela2502/int_to_str"
+documentation = "https://docs.rs/stela-int-to-str"
+readme = "README.md"
+
+keywords = ["integer", "conversion", "performance", "bioinformatics"]
+categories = ["algorithms"]
+
+authors = ["Stefan Lang"]
+
+[dependencies]
+
+
+[features]
+default = []
+alignment = []
