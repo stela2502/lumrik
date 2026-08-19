@@ -1,7 +1,6 @@
+// bam_tide/src/fastq/record.rs
 //use crate::primer::{PrimerDetector, PrimerHit, Orientation};
 //use mapping_info::MappingInfo;
-
-
 
 const DNA_COMPLEMENT: [u8; 256] = {
     let mut table = [0u8; 256];
@@ -34,6 +33,16 @@ pub struct FastqRecord {
     pub qual: Vec<u8>,
 }
 
+impl std::fmt::Display for FastqRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "@{}", self.id)?;
+        writeln!(f, "{}", String::from_utf8_lossy(&self.seq))?;
+        writeln!(f, "+")?;
+        writeln!(f, "{}", self.qual_string())?;
+        Ok(())
+    }
+}
+
 
 impl FastqRecord {
 
@@ -56,6 +65,16 @@ impl FastqRecord {
     }
     pub fn is_empty(&self) -> bool{
         self.seq.is_empty()
+    }
+
+    pub fn clean_id(&self) -> String {
+        self
+            .id
+            .split_whitespace()
+            .next()
+            .unwrap_or(&self.id)
+            .trim_start_matches('@')
+            .to_string()
     }
 
     pub fn from_bam_record(rec: &rust_htslib::bam::Record) -> Self {

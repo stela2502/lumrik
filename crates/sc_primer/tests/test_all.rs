@@ -25,7 +25,7 @@ impl TestData {
     fn tenx_3p_v3_grammar(name: &str) -> Grammar {
         Grammar::parse(
             name,
-            "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12+POLYT:min=10+INSERT",
+            "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12+POLYT:min=10",
         )
         .unwrap()
     }
@@ -33,7 +33,7 @@ impl TestData {
     fn tenx_3p_v3_no_polyt_grammar(name: &str) -> Grammar {
         Grammar::parse(
             name,
-            "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12+INSERT",
+            "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12",
         )
         .unwrap()
     }
@@ -61,7 +61,7 @@ impl TestData {
     fn bd_v2_384_grammar(name: &str) -> Grammar {
         Grammar::parse(
             name,
-            "FIXED:ATAGGAAACTCATGGT:mm=2+BD_CELL:v2.384+POLYT:min=0+INSERT",
+            "FIXED:ATAGGAAACTCATGGT:mm=2+BD_CELL:v2.384+POLYT:min=0",
         )
         .unwrap()
     }
@@ -237,11 +237,11 @@ pub fn bench<F: FnMut()>(
 fn test_parse_complicated_custom_grammar() {
     let grammar = Grammar::parse(
         "custom",
-        "SEARCH:0..4+FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12+POLYT:min=10+INSERT",
+        "SEARCH:0..4+FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12+POLYT:min=10",
     )
     .unwrap();
 
-    assert_eq!(grammar.ops.len(), 6);
+    assert_eq!(grammar.ops.len(), 5);
     assert_eq!(grammar.cell_len(), 16);
     assert_eq!(grammar.umi_len(), 12);
 }
@@ -297,7 +297,7 @@ fn test_custom_10x_adapter_allows_one_fixed_error_after_synthesis() {
 fn test_custom_10x_adapter_rejects_too_many_fixed_errors() {
     let grammar = Grammar::parse(
         "tenx-fixed-error-reject",
-        "FIXED:CTACACGACGCTCTTCCGATCT:mm=1+CELL:16+UMI:12+POLYT:min=10+INSERT",
+        "FIXED:CTACACGACGCTCTTCCGATCT:mm=1+CELL:16+UMI:12+POLYT:min=10",
     )
     .unwrap();
     let detector = PrimerDetector::from_grammar(grammar.clone()).unwrap();

@@ -1,0 +1,45 @@
+on:
+  push:
+    branches:
+      - master
+
+name: release-please
+
+jobs:
+  release-please:
+    if: github.repository_owner == 'rust-bio'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: GoogleCloudPlatform/release-please-action@v4
+        id: release_main
+        with:
+          release-type: rust
+          package-name: rust-htslib
+          bump-minor-pre-major: true
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        if: ${{ steps.release_main.outputs.release_created }}
+        with:
+          toolchain: stable
+
+      - name: Install system dependencies
+        if: ${{ steps.release_main.outputs.release_created }}
+        run: |
+          sudo apt-get install --yes zlib1g-dev libbz2-dev musl musl-dev musl-tools clang libc6-dev
+
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ steps.release_main.outputs.release_created }}
+
+      - name: Publish rust-htslib
+        if: ${{ steps.release_main.outputs.release_created }}
+        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
+
+      # - uses: katyo/publish-crates@v1
+      #   if: ${{ steps.release_main.outputs.release_created || steps.release_sys.outputs.release_created }}
+      #   with:
+      #     registry-token: ${{ secrets.CRATES_IO_TOKEN }}

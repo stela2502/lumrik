@@ -195,13 +195,12 @@ impl OntNormalizer {
         .with_context(|| format!("failed to create FASTQ: {}", self.config.out.display()))?;
 
         let mut chunk: Vec<FastqRecord> = Vec::with_capacity(CHUNK_SIZE);
-        let mut processed_pairs = 0;
+
         for rec_result in bam.records() {
             let rec = rec_result.context("failed to read BAM record")?;
             chunk.push(FastqRecord::from_bam_record(&rec));
 
             if chunk.len() >= CHUNK_SIZE {
-                processed_pairs += CHUNK_SIZE;
                 self.process_chunk(&chunk, &mut fastq )?;
                 chunk.clear();
 

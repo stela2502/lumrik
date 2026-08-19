@@ -1,0 +1,8 @@
+/target
+/test_output
+*.swp
+/.cargo/
+.ipynb_checkpoints/
+*.ipynb
+/work/
+/.nextflow*

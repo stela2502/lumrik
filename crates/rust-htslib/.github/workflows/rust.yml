@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  Formatting:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Check format
+        run: cargo fmt -- --check
+
+  Linting:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Lint with clippy
+        run: RUSTFLAGS="-Dwarnings" cargo clippy --all-features --all-targets -- -Dclippy::all -Dunused_imports
+
+  Testing:
+    needs: Formatting
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get install --yes zlib1g-dev libbz2-dev musl musl-dev musl-tools clang libc6-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo-tarpaulin
+        run: |
+          set -x
+          cargo install cargo-tarpaulin
+          cargo tarpaulin --all-features --tests --doc --out Lcov -- --test-threads 1
+
+      - name: Upload coverage
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: ./lcov.info
+
+  Testing-Features:
+    needs: Formatting
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        target:
+          - no-default-features
+          - all-features
+        include:
+          - target: no-default-features
+            args: --no-default-features
+          - target: all-features
+            os: ubuntu-22.04
+            args: --all-features
+            toolchain_target: x86_64-unknown-linux-musl
+          - target: all-features
+            os: ubuntu-22.04-arm
+            args: --all-features
+            toolchain_target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get install --yes zlib1g-dev libbz2-dev musl musl-dev musl-tools clang libc6-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: |
+          cargo test ${{ matrix.args }}
+
+  Testing-MacOS:
+    needs: Formatting
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target:
+          - intel-monterey
+          - intel-ventura
+          - silicon-sonoma
+        include:
+          - target: intel-monterey
+            os: macOS-12.0
+            toolchain_target: x86_64-apple-darwin
+            toolchain: stable
+            aux_args: --target x86_64-apple-darwin
+            default: true
+          - target: intel-ventura
+            os: macOS-13.0
+            toolchain_target: x86_64-apple-darwin
+            toolchain: stable
+            aux_args: --target x86_64-apple-darwin
+            default: true
+          - target: silicon-sonoma
+            os: macOS-14.0
+            toolchain_target: aarch64-apple-darwin
+            toolchain: stable
+            aux_args: ""
+            default: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: ${{ matrix.toolchain_target }}
+          override: true
+
+      - name: Install htslib dependencies
+        run: brew install bzip2 zlib xz curl-openssl
+
+      - name: Test
+        run: |
+          cargo test --release --all-features --verbose ${{ matrix.aux_args }}
+#  Testing-OSX-MUSL-BigSur:
+#   needs: Formatting
+#   runs-on: macOS-11.0
+#   steps:
+# Test MUSL builds on OSX
+#
+# - uses: actions-rs/toolchain@v1.0.6
+#   with:
+#     toolchain: stable
+#     target: x86_64-unknown-linux-musl
+#     override: true
+
+# - name: Install OSX musl-cross
+#   run: brew install FiloSottile/musl-cross/musl-cross
+
+# # https://github.com/FiloSottile/homebrew-musl-cross/issues/16
+# - name: Provide musl-gcc symlink for the right musl arch
+#   run: ln -sf /usr/local/opt/musl-cross/libexec/bin/x86_64-linux-musl-gcc /usr/local/bin/musl-gcc
+
+# - name: Test musl build without default features
+#   uses: actions-rs/cargo@v1
+#   with:
+#     use-cross: false  # cross is not supported on GHA OSX runner, see: https://github.community/t/why-is-docker-not-installed-on-macos/17017
+#     command: test
+#     args: --release --target x86_64-unknown-linux-musl --no-default-features
+
+# - name: Test musl build with all features and debug symbols (non --release) on OSX
+#   uses: actions-rs/cargo@v1.0.1
+#   with:
+#     use-cross: false
+#     command: test
+#     args: --target x86_64-unknown-linux-musl --all-features --verbose

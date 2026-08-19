@@ -1,0 +1,21 @@
+[package]
+name = "sc-mapper"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+shell-words = "1"
+
+rust-htslib   = { git = "https://github.com/stela2502/rust-htslib.git" }
+hts-sys =  { git = "https://github.com/stela2502/hts-sys.git" }
+
+
+bam_tide = { path = "../bam_tide" }
+anyhow = "1.0.103"
+nix = { version = "0.31", features = ["fs"] } 
+tempfile = "3.27.0"
+

@@ -126,7 +126,7 @@ UMI:<LEN>
 
 POLYT:min=<N>
 
-INSERT
+INSERT:<SEQ>:mm=<N>
 
 SEARCH:<START>..<END>
 
@@ -144,16 +144,23 @@ FIXED:CTACACGACGCTCTTCCGATCT:mm=2
 +TENX_CELL:3p-v3
 +UMI:12
 +POLYT:min=0
-+INSERT
 ```
 
+Or even force the collection of exactly one insert only:
+
+```text
+FIXED:CTACACGACGCTCTTCCGATCT:mm=2
++TENX_CELL:3p-v3
++UMI:12
++POLYT:min=0
++INSERT:CTGCGCTAGCTG:mm2
+```
 ### Example BD grammar
 
 ```text
 FIXED:ATAGGAAACTCATGGT:mm=2
 +BD_CELL:v2.384
 +POLYT:min=0
-+INSERT
 ```
 
 ## PrimerMatch
@@ -234,7 +241,7 @@ identify_primers   --chemistry tenx-three-prime-v3   --seq ACTG...
 Custom grammar:
 
 ```bash
-identify_primers   --primer-structure 'FIXED:AAA:mm=1+CELL:16+UMI:12+INSERT'   --seq ACTG...
+identify_primers   --primer-structure 'FIXED:AAA:mm=1+CELL:16+UMI:12'   --seq ACTG...
 ```
 
 ## Benchmarks

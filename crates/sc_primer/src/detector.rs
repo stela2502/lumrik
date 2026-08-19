@@ -206,6 +206,8 @@ impl PrimerDetector {
 
         self.finish_insert_ends(&mut hits, seq.len());
 
+
+
         Ok(hits)
     }
 
@@ -300,6 +302,9 @@ impl PrimerDetector {
         let mut pos = start;
         let mut search = (0usize, 0usize);
 
+        let mut saw_insert_constraint = false;
+        let matched_insert = false;
+
         for op in &self.grammar.ops {
             match op {
                 GrammarOp::Fixed {
@@ -334,7 +339,19 @@ impl PrimerDetector {
                     }
                     pos += count;
                 }
-                GrammarOp::Insert => {
+                GrammarOp::Insert { seq: fixed, mismatches } => {
+                    saw_insert_constraint = true;
+
+                    let Ok(Some(chosen)) = Self::find_fixed(seq, pos, fixed, *mismatches, search) else {
+                        /*eprintln!(
+                            "I have not found the INSERT {} in sequence {} at position {}",
+                            String::from_utf8_lossy(fixed),
+                            String::from_utf8_lossy(seq),
+                            pos
+                        );*/
+                        return Ok(None);
+                    };
+
                     primer_match.insert_start = pos;
                     primer_match.insert_end = seq.len();
                     primer_match.primer_end = pos;

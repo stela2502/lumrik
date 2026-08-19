@@ -470,8 +470,7 @@ impl Scdata {
         self.total_feature_data_entries = 0;
         self.export_cell_ids.clear();
     }
-
-    #[cfg(feature = "compare")]
+    
     /// quickly compare two Scdata objects.
     pub fn compare(&self, other: &Self, label: &str) -> Result<(), String> {
         if self.export_cell_ids != other.export_cell_ids {

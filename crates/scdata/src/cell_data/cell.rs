@@ -219,7 +219,6 @@ impl CellData {
         data.join("\t")
     }
 
-    #[cfg(feature = "compare")]
     /// quick compare function
     pub fn compare(&self, other: &Self, label: &str, cell_id: u64) -> Result<(), String> {
         const EPS: f32 = 1e-6;

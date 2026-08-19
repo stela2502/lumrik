@@ -1,0 +1,33 @@
+[package]
+name = "onehot_dna"
+version = "0.1.0"
+edition = "2021"
+
+authors = ["Stefan Lang"]
+description = "Fixed-length one-hot DNA encoding for barcode matching and correction"
+license = "MIT"
+
+repository = "https://github.com/stela2502/onehot_dna"
+homepage = "https://github.com/stela2502/onehot_dna"
+documentation = "https://docs.rs/onehot_dna"
+
+readme = "README.md"
+
+keywords = [
+    "bioinformatics",
+    "dna",
+    "barcode",
+    "single-cell",
+    "sequencing",
+]
+
+categories = [
+    "science",
+    "algorithms",
+]
+
+[lib]
+name = "onehot_dna"
+path = "src/lib.rs"
+
+[dependencies]

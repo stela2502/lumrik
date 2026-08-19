@@ -20,7 +20,7 @@ pub enum GrammarOp {
     Cell { len: usize },
     Umi { len: usize },
     PolyT { min: usize },
-    Insert,
+    Insert { seq: Vec<u8>, mismatches: usize  },
     Skip { len: usize },
     Search { start: usize, end: usize },
 
@@ -68,6 +68,7 @@ impl Grammar {
                 GrammarOp::Fixed { seq, mismatches } if anchor_search.is_none() => {
                     anchor_search = AnchorSearch::new(seq, *mismatches);
                 }
+
 
                 _ => {}
             }
@@ -190,7 +191,9 @@ impl Grammar {
                     seq.extend(std::iter::repeat_n(b'A', 4));
                 }
 
-                GrammarOp::Insert => break,
+                GrammarOp::Insert  { seq: fixed, mismatches: _ } => {
+                    seq.extend_from_slice(fixed);
+                },
 
                 GrammarOp::Tag { len } | GrammarOp::Feature { len } => {
                     seq.extend(std::iter::repeat_n(b'A', *len));
@@ -219,8 +222,8 @@ impl GrammarOp {
         if let Some(rest) = token.strip_prefix("POLYT:") {
             return Self::parse_poly_t(rest);
         }
-        if token == "INSERT" {
-            return Ok(Self::Insert);
+        if let Some(rest) = token.strip_prefix("INSERT:") {
+            return Self::parse_insert(rest);
         }
         if let Some(rest) = token.strip_prefix("SKIP:") {
             return Self::parse_len(rest).map(|len| Self::Skip { len });
@@ -292,6 +295,31 @@ impl GrammarOp {
         }
 
         Ok(Self::Search { start, end })
+    }
+
+    pub fn parse_insert(rest: &str) -> PrimerResult<Self> {
+        let mut fields = rest.split(':');
+        let seq = fields.next().unwrap_or_default().as_bytes().to_vec();
+
+        if seq.is_empty() {
+            return Err(PrimerError::invalid_grammar("INSERT sequence is empty"));
+        }
+
+        let mut mismatches = 0usize;
+
+        for field in fields {
+            if let Some(mm) = field.strip_prefix("mm=") {
+                mismatches = Self::parse_len(mm)?;
+            } else if let Some(mm) = field.strip_prefix("mm") {
+                mismatches = Self::parse_len(mm)?;
+            } else {
+                return Err(PrimerError::invalid_grammar(format!(
+                    "unknown INSERT option '{field}'"
+                )));
+            }
+        }
+
+        Ok(Self::Insert { seq, mismatches })
     }
 
     pub fn parse_len(raw: &str) -> PrimerResult<usize> {

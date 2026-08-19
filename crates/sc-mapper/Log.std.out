@@ -1,0 +1,7 @@
+	/usr/lib/rna-star/bin/STAR-avx2 --runThreadN 1 --outSAMtype SAM --outStd SAM --genomeDir /tmp/.tmpXv9ax7/star-index --readFilesIn /tmp/.tmppDTorY/r1.fq
+	STAR version: 2.7.11b   compiled: 2024-04-14T23:10:25+00:00 <place not set in Debian package>
+Aug 19 13:30:38 ..... started STAR run
+Aug 19 13:30:38 ..... loading genome
+Aug 19 13:30:38 ..... started mapping
+Aug 19 13:30:38 ..... finished mapping
+Aug 19 13:30:38 ..... finished successfully

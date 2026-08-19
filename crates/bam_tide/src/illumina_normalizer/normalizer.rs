@@ -1,14 +1,12 @@
-use crate::fastq::{record::FastqRecord, writer::FastqWriter};
+use crate::fastq::{FastqRecord, FastqWriter, FastqPairReader};
 use crate::illumina_normalizer::cli::{Cli, InsertRead, PrimerRead};
-use crate::ngs_normalizer::{
-    FastqPairReader, NgsNormalizerSupport, NormalizedMolecule, NormalizerPartial, CHUNK_SIZE,
-};
+use crate::ngs_normalizer::{ NgsNormalizerSupport, CHUNK_SIZE,};
 use crate::read_tag_table::{ReadTagTable,ReadTagRecord};
 
 use anyhow::{bail, Context, Result};
 use mapping_info::MappingInfo;
 use rayon::prelude::*;
-use sc_primer::{Orientation, PrimerDetector};
+use sc_primer::{ PrimerDetector};
 use scdata::{Scdata, GeneUmiHash};
 use int_to_str::IntToStr;
 
@@ -292,13 +290,11 @@ impl IlluminaNormalizer {
         .with_context(|| format!("failed to create paired R2 FASTQ: {}", paired_r2_path.display()))?;
 
         let mut chunk: Vec<(FastqRecord, FastqRecord)> = Vec::with_capacity(CHUNK_SIZE);
-        let mut processed_pairs = 0;
 
         while let Some(pair) = reader.next_pair()? {
             chunk.push(pair);
 
             if chunk.len() >= CHUNK_SIZE {
-                processed_pairs += CHUNK_SIZE;
                 self.process_chunk(&chunk, &mut fastq, &mut paired_r1, &mut paired_r2, &mut seen)?;
                 chunk.clear();
 

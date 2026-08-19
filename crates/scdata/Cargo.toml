@@ -17,10 +17,11 @@ categories = ["science", "data-structures"]
 
 [dependencies]
 flate2 = "1.1.2"
-int_to_str = { package = "stela-int-to-str", version = "0.1.0" }
-mapping_info = "0.1.0"
 rayon = "1.10.0"
 regex = "1.11.1"
+
+mapping_info = { path = "../mapping_info" }
+int-to-str = { path = "../int_to_str" }
 
 [features]
 default = []

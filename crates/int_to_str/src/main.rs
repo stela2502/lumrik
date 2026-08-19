@@ -1,5 +1,5 @@
 use std::env;
-use stela_int_to_str::int_to_str::IntToStr;
+use int_to_str::int_to_str::IntToStr;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

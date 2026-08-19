@@ -7,9 +7,8 @@ description = "Fast BD/FASTA feature-id mapper for bam_tide"
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.5", features = ["derive"] }
-int_to_str = { package = "stela-int-to-str", version = "0.2.3" }
-mapping_info = "0.1.0"
-#mapping_info = { git = "https://github.com/stela2502/mapping_info" }
-scdata = { git = "https://github.com/stela2502/scdata" }
 
+mapping_info = { path = "../mapping_info" }
+scdata = { path = "../scdata" }
+int-to-str = { path = "../int_to_str" }
 

@@ -1,1 +1,20 @@
-Cargo.toml
+[workspace]
+resolver = "3"
+members = [
+    "crates/bam_tide",
+    "crates/sc-beacon",
+    "crates/sc_primer",
+    "crates/sc-mapper",
+    "crates/gtf_splice_index",
+    "crates/fast_tag_mapper",
+    "crates/snp-index",
+    "crates/scdata",
+    "crates/mapping_info",
+    "crates/read-tag-table",
+    "crates/int_to_str", "crates/nelrune",
+]
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+authors = ["Stefan Lang"]
