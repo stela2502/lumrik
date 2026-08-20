@@ -1,0 +1,262 @@
+# Nelrune configuration
+#
+# This file describes one complete single-cell processing run.
+#
+# Generate a fresh template with:
+#
+#   nelrune init-config > nelrune.toml
+#
+# Then run with:
+#
+#   nelrune --config nelrune.toml
+
+
+# ============================================================
+# Input
+# ============================================================
+
+[input]
+
+# FASTQ containing the single-cell barcode / UMI structure.
+r1 = "sample_R1.fastq.gz"
+
+# FASTQ containing the biological insert.
+r2 = "sample_R2.fastq.gz"
+
+
+# ============================================================
+# Chemistry
+# ============================================================
+
+[chemistry]
+
+# Built-in sc_primer chemistry.
+#
+# Examples:
+#   tenx-three-prime-v1
+#   tenx-three-prime-v2
+#   tenx-three-prime-v3
+#   tenx-three-prime-v4
+#   tenx-five-prime
+#   tenx-multiome-arc-v1
+#   bd-v1
+#   bd-v2-96
+#   bd-v2-384
+preset = "tenx-three-prime-v3"
+
+# Optional custom sc_primer grammar.
+#
+# If supplied, this overrides `preset`.
+#
+# primer_structure = "..."
+
+
+# ============================================================
+# Genomic mapping
+# ============================================================
+
+[mapping]
+
+# External mapper.
+#
+# Supported:
+#   minimap2
+#   star
+#   bwa
+mapper = "star"
+
+# Mapper index/reference.
+#
+# STAR:
+#   genomeDir
+#
+# minimap2:
+#   FASTA or .mmi
+#
+# BWA:
+#   indexed reference prefix / FASTA
+index = "/path/to/mapper/index"
+
+# Mapper worker threads.
+threads = 8
+
+# Keep secondary / supplementary / multimapping records.
+keep_multimappers = true
+
+# Extra mapper-specific command-line arguments.
+#
+# Example:
+#
+# options = [
+#     "--outFilterMultimapNmax",
+#     "20",
+# ]
+options = []
+
+
+# ============================================================
+# Gene / transcript quantification
+# ============================================================
+
+[quantification]
+
+# bam-tide splice index.
+index = "/path/to/genome.splice.idx"
+
+# Quantification target:
+#   gene
+#   transcript
+mode = "gene"
+
+# Minimum accepted alignment MAPQ.
+min_mapq = 0
+
+# Provisional cell-calling threshold.
+#
+# Cells with fewer total GEX UMIs are excluded.
+min_cell_counts = 400
+
+# Optional limit useful for testing.
+#
+# max_reads = 100000
+
+
+# ============================================================
+# Fast feature mapping
+# ============================================================
+
+[fast_features]
+
+# All of these features are searched by FastTagMapper.
+#
+# Built-in references:
+#   bd_sample_human
+#   bd_sample_mouse
+#
+# Other entries are interpreted as FASTA files.
+#
+# The FASTA filename becomes the feature collection/type
+# written into the feature metadata.
+sources = [
+    # "bd_sample_human",
+    # "guides.fa",
+    # "hto.fa",
+]
+
+# Minimum number of supporting 8-mer hits.
+min_hits = 4
+
+
+# ============================================================
+# sc-beacon
+# ============================================================
+#
+# Ambient-aware genuine-feature calling.
+#
+# Beacon uses non-cell droplets as the ambient/background
+# population and the GEX-called cells as the foreground.
+
+[beacon]
+
+# Dirichlet pseudocount for ambient feature frequencies.
+ambient_alpha = 0.5
+
+# Final posterior threshold for a genuine feature call.
+posterior_threshold = 0.95
+
+# Maximum Benjamini-Hochberg FDR.
+fdr = 0.05
+
+# Maximum mixture-model iterations.
+max_iterations = 500
+
+# Number of consecutive unchanged assignment iterations
+# required for biological convergence.
+stable_iterations = 3
+
+# Posterior required for an assignment to count as stable
+# during mixture-model convergence.
+minimum_posterior = 0.95
+
+# Relative mathematical convergence tolerance.
+convergence_tolerance = 1e-5
+
+# Initial probability that an observed feature is genuine.
+initial_prior_real = 0.05
+
+# Initial negative-binomial dispersion.
+initial_dispersion = 10.0
+
+# Minimum mean of the genuine-feature component.
+minimum_true_mean = 0.5
+
+# Lower bound for cell-specific ambient burden.
+minimum_lambda = 1e-6
+
+# Beta prior on genuine-feature frequency.
+prior_alpha = 0.5
+prior_beta = 9.5
+
+
+# ============================================================
+# Splice matching
+# ============================================================
+
+[splice_matching]
+
+# Require alignment and annotation strand compatibility.
+require_strand = false
+
+# Require an exact transcript junction chain.
+require_exact_junction_chain = false
+
+# Maximum allowed transcript-end overhangs.
+max_5p_overhang_bp = 100
+max_3p_overhang_bp = 100
+
+# Maximum tolerated intronic sequencing gap.
+allowed_intronic_gap_size = 5
+
+
+# ============================================================
+# SNP analysis
+# ============================================================
+
+[snp]
+
+# SNP analysis is optional.
+#
+# Uncomment both `genome` and `vcf` to enable it.
+
+# Reference genome FASTA.
+# genome = "/path/to/genome.fa"
+
+# Variant VCF.
+# vcf = "/path/to/variants.vcf.gz"
+
+# Minimum sequence anchor around a SNP.
+min_anchor = 20
+
+# Allow bam-tide to refine alignments against the genome.
+genome_refine = true
+
+
+# ============================================================
+# Runtime
+# ============================================================
+
+[runtime]
+
+# General Rayon thread count.
+#
+# 0 lets Rayon choose automatically.
+threads = 0
+
+
+# ============================================================
+# Output
+# ============================================================
+
+[output]
+
+path = "nelrune_out"
