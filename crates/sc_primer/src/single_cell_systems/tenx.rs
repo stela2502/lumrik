@@ -12,6 +12,7 @@ use onehot_dna::{OneHot, OneHotSet};
 static TENX_3M_FEBRUARY_2018: &[u8] =
     include_bytes!("whitelists/3M-february-2018.txt.gz");
 
+#[allow(unused)]
 static TENX_3M_FEBRUARY_2018_TRU: &[u8] =
     include_bytes!("whitelists/3M-february-2018_TRU.txt.gz");
 

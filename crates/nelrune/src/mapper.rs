@@ -17,7 +17,8 @@ use sc_mapper::{
 
 use crate::quant::CHUNK;
 
-use rust_htslib::bam::{Record, record::Aux};
+use rust_htslib::bam::{Record, HeaderView, record::Aux};
+use gtf_splice_index::SpliceIndex;
 
 use crate::fastq::ParsedPair;
 
@@ -78,7 +79,7 @@ pub fn drain_mapper(
     Ok(())
 }
 
-fn consume_mapping_call(
+pub fn consume_mapping_call(
     call: MappingCall,
     pending: &mut HashMap<String, ReadTags>,
     job_builder: &JobBuilder<'_>,
@@ -217,6 +218,52 @@ fn set_aux_string(
                 String::from_utf8_lossy(tag)
             )
         })?;
+
+    Ok(())
+}
+
+pub fn validate_reference_compatibility(
+    header: &HeaderView,
+    idx: &SpliceIndex,
+) -> Result<()> {
+    let mut matched = 0usize;
+    let mut unmatched = Vec::new();
+
+    for tid in 0..header.target_count() {
+        let chr =
+            std::str::from_utf8(
+                header.tid2name(tid),
+            )
+            .context(
+                "mapper header contains an invalid UTF-8 chromosome name",
+            )?;
+
+        if idx.chr_id(chr).is_some() {
+            matched += 1;
+        } else {
+            unmatched.push(chr.to_string());
+        }
+    }
+
+    if matched == 0 {
+        bail!(
+            "mapper reference and splice index appear incompatible: \
+             none of the {} mapper contigs could be resolved by the splice index",
+            header.target_count(),
+        );
+    }
+
+    eprintln!(
+        "Reference check: {matched}/{} mapper contigs are present in the splice index.",
+        header.target_count(),
+    );
+
+    if !unmatched.is_empty() {
+        eprintln!(
+            "  {} mapper contigs are not annotated by the splice index.",
+            unmatched.len(),
+        );
+    }
 
     Ok(())
 }

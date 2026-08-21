@@ -143,6 +143,10 @@ impl Scdata {
         }
     }
 
+    pub fn n_features(&self) -> usize{
+        self.feature_ids_with_data.len()
+    }
+
     /// Get the current matrix value type, or update it if a new one is provided.
     pub fn value_type(&mut self, value_type: Option<MatrixValueType>) -> &MatrixValueType {
         if let Some(val) = value_type {
@@ -166,7 +170,7 @@ impl Scdata {
     }
 
     /// Iterate over all currently stored cells across all buckets.
-    pub(crate) fn values(&self) -> impl Iterator<Item = &CellData> {
+    pub fn values(&self) -> impl Iterator<Item = &CellData> {
         self.data.iter().flat_map(|map| map.values())
     }
 
@@ -403,6 +407,45 @@ impl Scdata {
 
         self.export_cell_ids = export_cell_ids;
     }
+
+    /// Split the dataset by a predefined set of cell IDs.
+    ///
+    /// Returns `(selected, remaining)`, where `selected` contains
+    /// cells present in `keep` and `remaining` contains all other cells.
+    ///
+    /// Useful for workflows such as ambient-background estimation
+    /// where both called cells and non-cell droplets are required.
+    pub fn split_by_cells(
+        self,
+        keep: &HashSet<u64>,
+    ) -> (Self, Self) {
+        let mut kept = Self::new(
+            self.num_threads,
+            self.value_type.clone(),
+        );
+
+        let mut rejected = Self::new(
+            self.num_threads,
+            self.value_type,
+        );
+
+        for (bucket_idx, bucket) in
+            self.data.into_iter().enumerate()
+        {
+            for (cell_id, cell_data) in bucket {
+                if keep.contains(&cell_id) {
+                    kept.data[bucket_idx]
+                        .insert(cell_id, cell_data);
+                } else {
+                    rejected.data[bucket_idx]
+                        .insert(cell_id, cell_data);
+                }
+            }
+        }
+
+        (kept, rejected)
+    }
+
 
     /// Prepare the object for export.
     ///

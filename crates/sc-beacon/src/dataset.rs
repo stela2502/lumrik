@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-
+use anyhow::Result;
+use int_to_str::IntToStr;
 use scdata::Scdata;
 
 #[derive(Debug, Clone, Copy)]
@@ -23,6 +24,70 @@ pub struct GuideDataset {
 }
 
 impl GuideDataset {
+
+    pub fn from_scdata(
+        cells: Scdata,
+        cell_barcode_len: usize,
+    ) -> Result<Self> {
+        let n_features = cells.n_features();
+        let mut by_guide =
+            vec![Vec::new(); n_features];
+
+        let cell_ids =
+            cells.export_cell_ids();
+
+        let barcode_by_id = cell_ids
+            .iter()
+            .map(|&cell_id| {
+                (
+                    cell_id,
+                    IntToStr::from_u64(cell_id)
+                        .to_string(cell_barcode_len),
+                )
+            })
+            .collect();
+
+        for cell_id in cell_ids {
+            let Some(cell) =
+                cells.get(cell_id)
+            else {
+                continue;
+            };
+
+            for (feature_id, value) in cell {
+                let guide_id =
+                    *feature_id as u32;
+
+                if guide_id as usize >= n_features {
+                    panic!(
+                        "feature id {guide_id} exceeds feature count {n_features}"
+                    );
+                }
+
+                let count =
+                    value.round() as u32;
+
+                if count == 0 {
+                    continue;
+                }
+
+                by_guide[guide_id as usize].push(
+                    GuideObservation {
+                        cell_id : *cell_id,
+                        guide_id,
+                        count,
+                    }
+                );
+            }
+        }
+
+        Ok(Self {
+            cell_ids: cell_ids.to_vec(),
+            cells,
+            by_guide,
+            barcode_by_id,
+        })
+    }
     pub fn n_cells(&self) -> usize {
         self.cell_ids.len()
     }

@@ -194,7 +194,7 @@ pub trait Read: Sized {
     fn tell(&self) -> i64 {
         // this reimplements the bgzf_tell macro
         let htsfile = unsafe { self.htsfile().as_ref() }.expect("bug: null pointer to htsFile");
-        let bgzf = unsafe { *htsfile.fp.bgzf };
+        //let bgzf = unsafe { *htsfile.fp.bgzf };
         unsafe { hts_sys::bgzf_tell(htsfile.fp.bgzf) }
     }
 

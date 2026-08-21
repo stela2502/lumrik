@@ -13,7 +13,7 @@ categories = ["science", "data-structures"]
 [dependencies]
 anyhow = "1.0.102"
 flate2 = "1"
-rust-htslib = { git = "https://github.com/stela2502/rust-htslib.git", default-features = false }
+rust-htslib.workspace = true
 
 gtf_splice_index = { path = "../gtf_splice_index" }
 mapping_info = { path = "../mapping_info" }

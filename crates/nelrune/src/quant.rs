@@ -2,15 +2,22 @@ use anyhow::{Context, Result};
 
 use rust_htslib::bam::HeaderView;
 
-use bam_tide::quantification::chunk_processor::ChunkProcessor;
 use bam_tide::quantification::cli::QuantMode;
-use bam_tide::quantification::job::Job;
 use bam_tide::quantification::snp::SnpSideChannel;
 use bam_tide::results::QuantData;
 
 use snp_index::Genome;
 
 use crate::cli::Cli;
+
+use bam_tide::index::{
+    GeneFeatureIndex,
+    TranscriptFeatureIndex,
+};
+
+use gtf_splice_index::SpliceIndex;
+
+
 
 pub const CHUNK: usize = 2_000_000;
 
@@ -87,4 +94,46 @@ pub fn load_snp_side_channel(
         args.snp_min_anchor,
     )
     .map(Some)
+}
+
+
+pub fn write_quantification(
+    args: &Cli,
+    idx: &SpliceIndex,
+    snp: Option<&SnpSideChannel>,
+    data: &mut QuantData,
+) -> Result<()> {
+    match args.quant_mode {
+        QuantMode::Gene => {
+            let feature_index =
+                GeneFeatureIndex::new(idx);
+
+            data.write_finalized(
+                &args.outpath,
+                &feature_index,
+                snp.map(|s| &s.index),
+            )
+            .map_err(anyhow::Error::msg)
+            .context(
+                "writing gene quantification"
+            )?;
+        }
+
+        QuantMode::Transcript => {
+            let feature_index =
+                TranscriptFeatureIndex::new(idx);
+
+            data.write_finalized(
+                &args.outpath,
+                &feature_index,
+                snp.map(|s| &s.index),
+            )
+            .map_err(anyhow::Error::msg)
+            .context(
+                "writing transcript quantification"
+            )?;
+        }
+    }
+
+    Ok(())
 }

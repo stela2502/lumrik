@@ -39,11 +39,42 @@ pub const MOUSE_SAMPLE_TAGS: [&[u8]; 12] = [
 ];
 
 impl FastTagMapper {
+
+    pub fn add_builtin( &mut self,  set: BuiltinTagSet ) -> usize{
+        let start_id = self.feature_count() as u64;
+        match set {
+            BuiltinTagSet::Human => {
+                for (i, seq) in HUMAN_SAMPLE_TAGS.iter().enumerate() {
+                    let sample_id = i +1;
+                    let ext_id = start_id + sample_id as u64;
+
+                    self.add_feature(
+                        seq,
+                        FeatureEntry::bd_human(ext_id, sample_id),
+                    );
+                }
+            }
+
+            BuiltinTagSet::Mouse => {
+                for (i, seq) in MOUSE_SAMPLE_TAGS.iter().enumerate() {
+                    let sample_id = i+1;
+                    let ext_id = start_id + sample_id as u64;
+
+                    self.add_feature(
+                        seq,
+                        FeatureEntry::bd_mouse(ext_id, sample_id),
+                    );
+                }
+            }
+        }
+        self.feature_count() - start_id as usize
+    }
+
     pub fn human_samples() -> Self {
         let mut mapper = Self::new();
         for (i, seq) in HUMAN_SAMPLE_TAGS.iter().enumerate() {
             let id = (i + 1) as u64;
-            mapper.add_feature(seq, FeatureEntry::bd_human(id));
+            mapper.add_feature(seq, FeatureEntry::bd_human(id, id as usize));
         }
         mapper
     }
@@ -52,7 +83,7 @@ impl FastTagMapper {
         let mut mapper = Self::new();
         for (i, seq) in MOUSE_SAMPLE_TAGS.iter().enumerate() {
             let id = (i + 1) as u64;
-            mapper.add_feature(seq, FeatureEntry::bd_mouse(id));
+            mapper.add_feature(seq, FeatureEntry::bd_mouse(id, id as usize));
         }
         mapper
     }

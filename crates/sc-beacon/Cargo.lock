@@ -460,7 +460,7 @@ dependencies = [
  "rayon",
  "scdata",
  "statrs",
- "stela-int-to-str 0.2.3",
+ "int-to-str 0.2.3",
  "tempfile",
 ]
 
@@ -774,7 +774,7 @@ dependencies = [
  "mapping_info",
  "rayon",
  "regex",
- "stela-int-to-str 0.1.0",
+ "int-to-str 0.1.0",
 ]
 
 [[package]]
@@ -821,13 +821,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "stela-int-to-str"
+name = "int-to-str"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8c6a3ffb93f5c30b2376aa45c5ec3a76db1f16e6b60b5e242ad38c0d4ae411f"
 
 [[package]]
-name = "stela-int-to-str"
+name = "int-to-str"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c7589cff21c260f6c47bfc7d5018a158c978084919df92abb84ebceaf737ebd"

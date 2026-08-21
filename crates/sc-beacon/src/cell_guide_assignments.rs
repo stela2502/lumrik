@@ -2,12 +2,11 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-
+use scdata::FeatureIndex;
 use anyhow::{Context, Result};
 
 use crate::caller::{GuideCall, GuideCalls};
 use crate::dataset::GuideDataset;
-use crate::tenx::GuideFeatureIndex;
 use crate::utils::{ percent};
 
 #[derive(Debug, Clone)]
@@ -102,8 +101,8 @@ pub struct CellGuideAssignments {
 }
 
 impl CellGuideAssignments {
-    pub fn new(
-        index: &GuideFeatureIndex,
+    pub fn new<I: FeatureIndex>(
+        index: &I,
         data: &GuideDataset,
         calls: &GuideCalls,
     ) -> Self {
@@ -114,9 +113,9 @@ impl CellGuideAssignments {
             .collect();
 
         let guide_names: Vec<String> = index
-            .guides()
-            .iter()
-            .map(|guide| guide.name.clone())
+            .ordered_feature_ids()
+            .into_iter()
+            .map(|id| index.feature_name(id).to_owned() )
             .collect();
 
         let rows = data

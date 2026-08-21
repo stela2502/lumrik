@@ -28,6 +28,111 @@ impl Default for QuantData {
 }
 
 impl QuantData {
+    pub fn finalize_for_export<T: FeatureIndex, F: FeatureIndex>(
+        &mut self,
+        min_cell_counts: usize,
+        gene_index: &T,
+        snp_index: Option<&F>,
+    ) -> std::collections::HashSet<u64> {
+        self.gene
+            .finalize_for_export(min_cell_counts, gene_index);
+
+        let cells: std::collections::HashSet<u64> =
+            self.gene
+                .export_cell_ids()
+                .iter()
+                .copied()
+                .collect();
+
+        self.gene
+            .finalize_for_cells(&cells, gene_index);
+
+        self.intron
+            .finalize_for_cells(&cells, gene_index);
+
+        if let Some(snp_index) = snp_index {
+            self.snp_alt
+                .finalize_for_cells(&cells, snp_index);
+
+            self.snp_ref
+                .retain_features(
+                    &self.snp_alt.observed_feature_ids(),
+                );
+
+            self.snp_ref
+                .finalize_for_cells(&cells, snp_index);
+        }
+
+        cells
+    }
+
+    pub fn write_finalized<P, T, F>(
+        &mut self,
+        base: P,
+        gene_index: &T,
+        snp_index: Option<&F>,
+    ) -> Result<(), String>
+    where
+        P: AsRef<Path>,
+        T: FeatureIndex,
+        F: FeatureIndex,
+    {
+        let base = base.as_ref();
+
+        let exonic_path = base.join("exonic");
+        let intronic_path = base.join("intronic");
+        let ref_path = base.join("ref");
+        let alt_path = base.join("alt");
+
+        fs::create_dir_all(&exonic_path)
+            .map_err(|e| {
+                format!("failed to create {:?}: {e}", exonic_path)
+            })?;
+
+        fs::create_dir_all(&intronic_path)
+            .map_err(|e| {
+                format!("failed to create {:?}: {e}", intronic_path)
+            })?;
+
+        self.gene
+            .write_sparse(&exonic_path, gene_index)
+            .map_err(|e| {
+                format!("writing exonic truth failed: {e}")
+            })?;
+
+        self.intron
+            .write_sparse(&intronic_path, gene_index)
+            .map_err(|e| {
+                format!("writing intronic truth failed: {e}")
+            })?;
+
+        if let Some(snp_index) = snp_index {
+            fs::create_dir_all(&ref_path)
+                .map_err(|e| {
+                    format!("failed to create {:?}: {e}", ref_path)
+                })?;
+
+            fs::create_dir_all(&alt_path)
+                .map_err(|e| {
+                    format!("failed to create {:?}: {e}", alt_path)
+                })?;
+
+            self.snp_ref
+                .write_sparse(&ref_path, snp_index)
+                .map_err(|e| {
+                    format!("writing SNP ref truth failed: {e}")
+                })?;
+
+            self.snp_alt
+                .write_sparse(&alt_path, snp_index)
+                .map_err(|e| {
+                    format!("writing SNP alt truth failed: {e}")
+                })?;
+        }
+
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             gene: Scdata::new(1, MatrixValueType::Real),

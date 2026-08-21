@@ -36,12 +36,20 @@ impl FromStr for FastFeatureSource {
 #[derive(Parser, Debug)]
 pub struct Cli {
     /// Barcode / UMI read.
-    #[arg(long)]
-    pub r1: PathBuf,
+    #[arg(
+        long, 
+        required = true,
+        num_args = 1..
+    )]
+    pub r1: Vec<PathBuf>,
 
     /// Biological insert read.
-    #[arg(long)]
-    pub r2: PathBuf,
+    #[arg(
+        long, 
+        required = true,
+        num_args = 1..
+    )]
+    pub r2: Vec<PathBuf>,
 
     // --------------------------------------------------------
     // Chemistry
@@ -81,11 +89,10 @@ pub struct Cli {
     ///
     /// Example:
     ///
-    ///   --fast-features \
-    ///       'bd_sample_human;guides.fa;hto.fa'
+    ///   --fast-features bd_sample_human guides.fa hto.fa
     #[arg(
         long,
-        value_delimiter = ';'
+        num_args = 1..
     )]
     pub fast_features: Vec<FastFeatureSource>,
 
@@ -157,4 +164,36 @@ pub struct Cli {
 
     #[arg(long, short)]
     pub outpath: PathBuf,
+
+    #[arg(
+        long,
+        default_value_t = 8787
+    )]
+    pub health_port: u16,
+
+    #[arg(long)]
+    pub no_health_server: bool,
+
+}
+
+impl Cli {
+    pub fn validate(&self) -> Result<()> {
+        if self.mapper.mapper_paired {
+            bail!(
+                "Nelrune currently maps R2 as a single biological insert; \
+                 --mapper-paired is not supported yet"
+            );
+        }
+
+        if self.r1.len() != self.r2.len() {
+            bail!(
+                "--r1 and --r2 must be supplied the same number of times \
+                 (got {} R1 files and {} R2 files)",
+                self.r1.len(),
+                self.r2.len(),
+            );
+        }
+
+        Ok(())
+    }
 }

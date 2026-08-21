@@ -10,7 +10,7 @@ clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 shell-words = "1"
 
-rust-htslib   = { git = "https://github.com/stela2502/rust-htslib.git" }
+rust-htslib.workspace = true
 hts-sys =  { git = "https://github.com/stela2502/hts-sys.git" }
 
 

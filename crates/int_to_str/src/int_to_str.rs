@@ -155,6 +155,23 @@ impl IntToStr {
         }
     }
 
+    pub fn try_new<T: AsRef<[u8]>>(input: T) -> Result<Self, String> {
+        let seq = input.as_ref();
+
+        let u8_encoded = Self::enc_bytes(seq)?;
+
+        Ok(Self {
+            u8_encoded,
+            lost: 0,
+            size: seq.len(),
+            kmer_size: 16,
+            checker: BTreeMap::<u8, usize>::new(),
+            mask: 0,
+            current_position: 0,
+            step_size: 1,
+        })
+    }
+
     pub fn enc_bytes(seq: &[u8]) -> Result<Vec<u8>, String> {
         let num_bytes = seq.len().div_ceil(4);
         let mut u8_encoded = Vec::<u8>::with_capacity(num_bytes);

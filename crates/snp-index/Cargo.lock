@@ -979,7 +979,7 @@ dependencies = [
  "mapping_info",
  "rayon",
  "regex",
- "stela-int-to-str",
+ "int-to-str",
 ]
 
 [[package]]
@@ -1061,7 +1061,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
-name = "stela-int-to-str"
+name = "int-to-str"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8c6a3ffb93f5c30b2376aa45c5ec3a76db1f16e6b60b5e242ad38c0d4ae411f"

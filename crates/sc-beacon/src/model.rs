@@ -67,7 +67,7 @@ pub struct FittedModel {
 
 pub fn fit_mixture(
     data: &GuideDataset,
-    ambient: AmbientModel,
+    ambient: &AmbientModel,
     cfg: &FitConfig,
 ) -> Result<FittedModel> {
     if data.n_guides() != ambient.guide_probability.len() {
@@ -270,7 +270,7 @@ pub fn fit_mixture(
     );
 
     Ok(FittedModel {
-        ambient,
+        ambient: ambient.clone(),
         guides,
         lambda_by_cell,
         observations,

@@ -1,16 +1,16 @@
 use anyhow::{bail, Context, Result};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
+//use std::os::fd::AsRawFd;
+use std::path::{Path};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::thread::{self, JoinHandle};
-use std::io::stdin;
+//use std::io::stdin;
 
 use bam_tide::fastq::FastqRecord;
 use rust_htslib::bam::{self, Header, Read};
-use tempfile::TempDir;
+//use tempfile::TempDir;
 
 use crate::core::MapperProcessLike;
 use crate::process::{
@@ -389,38 +389,6 @@ impl MapperProcessLike for MapperProcess {
     }
 }
 
-struct MapperStdoutPipe {
-    tmpdir: TempDir,
-    reader_path: PathBuf,
-}
-
-impl MapperStdoutPipe {
-    fn new() -> Result<Self> {
-        let tmpdir =
-            tempfile::tempdir().context("failed to create temporary mapper stdout FIFO directory")?;
-
-        let reader_path = tmpdir.path().join("mapper.stdout.sam_or_bam");
-
-        make_fifo(&reader_path)?;
-
-        Ok(Self {
-            tmpdir,
-            reader_path,
-        })
-    }
-
-    fn open_writer(&self) -> Result<File> {
-        OpenOptions::new()
-            .write(true)
-            .open(&self.reader_path)
-            .with_context(|| {
-                format!(
-                    "failed to open mapper stdout FIFO writer `{}`",
-                    self.reader_path.display()
-                )
-            })
-    }
-}
 
 pub fn check_binary(path: &Path, display_name: &str) -> Result<()> {
     match std::process::Command::new(path).arg("--version").output() {

@@ -1,8 +1,8 @@
-use crate::fastq::{FastqRecord, FastqWriter, FastqPairReader, SimpleFastqReader, FastqRead};
+use crate::fastq::{FastqRecord, FastqWriter,};// FastqPairReader, SimpleFastqReader, FastqRead};
 use crate::read_tag_table::{ReadTagRecord, ReadTagTable};
 use crate::index::FastTagFeatureIndex;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{ Context, Result};
 use mapping_info::MappingInfo;
 use sc_primer::Orientation;
 //use scdata::cell_data::GeneUmiHash;
@@ -11,7 +11,7 @@ use scdata::{MatrixValueType, Scdata};
 
 use fast_tag_mapper::{FastTagMapper};
 
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 
 pub const CHUNK_SIZE: usize = 1_000_000;
 

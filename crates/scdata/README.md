@@ -60,7 +60,7 @@ During accumulation, `scdata` treats cell IDs simply as numeric identifiers. Dur
 
 ```toml
 [dependencies]
-stela-int-to-str = "0.1"
+int-to-str = "0.1"
 ```
 
 ```rust

@@ -18,3 +18,6 @@ members = [
 edition = "2024"
 license = "AGPL-3.0-or-later"
 authors = ["Stefan Lang"]
+
+[workspace.dependencies]
+rust-htslib = { path = "crates/rust-htslib" }

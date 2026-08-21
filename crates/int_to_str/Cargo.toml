@@ -7,7 +7,7 @@ description = "Fast integer to string conversion utilities optimized for high-th
 license = "MIT"
 repository = "https://github.com/stela2502/int_to_str"
 homepage = "https://github.com/stela2502/int_to_str"
-documentation = "https://docs.rs/stela-int-to-str"
+documentation = "https://docs.rs/int-to-str"
 readme = "README.md"
 
 keywords = ["integer", "conversion", "performance", "bioinformatics"]

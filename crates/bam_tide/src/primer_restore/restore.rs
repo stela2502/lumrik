@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use flate2::read::MultiGzDecoder;
 use mapping_info::MappingInfo;
-use sc_primer::{Grammar, PrimerDetector};
+use sc_primer::{PrimerDetector};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -12,8 +12,8 @@ use crate::primer_restore::cli::Cli;
 
 use read_tag_table::{
     ReadTagTable,
-    ReadTagTableConfig,
-    ReadTagRecord,
+    //ReadTagTableConfig,
+    //ReadTagRecord,
 };
 
 

@@ -33,6 +33,16 @@ pub struct CellData {
     pub multimapper: HashMap<u64, MultiMapper>,
 }
 
+impl<'a> IntoIterator for &'a CellData {
+    type Item = (&'a u64, &'a f32);
+    type IntoIter =
+        std::collections::hash_map::Iter<'a, u64, f32>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.total_reads.iter()
+    }
+}
+
 impl fmt::Display for CellData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "CellData Summary")?;

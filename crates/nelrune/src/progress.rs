@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug)]
 pub struct RunProgress {
@@ -10,13 +11,36 @@ pub struct RunProgress {
     reads_seen: usize,
 
     report_every: usize,
+
+    state: Arc<RwLock<RunStatus>>,
 }
+
+#[derive(Debug, Clone)]
+pub struct RunStatus {
+    pub stage: String,
+    pub reads_processed: usize,
+    pub reads_per_second: f64,
+    pub input_file: Option<String>,
+}
+
 
 impl Default for RunProgress {
     fn default() -> Self {
         Self::new()
     }
 }
+
+impl Default for RunStatus {
+    fn default() -> Self {
+        Self{
+            stage: "startup".to_string(),
+            reads_processed: 0,
+            reads_per_second: 0.0,
+            input_file: None,
+        }
+    }
+}
+
 
 impl RunProgress {
     pub fn new() -> Self {
@@ -29,6 +53,12 @@ impl RunProgress {
             reads_seen: 0,
 
             report_every: 100_000,
+
+            state: Arc::new(
+                RwLock::new(
+                    RunStatus::default(),
+                )
+            ),
         }
     }
 
@@ -45,11 +75,22 @@ impl RunProgress {
         &self,
         message: impl AsRef<str>,
     ) {
+        let message = message.as_ref();
         eprintln!(
             "[nelrune] {}",
-            message.as_ref(),
+            message,
         );
+        if let Ok(mut state) = self.state.write() {
+            state.stage = message.to_string();
+        }
     }
+
+    pub fn state_handle(
+        &self,
+    ) -> Arc<RwLock<RunStatus>> {
+        Arc::clone(&self.state)
+    }
+
 
     /// Record one successfully accepted input molecule/read pair.
     pub fn read_processed(
@@ -111,6 +152,10 @@ impl RunProgress {
             } else {
                 0.0
             };
+        if let Ok(mut state) = self.state.write() {
+            state.reads_per_second = rate;
+            state.reads_processed = self.reads_seen;
+        }
 
         eprintln!(
             "[nelrune] {:>12} reads | {:>10.0} reads/s",
@@ -121,4 +166,23 @@ impl RunProgress {
         self.last_report = now;
         self.last_reads = self.reads_seen;
     }
+
+    pub fn input_file(
+        &self,
+        file: impl AsRef<str>,
+    ) {
+        if let Ok(mut state) = self.state.write() {
+            state.input_file =
+                Some(file.as_ref().to_string());
+        }
+    }
+
+    pub fn clear_input_file(&self) {
+        if let Ok(mut state) = self.state.write() {
+            state.input_file = None;
+        }
+    }
 }
+
+
+

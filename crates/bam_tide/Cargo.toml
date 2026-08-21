@@ -21,7 +21,7 @@ csv = "1.4.0"
 bincode = "1"
 serde = { version = "1", features = ["derive"] }
 
-rust-htslib   = { git = "https://github.com/stela2502/rust-htslib.git" }
+rust-htslib.workspace = true
 hts-sys =  { git = "https://github.com/stela2502/hts-sys.git" }
 
 

@@ -62,6 +62,14 @@ impl Scdata {
         Ok(())
     }
 
+    pub fn dimensions(&self) -> (usize, usize, usize) {
+        (
+            self.feature_ids_with_data.len(),
+            self.passing_cells(),
+            self.total_feature_data_entries,
+        )
+    }
+
     /// Write a sparse MatrixMarket matrix (10x compatible layout).
     ///
     /// Produces:

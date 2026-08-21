@@ -146,7 +146,7 @@ fn main() -> Result<()> {
 
     let fitted = fit_mixture(
         &filtered,
-        ambient,
+        &ambient,
         &cli.model.fit_config(),
     )?;
 
@@ -180,7 +180,7 @@ fn main() -> Result<()> {
     calls.write_table(
         &cli.out,
         &filtered_index,
-        &filtered,
+        21,
     )?;
 
     /*

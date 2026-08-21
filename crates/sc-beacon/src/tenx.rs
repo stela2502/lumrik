@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 use mapping_info::MappingInfo;
 use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
-use stela_int_to_str::IntToStr;
+use int_to_str::IntToStr;
 
 use crate::dataset::{GuideDataset, GuideObservation};
 

@@ -14,7 +14,8 @@ pub struct GuideModelCli {
     #[arg(long, default_value_t = 0.5)]
     pub ambient_alpha: f64,
 
-    /// Minimum posterior probability required to call a guide genuine.
+    /// Minimum posterior probability required for the final
+    /// genuine-feature call.
     #[arg(long, default_value_t = 0.95)]
     pub posterior_threshold: f64,
 
@@ -31,7 +32,8 @@ pub struct GuideModelCli {
     #[arg(long, default_value_t = 3)]
     pub stable_iterations: usize,
 
-    /// Minimum posterior probability required to call a guide genuine.
+    /// Minimum posterior required for an assignment to count as stable
+    /// during mixture-model convergence.
     #[arg(long, default_value_t = 0.95)]
     pub minimum_posterior: f64,
 

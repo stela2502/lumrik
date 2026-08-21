@@ -21,11 +21,25 @@ impl FeatureEntry {
         }
     }
 
-    pub fn bd_mouse(id: u64) -> Self {
-        Self::new(id, format!("SampleTag{id:02}_mm"), "Antibody Capture")
+    pub fn bd_mouse(
+        id: u64,
+        sample_number: usize,
+    ) -> Self {
+        Self::new(
+            id,
+            format!("SampleTag{sample_number:02}_mm"),
+            "bd_sample_mouse",
+        )
     }
 
-    pub fn bd_human(id: u64) -> Self {
-        Self::new(id, format!("SampleTag{id:02}_hs"), "Antibody Capture")
+    pub fn bd_human(
+        id: u64,
+        sample_number: usize,
+    ) -> Self {
+        Self::new(
+            id,
+            format!("SampleTag{sample_number:02}_hs"),
+            "bd_sample_human",
+        )
     }
 }
