@@ -88,6 +88,11 @@ h1 {
 Live processing status
 </div>
 
+<div class="card" style="margin-bottom:16px">
+    <div class="label">External URL</div>
+    <div class="value file" id="public_url">-</div>
+</div>
+
 <div class="grid">
 
 <div class="card">
@@ -127,6 +132,27 @@ Live processing status
     >
         0
     </div>
+</div>
+
+
+<div class="card">
+    <div class="label">Cell / UMI not detected</div>
+    <div class="value" id="no_cell_umi">0</div>
+</div>
+
+<div class="card">
+    <div class="label">Duplicates</div>
+    <div class="value" id="duplicates">0</div>
+</div>
+
+<div class="card">
+    <div class="label">Unique genomic</div>
+    <div class="value" id="unique_genomic">0</div>
+</div>
+
+<div class="card">
+    <div class="label">Unique feature</div>
+    <div class="value" id="unique_feature">0</div>
 </div>
 
 <div class="card">
@@ -190,10 +216,36 @@ async function updateStatus() {
                 status.reads_per_second
             ).toLocaleString();
 
+
+        document
+            .getElementById("no_cell_umi")
+            .textContent =
+            status.no_cell_umi.toLocaleString();
+
+        document
+            .getElementById("duplicates")
+            .textContent =
+            status.duplicates.toLocaleString();
+
+        document
+            .getElementById("unique_genomic")
+            .textContent =
+            status.unique_genomic.toLocaleString();
+
+        document
+            .getElementById("unique_feature")
+            .textContent =
+            status.unique_feature.toLocaleString();
+
         document
             .getElementById("file")
             .textContent =
             status.input_file ?? "-";
+
+        document
+            .getElementById("public_url")
+            .textContent =
+            status.public_url ?? "-";
 
         document
             .getElementById("updated")

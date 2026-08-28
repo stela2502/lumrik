@@ -67,7 +67,7 @@ bam-quant
 Each detected molecule becomes one FASTQ entry:
 
 ```text
-original_read_name/mol<N>
+original_read_name_mol<N>
 ```
 
 The emitted sequence is normalized into the expected transcript orientation.

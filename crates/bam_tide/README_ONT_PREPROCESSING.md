@@ -52,7 +52,7 @@ As a result, many reads are discarded during barcode extraction.
 Each record:
 
 ```
-@<original_read_id>/mol<N>
+@<original_read_id>_mol<N>
 <adapter+CB+UMI+polyT+transcript>
 +
 <quality>

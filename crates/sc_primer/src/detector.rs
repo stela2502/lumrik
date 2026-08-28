@@ -40,6 +40,10 @@ impl PrimerDetector {
         })
     }
 
+    pub fn cell_len(&self) -> usize {
+        self.grammar.cell_len()
+    }
+
     pub fn detect(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Vec<PrimerMatch>> {
         self.detect_all(seq, qual)
     }
@@ -151,35 +155,23 @@ impl PrimerDetector {
     }
 
     pub fn detect_first(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Option<PrimerMatch>> {
-        if seq.len() != qual.len() {
-            return Err(PrimerError::invalid_coordinates(
-                "sequence and quality have different lengths",
-            ));
-        }
+        Self::validate_read(seq, qual)?;
 
-        let starts = self.candidate_starts(seq);
-
-        for offset in starts {
-            if let Some(mut hit) = self.try_from_start(seq, qual, offset, Orientation::Forward)? {
-                hit.insert_end = seq.len();
-                return Ok(Some(hit));
-            }
+        if let Some(mut hit) = self.detect_first_forward(seq, qual, Orientation::Forward)? {
+            hit.insert_end = seq.len();
+            return Ok(Some(hit));
         }
 
         if self.detect_reverse_complement {
             let rc_seq = Self::reverse_complement(seq);
             let rc_qual = Self::reverse(qual);
 
-            let starts = self.candidate_starts(&rc_seq);
-
-            for offset in starts {
-                if let Some(mut hit) =
-                    self.try_from_start(&rc_seq, &rc_qual, offset, Orientation::ReverseComplement)?
-                {
-                    hit.insert_end = rc_seq.len();
-                    hit.remap_reverse_coordinates(seq.len());
-                    return Ok(Some(hit));
-                }
+            if let Some(mut hit) =
+                self.detect_first_forward(&rc_seq, &rc_qual, Orientation::ReverseComplement)?
+            {
+                hit.insert_end = rc_seq.len();
+                hit.remap_reverse_coordinates(seq.len());
+                return Ok(Some(hit));
             }
         }
 
@@ -187,35 +179,94 @@ impl PrimerDetector {
     }
 
     pub fn detect_all(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Vec<PrimerMatch>> {
+        Self::validate_read(seq, qual)?;
+
+        let mut hits = Vec::new();
+        let mut cursor = 0usize;
+
+        while let Some(offset) = self.next_candidate_start(seq, cursor) {
+            match self.try_from_start(seq, qual, offset, Orientation::Forward)? {
+                Some(hit) => {
+                    // A successful match owns the whole primer span.  Continue
+                    // at its end instead of re-testing SEARCH shifts or other
+                    // candidate starts inside the primer we just accepted.
+                    cursor = hit.primer_end.max(offset.saturating_add(1));
+                    hits.push(hit);
+                }
+                None => {
+                    cursor = offset.saturating_add(1);
+                }
+            }
+        }
+
+        self.finish_insert_ends(&mut hits, seq.len());
+        Ok(hits)
+    }
+
+    fn detect_first_forward(
+        &self,
+        seq: &[u8],
+        qual: &[u8],
+        orientation: Orientation,
+    ) -> PrimerResult<Option<PrimerMatch>> {
+        let mut cursor = 0usize;
+
+        while let Some(offset) = self.next_candidate_start(seq, cursor) {
+            if let Some(hit) = self.try_from_start(seq, qual, offset, orientation)? {
+                return Ok(Some(hit));
+            }
+            cursor = offset.saturating_add(1);
+        }
+
+        Ok(None)
+    }
+
+    #[inline]
+    fn validate_read(seq: &[u8], qual: &[u8]) -> PrimerResult<()> {
         if seq.len() != qual.len() {
             return Err(PrimerError::invalid_coordinates(
                 "sequence and quality have different lengths",
             ));
         }
+        Ok(())
+    }
 
-        let mut hits = Vec::new();
+    /// Return the next plausible grammar start without first materializing all
+    /// offsets in the read.
+    fn next_candidate_start(&self, seq: &[u8], from: usize) -> Option<usize> {
+        if let Some(anchor) = self.grammar.anchor_search() {
+            return anchor.find_next_cell_start(seq, from);
+        }
 
-        for offset in self.candidate_starts(seq) {
-            if let Some(hit) = self.try_from_start(seq, qual, offset, Orientation::Forward)? {
-                hits.push(hit);
+        // Built-in BD v2 grammars start with SEARCH followed by BD_CELL.  Scan
+        // the two fixed BD linkers once and only invoke the costly whitelist
+        // matcher at positions that can actually be a cassette.
+        if let Some((search_start, search_end)) = self.leading_bd_search() {
+            if let Some(SingleCellSystem::Rhapsody(rhapsody)) = &self.single_cell_system {
+                if matches!(rhapsody.version(), BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+                    return rhapsody.next_candidate_start(
+                        seq,
+                        from,
+                        search_start,
+                        search_end,
+                    );
+                }
             }
         }
 
-        hits.sort_by_key(|h| h.primer_start);
-        hits.dedup_by_key(|h| h.primer_start);
-
-        self.finish_insert_ends(&mut hits, seq.len());
-
-
-
-        Ok(hits)
+        (from < seq.len()).then_some(from)
     }
 
-    fn candidate_starts(&self, seq: &[u8]) -> Vec<usize> {
-        if let Some(anchor) = self.grammar.anchor_search() {
-            anchor.identify_all_cell_starts(seq)
-        } else {
-            (0..seq.len()).collect()
+    /// SEARCH directly before BD_CELL is the only flexible prefix used by the
+    /// built-in BD v2 chemistries.  Keep this deliberately narrow so arbitrary
+    /// custom grammars retain the generic detector semantics.
+    fn leading_bd_search(&self) -> Option<(usize, usize)> {
+        match self.grammar.ops.as_slice() {
+            [GrammarOp::Search { start, end }, GrammarOp::BdCell { .. }, ..] => {
+                Some((*start, *end))
+            }
+            [GrammarOp::BdCell { .. }, ..] => Some((0, 0)),
+            _ => None,
         }
     }
 
@@ -297,7 +348,9 @@ impl PrimerDetector {
         start: usize,
         orientation: Orientation,
     ) -> PrimerResult<Option<PrimerMatch>> {
-        let mut primer_match = PrimerMatch::new(self.grammar.name.clone(), orientation);
+        // Most candidate starts fail.  Do not clone the chemistry name for
+        // every failed attempt; attach it only when the whole grammar matches.
+        let mut primer_match = PrimerMatch::new(String::new(), orientation);
         primer_match.primer_start = start;
         let mut pos = start;
         let mut search = (0usize, 0usize);
@@ -355,6 +408,7 @@ impl PrimerDetector {
                     primer_match.insert_start = pos;
                     primer_match.insert_end = seq.len();
                     primer_match.primer_end = pos;
+                    primer_match.chemistry_name = self.grammar.name.clone();
                     return Ok(Some(primer_match));
                 }
                 GrammarOp::Skip { len } => {
@@ -383,7 +437,7 @@ impl PrimerDetector {
                     primer_match.bd_cell_id = Some(call.cell_id);
 
                     // probably use full cassette if this is later used for synthesize()
-                    primer_match.add_cell_seq(call.cell_seq.clone());
+                    primer_match.add_cell_seq(&call.cell_seq);
 
                     primer_match.add_segment_ranges(
                         "BD_CELL",
@@ -396,7 +450,9 @@ impl PrimerDetector {
 
                     primer_match.add_segment("UMI", call.umi.0..call.umi.1);
 
-                    pos = call.consumed;
+                    pos = pos.checked_add(call.consumed).ok_or_else(|| {
+                        PrimerError::invalid_coordinates("BD consumed coordinate overflow")
+                    })?;
                     search = (0, 0);
                 }
 
@@ -431,6 +487,7 @@ impl PrimerDetector {
         primer_match.primer_end = pos;
         primer_match.insert_start = pos;
         primer_match.insert_end = seq.len();
+        primer_match.chemistry_name = self.grammar.name.clone();
         Ok(Some(primer_match))
     }
 

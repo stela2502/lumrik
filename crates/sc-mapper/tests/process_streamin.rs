@@ -39,7 +39,7 @@ fn single_stdin_process_writes_fastq_and_drains_all_sam_records() -> Result<()> 
     ];
 
     let mut process =
-        MapperProcess::spawn_single_stdin(Path::new("sh"), &args)?;
+        MapperProcess::spawn_single_stdin(Path::new("sh"), &args, None)?;
 
     let r1 = fq("read1", "ACGT");
 

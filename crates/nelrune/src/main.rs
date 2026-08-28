@@ -1,706 +1,484 @@
-use std::collections::HashMap;
 use std::fs;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use std::net::{
-    IpAddr,
-    Ipv4Addr,
-    SocketAddr,
-};
-
-use nelrune::server::spawn_health_server;
-
-use anyhow::{
-    anyhow,
-    bail,
-    Context,
-    Result,
-};
-
+use anyhow::{bail, Context, Result};
 use clap::Parser;
+use rust_htslib::bam;
 
-use rust_htslib::bam::HeaderView;
-
-use mapping_info::MappingInfo;
-
-
-use gtf_splice_index::{
-    MatchOptions,
-    SpliceIndex,
-};
-
-use sc_primer::PrimerDetector;
-
-use sc_mapper::StreamingMapper;
-
-use fast_tag_mapper::FastTagFeatureIndex;
-
-
-use bam_tide::fastq::FastqPairReader;
-
-use bam_tide::index::{
-    GeneFeatureIndex,
-    TranscriptFeatureIndex,
-};
-
-use bam_tide::quantification::chunk_processor::ChunkProcessor;
-
+use bam_tide::illumina_normalizer::cli::{InsertRead, PrimerRead};
+use bam_tide::illumina_normalizer::{IlluminaNormalizer, IlluminaNormalizerConfig};
+use bam_tide::index::{GeneFeatureIndex, TranscriptFeatureIndex};
+use bam_tide::ont_normalizer::normalizer::OntNormalizerConfig;
+use bam_tide::ont_normalizer::OntNormalizer;
+use bam_tide::quantification::bam_collector::BamCollector;
 use bam_tide::quantification::cli::QuantMode;
+use bam_tide::FeatureTagCounts;
 
-use bam_tide::quantification::job::{
-    Job,
-    JobBuilder,
-};
-
-use bam_tide::quantification::processor_options::ProcessorOptions;
-
-use bam_tide::results::QuantData;
+use gtf_splice_index::SpliceIndex;
+use sc_mapper::{MappingCall, StreamingMapper};
 
 use nelrune::cli::Cli;
-use nelrune::mapper::flush_jobs;
-
-use nelrune::fast_features::{
-    build_fast_features,
-    process_fast_feature_read,
-    FastFeatures,
-};
-
-use nelrune::fastq::next_parsed_pair;
-
-use nelrune::mapper::{
-    consume_mapping_call,
-    drain_mapper,
-    remember_tags,
-    ReadTags,
-    validate_reference_compatibility,
-};
-
 use nelrune::progress::RunProgress;
+use nelrune::server::spawn_health_server;
 
-use nelrune::quant::{
-    configure_rayon,
-    load_genome,
-    load_snp_side_channel,
-    write_quantification,
-    CHUNK,
-};
-
-use nelrune::summary::RunSummary;
 fn main() -> Result<()> {
     run(Cli::parse())
 }
 
 fn run(args: Cli) -> Result<()> {
-
-    let mut progress =
-        RunProgress::new();
-
-    let health_addr =
-        SocketAddr::new(
-            IpAddr::V4(
-                Ipv4Addr::UNSPECIFIED
-            ),
-            args.health_port,
-        );
-
-    let _health_server =
-        spawn_health_server(
-            progress.state_handle(),
-            health_addr,
-        )?;
-
-    let hostname =
-        std::env::var("SLURMD_NODENAME")
-            .or_else(|_| std::env::var("HOSTNAME"))
-            .unwrap_or_else(|_| "localhost".to_string());
-
-    eprintln!(
-        "[nelrune] health server listening on http://{}:{}",
-        hostname,
-        args.health_port
-    );
-
-    progress.stage(
-        "loading chemistry"
-    );
-
     args.validate()?;
+
+    fs::create_dir_all(&args.outpath)
+    .with_context(|| format!("creating output directory {}", args.outpath.display()))?;
 
     configure_rayon(args.threads);
 
-    fs::create_dir_all(&args.outpath)
-        .with_context(|| {
-            format!(
-                "creating output directory {}",
-                args.outpath.display()
-            )
-        })?;
+    let mut progress = RunProgress::new();
+    progress.start_timer("nelrune/startup");
 
-    // --------------------------------------------------------
-    // Chemistry
-    // --------------------------------------------------------
+    progress.open_log(args.outpath.join("nelrune.log"))?;
 
+    let _health_server = if args.no_health_server {
+        progress.stage("health server disabled");
+        None
+    } else {
+        let health_addr = SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            args.health_port,
+            );
+
+        let server = spawn_health_server(progress.state_handle(), health_addr)?;
+        let hostname = external_hostname(args.health_hostname.as_deref());
+        let url = format!("http://{}:{}", hostname, server.addr().port());
+        progress.set_public_url(url.clone());
+        eprintln!("[nelrune] health server: {url}");
+        Some(server)
+    };
+
+    progress.stage("loading chemistry");
     let primer = args
-        .primer
-        .detector()
-        .map_err(|e| {
-            anyhow!("failed to configure sc_primer: {e}")
-        })?;
+    .primer
+    .detector()
+    .map_err(anyhow::Error::msg)
+    .context("configuring sc_primer chemistry")?;
+    let cell_barcode_len = primer.cell_len();
 
-    // --------------------------------------------------------
-    // Fast feature mapper
-    // --------------------------------------------------------
-    progress.stage(
-        "loading additional fasta index files"
-    );
+    progress.stage("starting mapper");
+    let mut mapper = args
+    .mapper
+    .from_cli()
+    .context("starting streaming mapper")?;
+    let keep_mapper_bam = args.bam_collector.bam_out.is_some();
+    let mapper_bam = args
+    .bam_collector
+    .bam_out
+    .clone()
+    .unwrap_or_else(|| args.outpath.join(".nelrune.mapper.bam"));
 
-
-    let mut fast_features =
-        build_fast_features(&args)?;
-
-    // --------------------------------------------------------
-    // Quantification resources
-    // --------------------------------------------------------
-
-    progress.stage(
-        "loading splice index"
-    );
-
-
-    let idx =
-        SpliceIndex::load(&args.index)
-            .with_context(|| {
-                format!(
-                    "reading splice index {}",
-                    args.index.display()
-                )
-            })?;
-
-    println!("{idx}");
-
-    let genome =
-        load_genome(&args)?;
-
-    if args.vcf.is_some()
-        && genome.is_none()
-    {
-        bail!("--vcf requires --genome");
+    if let Some(parent) = mapper_bam.parent() {
+        fs::create_dir_all(parent)
+        .with_context(|| format!("creating mapper BAM directory {}", parent.display()))?;
     }
 
-    // --------------------------------------------------------
-    // FASTQ
-    // --------------------------------------------------------
+    let mut sink = MapperBamSink::new(mapper_bam.clone());
 
-    let mut input_iter =
-        args.r1
-            .iter()
-            .zip(args.r2.iter());
+    progress.stop_timer("nelrune/startup");
 
-    let Some((first_r1, first_r2)) =
-        input_iter.next()
-    else {
-        bail!("no FASTQ inputs supplied");
-    };
-
-    progress.stage(
-        format!(
-            "processing {}",
-            first_r1.display(),
-        )
-    );
-    progress.input_file( first_r1.to_string_lossy(), );
-
-    let mut fastq =
-        FastqPairReader::from_paths(
-            first_r1,
-            first_r2,
-        )?;
-
-    // --------------------------------------------------------
-    // Mapper
-    // --------------------------------------------------------
-
-    progress.stage(
-        "starting mapper"
-    );
-
-    let mut mapper =
-        args.mapper
-            .from_cli()
-            .context(
-                "starting streaming genomic mapper"
-            )?;
-
-    // --------------------------------------------------------
-    // Quantification output
-    // --------------------------------------------------------
-
-    let mut data =
-        QuantData::new();
-
-    data.report =
-        MappingInfo::new(
-            None,
-            args.min_mapq as f32,
-            args.max_reads
-                .unwrap_or(usize::MAX),
-        );
-
-    data.report.start_counter();
-
-    // --------------------------------------------------------
-    // Primer metadata waiting for asynchronous mappings
-    // --------------------------------------------------------
-
-    let mut pending_tags:
-        HashMap<String, ReadTags> =
-        HashMap::new();
-
-    // --------------------------------------------------------
-    // Bootstrap mapper
-    // --------------------------------------------------------
-    //
-    // Submit one usable read before waiting for the mapper header.
-    //
-    // Some external mappers only produce stdout/header once input
-    // has begun arriving.
-
-    let Some(first) =
-        next_parsed_pair(
-            &mut fastq,
-            &primer,
-        )?
-    else {
-        bail!(
-            "no primer-compatible FASTQ pairs found"
-        );
-    };
-
-    process_fast_feature_read(
-        &first,
-        fast_features.as_mut(),
-    );
-
-    remember_tags(
-        &first,
-        &mut pending_tags,
-    )?;
-
-    mapper.submit(
-        &first.r2,
-        None,
-    )?;
-
-    // Synchronization point:
-    // wait until the mapper has started, loaded its reference,
-    // and emitted its SAM/BAM header.
+    progress.start_timer("nelrune/normalization");
 
 
-    progress.stage(
-        "waiting for mapper index and header"
-    );
-    let mapper_header =
-        mapper
-            .header()
-            .context(
-                "waiting for mapper BAM header"
-            )?
-            .clone();
-
-    let header =
-        HeaderView::from_header(
-            &mapper_header,
-        );
-    progress.stage(
-        "mapper ready"
-    );
-
-    progress.stage(
-        "checking reference compatibility"
-    );
-    validate_reference_compatibility(&header, &idx )?;
-
-
-    // --------------------------------------------------------
-    // SNP support
-    // --------------------------------------------------------
-
-    let snp =
-        load_snp_side_channel(
+    progress.stage("normalizing reads");
+    let (submitted, mut feature_counts) = if let Some(bam_input) = &args.bam {
+        run_ont_input(
             &args,
-            &header,
-        )?;
-
-    // --------------------------------------------------------
-    // bam-tide set up processors and collectors
-    // --------------------------------------------------------
-
-    let match_opts =
-        MatchOptions {
-            require_strand:
-                args.require_strand,
-
-            require_exact_junction_chain:
-                args.require_exact_junction_chain,
-
-            max_5p_overhang_bp:
-                args.max_5p_overhang_bp,
-
-            max_3p_overhang_bp:
-                args.max_3p_overhang_bp,
-
-            allowed_intronic_gap_size:
-                args.allowed_intronic_gap_size,
-        };
-
-    let processor_options =
-        ProcessorOptions {
-            min_mapq:
-                args.min_mapq,
-
-            read1_only:
-                false,
-
-            require_strand:
-                args.require_strand,
-
-            quant_mode:
-                args.quant_mode,
-
-            ..ProcessorOptions::default()
-        };
-
-    let processor =
-        ChunkProcessor::new(
-            &idx,
-            snp.as_ref(),
-            match_opts,
-            processor_options,
-        );
-
-    let job_builder =
-        JobBuilder::new(
-            &header,
-            idx.chr_map(),
-            *b"CB",
-            *b"UB",
-        )
-        .with_genome(
-            genome.as_ref(),
-            !args.no_genome_refine,
-        )
-        .with_snp_index(
-            snp.as_ref()
-                .map(|s| &s.index),
-        )
-        .with_min_mapq(
-            args.min_mapq,
-        );
-
-    data.report.stop_file_io_time();
-
-    // --------------------------------------------------------
-    // Main streaming loop
-    // --------------------------------------------------------
-
-    let mut jobs =
-        Vec::<Job>::with_capacity(CHUNK);
-
-    let mut submitted =
-        1usize;
-
-    process_fastq_reader(
-        &mut fastq,
-        &primer,
-        &mut fast_features,
-        &mut mapper,
-        &mut pending_tags,
-        &job_builder,
-        &processor,
-        args.quant_mode,
-        &mut jobs,
-        &mut data,
-        &mut progress,
-        &mut submitted,
-        args.max_reads,
-    )?;
-
-    for (r1, r2) in input_iter {
-        progress.stage(
-            format!(
-                "processing {}",
-                r1.display(),
-            )
-        );
-
-        progress.input_file(
-            r1.to_string_lossy(),
-        );
-
-        let mut fastq =
-            FastqPairReader::from_paths(
-                r1,
-                r2,
-            )?;
-
-        if !process_fastq_reader(
-            &mut fastq,
             &primer,
-            &mut fast_features,
+            bam_input,
             &mut mapper,
-            &mut pending_tags,
-            &job_builder,
-            &processor,
-            args.quant_mode,
-            &mut jobs,
-            &mut data,
+            &mut sink,
             &mut progress,
-            &mut submitted,
-            args.max_reads,
-        )? {
-            break;
-        }
-    }
-
-    // --------------------------------------------------------
-    // Finish mapper
-    // --------------------------------------------------------
-
-    progress.stage(
-        "finishing mapper"
-    );
-
-    for call in mapper.finish()? {
-        consume_mapping_call(
-            call,
-            &mut pending_tags,
-            &job_builder,
-            &processor,
-            args.quant_mode,
-            &mut jobs,
-            &mut data,
-        )?;
-    }
-
-    flush_jobs(
-        &processor,
-        args.quant_mode,
-        &mut jobs,
-        &mut data,
-    )?;
-
-    if !pending_tags.is_empty() {
-        eprintln!(
-            "[WARN] {} submitted reads never produced mapper output",
-            pending_tags.len()
-        );
-    }
+            )?
+    } else {
+        run_illumina_input(
+            &args,
+            &primer,
+            &mut mapper,
+            &mut sink,
+            &mut progress,
+            )?
+    };
 
     progress.clear_input_file();
 
+    progress.stop_timer("nelrune/normalization");
 
-    // --------------------------------------------------------
-    // Output
-    // --------------------------------------------------------
-    let cells = match args.quant_mode {
+
+    // Additional-feature reads are filtered out by bam-tide before the mapper
+    // Tey are also handles by the normalizers.
+
+    if submitted == 0 {
+        bail!("normalization emitted no mapper-ready reads");
+    }
+
+    progress.stage("finishing mapper");
+    progress.start_timer("nelrune/mapper_finish");
+
+    sink.ensure_open_blocking(&mut mapper)?;
+    sink.drain_ready(&mut mapper)?;
+
+    let remaining = mapper.finish().context("finishing streaming mapper")?;
+    sink.write_calls(remaining)?;
+    sink.finish()?;
+    progress.stop_timer("nelrune/mapper_finish");
+
+    progress.stage("quantifying mapper BAM");
+    progress.start_timer("nelrune/quantification");
+
+    let collector = BamCollector::from_cli(args.bam_collector.clone())
+        .context("configuring BAM collector")?;
+    let result = collector
+        .run_paths(std::slice::from_ref(&mapper_bam))
+        .context("collecting BAM quantification")?;
+    let mut data = result.data;
+    progress.stop_timer("nelrune/quantification");
+
+    progress.stage("writing quantification");
+    progress.start_timer("nelrune/writing");
+    let index = SpliceIndex::load(&args.bam_collector.index).with_context(|| {
+        format!(
+            "reading splice index {} for export",
+            args.bam_collector.index.display()
+            )
+    })?;
+    let retained_cells = match args.bam_collector.quant_mode {
         QuantMode::Gene => {
-            let gene_index =
-                GeneFeatureIndex::new(&idx);
-
-            data.finalize_for_export(
+            let features = GeneFeatureIndex::new(&index);
+            let cells = data.finalize_for_export(
                 args.min_cell_counts,
-                &gene_index,
-                snp.as_ref().map(|s| &s.index),
-            )
+                &features,
+                result.snp.as_ref().map(|s| &s.index),
+                );
+            data.write_finalized(
+                &args.outpath,
+                &features,
+                result.snp.as_ref().map(|s| &s.index),
+                )
+            .map_err(anyhow::Error::msg)
+            .context("writing gene quantification")?;
+            cells
         }
-
         QuantMode::Transcript => {
-            let transcript_index =
-                TranscriptFeatureIndex::new(&idx);
-
-            data.finalize_for_export(
+            let features = TranscriptFeatureIndex::new(&index);
+            let cells = data.finalize_for_export(
                 args.min_cell_counts,
-                &transcript_index,
-                snp.as_ref().map(|s| &s.index),
-            )
+                &features,
+                result.snp.as_ref().map(|s| &s.index),
+                );
+            data.write_finalized(
+                &args.outpath,
+                &features,
+                result.snp.as_ref().map(|s| &s.index),
+                )
+            .map_err(anyhow::Error::msg)
+            .context("writing transcript quantification")?;
+            cells
         }
     };
+    feature_counts
+        .finalize_and_write(&retained_cells, cell_barcode_len, &args.outpath)
+        .context("writing additional feature tables")?;
+    progress.stop_timer("nelrune/writing");
 
+    // Preserve Nelrune's broad orchestration timings in the final report too.
+    data.report.merge(progress.mapping_info());
+
+    progress.report_timings();
+    progress.report_block("Quantification report", &data.report);
+
+    fs::write(
+        args.outpath.join("nelrune-report.txt"),
+        data.report.to_string(),
+        )
+      .context("writing nelrune-report.txt")?;
+
+    if !keep_mapper_bam {
+        if let Err(error) = fs::remove_file(&mapper_bam) {
+            eprintln!(
+                "[nelrune] warning: could not remove temporary mapper BAM {}: {error}",
+                mapper_bam.display()
+                );
+        }
+    }
+
+    progress.finish();
     eprintln!(
-        "[nelrune] detected {} cells",
-        cells.len(),
-    );
-
-    let mut beacon = None;
-
-    if let Some(features) = fast_features.as_mut() {
-        let feature_index =
-            FastTagFeatureIndex::new(
-                &features.mapper,
-            );
-
-        let raw =
-            std::mem::take(
-                &mut features.data,
-            );
-
-        progress.stage(
-            "running Beacon"
+        "[nelrune] complete: {} reads in {:.1}s ({:.0} reads/s average)",
+        progress.reads_seen(),
+        progress.elapsed().as_secs_f64(),
+        progress.average_reads_per_second(),
         );
-
-        let (
-            beacon_result,
-            mut filtered_features,
-        ) =
-            sc_beacon::runner::run_from_scdata(
-                raw,
-                &cells,
-                primer.grammar().cell_len(),
-                &feature_index,
-                &args.beacon.background_config(),
-                &args.beacon.fit_config(),
-                &args.beacon.call_config(),
-            )?;
-
-        /*
-         * The split already selected the correct cells,
-         * but finalize_for_cells() rebuilds export metadata.
-         */
-        filtered_features.finalize_for_cells(
-            &cells,
-            &feature_index,
-        );
-
-        filtered_features
-            .write_sparse(
-                &args.outpath.join("fast_features"),
-                &feature_index,
-            )
-            .map_err(anyhow::Error::msg)?;
-
-        beacon_result.write(
-            args.outpath.join("fast_features_stats"),
-            &feature_index,
-            primer.grammar().cell_len(),
-        )?;
-
-        /*
-         * Keep it for the final Nelrune summary.
-         */
-        beacon = Some(beacon_result);
-
-        /*
-         * Optionally retain the filtered matrix in FastFeatures too,
-         * if later code expects it there.
-         */
-        features.data = filtered_features;
-    }
-
-    progress.stage(
-        "writing output"
-    );
-
-    write_quantification(
-        &args,
-        &idx,
-        snp.as_ref(),
-        &mut data,
-    )?;
-
-
-    data.report.stop_file_io_time();
-
-    println!("{}", data.report);
-
-    if let Some(features) =
-        fast_features.as_ref()
-    {
-        println!(
-            "Fast feature mapping:\n{}",
-            features.report
-        );
-    }
-
-
-    let summary =
-        RunSummary::from_run(
-            &progress,
-            &data,
-            cells.len(),
-            fast_features.as_ref(),
-            beacon.as_ref(),
-        );
-
-    println!();
-    println!("{summary}");
-
-    summary.write(
-        args.outpath.join(
-            "nelrune.pretty.log"
-        ),
-    )?;
 
     Ok(())
 }
 
-
-pub fn process_fastq_reader(
-    fastq: &mut FastqPairReader,
-    primer: &PrimerDetector,
-    fast_features: &mut Option<FastFeatures>,
+fn run_illumina_input(
+    args: &Cli,
+    primer: &sc_primer::PrimerDetector,
     mapper: &mut StreamingMapper,
-    pending_tags: &mut HashMap<String, ReadTags>,
-    job_builder: &JobBuilder<'_>,
-    processor: &ChunkProcessor<'_>,
-    quant_mode: QuantMode,
-    jobs: &mut Vec<Job>,
-    data: &mut QuantData,
+    sink: &mut MapperBamSink,
     progress: &mut RunProgress,
-    submitted: &mut usize,
-    max_reads: Option<usize>,
-) -> Result<bool> {
-    loop {
-        if max_reads.is_some_and(
-            |max| *submitted >= max
-        ) {
-            return Ok(false);
-        }
+) -> Result<(usize, FeatureTagCounts)> {
+    let mut submitted = 0usize;
 
-        let Some(read) =
-            next_parsed_pair(
-                fastq,
-                primer,
-            )?
-        else {
-            return Ok(true);
-        };
+    let config = IlluminaNormalizerConfig {
+        out: args.outpath.join("normalized.fastq"),
+        read_tags: args.outpath.join("read_tags.tsv"),
+        primer_read: PrimerRead::R1,
+        insert_read: InsertRead::R2,
+        primer: primer.clone(),
+        additional_features: args.additional_features.clone(),
+        additional_feature_min_hits: args.additional_feature_min_hits,
+        min_insert_len: args.min_insert_len,
+        max_reads: args.bam_collector.max_reads,
+        threads: args.threads,
+        gzip_level: 1,
+        gzip: false,
+    };
 
-        process_fast_feature_read(
-            &read,
-            fast_features.as_mut(),
+    let mut normalizer = IlluminaNormalizer::new(config)?;
+
+    for (r1_path, r2_path) in args.r1.iter().zip(args.r2.iter()) {
+        /*
+         * Local to this FASTQ pair.
+         *
+         * --max-reads therefore applies independently to every
+         * R1/R2 input pair.
+         */
+
+        progress.stage(format!(
+            "normalizing {}",
+            r1_path.display()
+        ));
+
+        progress.input_file(
+            r1_path.to_string_lossy()
         );
 
-        remember_tags(
-            &read,
-            pending_tags,
+        normalizer.nelrune_run(
+            r1_path,
+            r2_path,
+            |reads| {
+                for (r1, r2) in reads {
+                    mapper.submit(
+                        r2,
+                        r1.as_ref(),
+                    )?;
+                }
+
+                submitted += 1;
+
+                sink.drain_ready(mapper)?;
+
+                Ok(true)
+            },
+            |stats| progress.update_from_mapping_info(stats),
         )?;
 
-        mapper.submit(
-            &read.r2,
-            None,
-        )?;
+        progress.report_block(
+            &format!(
+                "Illumina normalization: {}",
+                r1_path.display()
+            ),
+            normalizer.stats(),
+        );
+    }
 
-        *submitted += 1;
+    let feature_counts =
+        normalizer.take_feature_tag_counts();
 
-        progress.read_processed();
+    Ok((submitted, feature_counts))
+}
 
-        drain_mapper(
-            mapper,
-            pending_tags,
-            job_builder,
-            processor,
-            quant_mode,
-            jobs,
-            data,
-        )?;
+fn run_ont_input(
+    args: &Cli,
+    primer: &sc_primer::PrimerDetector,
+    bam_input: &Path,
+    mapper: &mut StreamingMapper,
+    sink: &mut MapperBamSink,
+    progress: &mut RunProgress,
+) -> Result<(usize, FeatureTagCounts)> {
+    progress.stage(format!(
+        "normalizing {}",
+        bam_input.display()
+    ));
+
+    progress.input_file(
+        bam_input.to_string_lossy()
+    );
+
+    let config = OntNormalizerConfig {
+        bam: bam_input.to_path_buf(),
+        out: args.outpath.join("normalized.fastq"),
+        read_tags: args.outpath.join("read_tags.tsv"),
+        min_transcript_len: args.min_transcript_len,
+        max_reads: args.bam_collector.max_reads,
+        primer: primer.clone(),
+        additional_features: args.additional_features.clone(),
+        additional_feature_min_hits: args.additional_feature_min_hits,
+        threads: args.threads,
+        gzip_level: 1,
+        gzip: false,
+    };
+
+    let mut normalizer =
+        OntNormalizer::new(config)?;
+
+    let mut submitted = 0usize;
+
+    normalizer.nelrune_run(
+        |reads| {
+            for (r1, r2) in reads {
+                mapper.submit(
+                    r2,
+                    r1.as_ref(),
+                )?;
+            }
+
+            submitted += 1;
+
+            sink.drain_ready(mapper)?;
+
+            Ok(true)
+        },
+        |stats| progress.update_from_mapping_info(stats),
+    )?;
+
+    progress.report_block(
+        &format!(
+            "ONT normalization: {}",
+            bam_input.display()
+        ),
+        normalizer.stats(),
+    );
+
+    let feature_counts =
+        normalizer.take_feature_tag_counts();
+
+    Ok((submitted, feature_counts))
+}
+
+
+struct MapperBamSink {
+    path: PathBuf,
+    writer: Option<bam::Writer>,
+}
+
+impl MapperBamSink {
+    fn new(path: PathBuf) -> Self {
+        Self { path, writer: None }
+    }
+
+    fn drain_ready(&mut self, mapper: &mut StreamingMapper) -> Result<()> {
+        if self.writer.is_none() && mapper.header_loaded() {
+            self.open_from_mapper(mapper)?;
+        }
+
+        if self.writer.is_none() {
+            return Ok(());
+        }
+
+        while let Some(call) = mapper.try_next()? {
+            self.write_call(call)?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_open_blocking(&mut self, mapper: &mut StreamingMapper) -> Result<()> {
+        if self.writer.is_none() {
+            self.open_from_mapper(mapper)?;
+        }
+        Ok(())
+    }
+
+    fn open_from_mapper(&mut self, mapper: &mut StreamingMapper) -> Result<()> {
+        let header = mapper
+        .header()
+        .context("waiting for mapper BAM header")?
+        .clone();
+
+        let writer = bam::Writer::from_path(&self.path, &header, bam::Format::Bam)
+        .with_context(|| format!("creating mapper BAM {}", self.path.display()))?;
+
+        self.writer = Some(writer);
+        Ok(())
+    }
+
+    fn write_call(&mut self, call: MappingCall) -> Result<()> {
+        let writer = self
+        .writer
+        .as_mut()
+        .context("mapper BAM writer not initialized")?;
+
+        for record in call.records.records {
+            let record = record.into_inner();
+            writer
+            .write(&record)
+            .context("writing mapper BAM record")?;
+        }
+
+        Ok(())
+    }
+
+    fn write_calls(&mut self, calls: Vec<MappingCall>) -> Result<()> {
+        for call in calls {
+            self.write_call(call)?;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<()> {
+        self.writer.take();
+        Ok(())
+    }
+}
+
+fn external_hostname(override_hostname: Option<&str>) -> String {
+    if let Some(hostname) = override_hostname {
+        if !hostname.trim().is_empty() {
+            return hostname.trim().to_string();
+        }
+    }
+
+    if let Ok(hostname) = std::env::var("SLURMD_NODENAME") {
+        if !hostname.trim().is_empty() {
+            return hostname;
+        }
+    }
+
+    if let Ok(output) = Command::new("hostname").arg("-f").output() {
+        if output.status.success() {
+            let hostname = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !hostname.is_empty() {
+                return hostname;
+            }
+        }
+    }
+
+    if let Ok(hostname) = std::env::var("HOSTNAME") {
+        if !hostname.trim().is_empty() {
+            return hostname;
+        }
+    }
+
+    "localhost".to_string()
+}
+
+fn configure_rayon(threads: usize) {
+    if threads > 0 {
+        let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build_global();
     }
 }

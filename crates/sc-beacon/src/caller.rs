@@ -22,7 +22,10 @@ impl Default for CallConfig {
 #[derive(Debug, Clone)]
 pub struct GuideCall {
     pub cell_id: u64,
+    /// Dense model-local guide slot.
     pub guide_id: u32,
+    /// Real scdata/FeatureIndex feature id.
+    pub feature_id: u64,
     pub count: u32,
     pub lambda_cell: f64,
     pub ambient_probability: f64,
@@ -101,6 +104,7 @@ impl GuideCalls {
                 GuideCall {
                     cell_id: obs.cell_id,
                     guide_id: obs.guide_id,
+                    feature_id: model.ambient.feature_id(obs.guide_id),
                     count: obs.count,
 
                     lambda_cell: lambda,

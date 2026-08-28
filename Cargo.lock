@@ -163,6 +163,7 @@ dependencies = [
  "rayon",
  "read-tag-table",
  "rust-htslib",
+ "sc-beacon",
  "sc_primer",
  "scdata",
  "serde",
@@ -1202,13 +1203,11 @@ dependencies = [
  "anyhow",
  "bam_tide",
  "clap",
- "fast_tag_mapper",
+ "flate2",
  "gtf_splice_index",
- "int-to-str",
  "mapping_info",
  "rayon",
  "rust-htslib",
- "sc-beacon",
  "sc-mapper",
  "sc_primer",
  "scdata",
@@ -1719,7 +1718,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "flate2",
  "int-to-str",
  "mapping_info",
  "rayon",
@@ -1761,6 +1759,7 @@ dependencies = [
 name = "scdata"
 version = "0.2.3"
 dependencies = [
+ "anyhow",
  "flate2",
  "int-to-str",
  "mapping_info",

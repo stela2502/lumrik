@@ -10,7 +10,7 @@ pub mod results;
 pub mod bed_data;
 pub mod data_iter;
 pub mod fastq;
-pub mod read_tag_table;
+pub mod feature_tag_counts;
 //pub mod tags;
 
 // Quantification
@@ -28,3 +28,4 @@ pub mod multi_subset_bam;
 pub mod transcriptome_to_genome;
 
 pub use results::QuantData;
+pub use feature_tag_counts::{AdditionalFeatureSource, FeatureTagCounts};

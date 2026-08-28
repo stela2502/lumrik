@@ -165,9 +165,9 @@ mod tests {
             &[10, 11, 12, 13, 14, 15, 16, 17],
         );
 
-        let clipped = rec.clipped("read1/mol1", 2, 6);
+        let clipped = rec.clipped("read1_mol1", 2, 6);
 
-        assert_eq!(clipped.id, "read1/mol1");
+        assert_eq!(clipped.id, "read1_mol1");
         assert_eq!(clipped.seq, b"GTAC");
         assert_eq!(clipped.qual, vec![12, 13, 14, 15]);
     }

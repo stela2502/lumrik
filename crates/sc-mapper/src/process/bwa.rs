@@ -35,12 +35,12 @@ impl ExternalMapper for Bwa {
         args.push(self.launch.index.to_string_lossy().to_string());
 
         let process = if self.launch.paired {
-            MapperProcess::spawn_paired_fifo(&self.launch.mapper_bin, &args)
+            MapperProcess::spawn_paired_fifo(&self.launch.mapper_bin, &args, None)
                 .context("failed to spawn bwa with paired FIFO input")?
         } else {
             args.push("-".to_string());
 
-            MapperProcess::spawn_single_stdin(&self.launch.mapper_bin, &args)
+            MapperProcess::spawn_single_stdin(&self.launch.mapper_bin, &args, None)
                 .context("failed to spawn bwa with single-end stdin input")?
         };
 

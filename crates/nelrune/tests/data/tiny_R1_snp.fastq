@@ -1,0 +1,16 @@
+@spliced_REF
+ACGTAAAA
++
+IIIIIIII
+@spliced_ALT
+ACGTAAAC
++
+IIIIIIII
+@unspliced_REF
+ACGTAAAG
++
+IIIIIIII
+@unspliced_ALT
+ACGTAAAT
++
+IIIIIIII

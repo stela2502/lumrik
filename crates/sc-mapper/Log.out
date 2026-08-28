@@ -1,38 +1,31 @@
 STAR version=2.7.11b
 STAR compilation time,server,dir=2024-04-14T23:10:25+00:00 <place not set in Debian package>
 ##### Command Line:
-/usr/lib/rna-star/bin/STAR-avx2 --runThreadN 1 --outSAMtype SAM --outStd SAM --genomeDir /tmp/.tmpXv9ax7/star-index --readFilesIn /tmp/.tmppDTorY/r1.fq
+/usr/lib/rna-star/bin/STAR-avx2 --genomeDir /tmp/.tmp8Xau8D/star-index --readFilesIn /tmp/.tmprB0gI4/r1.fq
 ##### Initial USER parameters from Command Line:
-outStd                            SAM
 ###### All USER parameters from Command Line:
-runThreadN                    1     ~RE-DEFINED
-outSAMtype                    SAM        ~RE-DEFINED
-outStd                        SAM     ~RE-DEFINED
-genomeDir                     /tmp/.tmpXv9ax7/star-index     ~RE-DEFINED
-readFilesIn                   /tmp/.tmppDTorY/r1.fq        ~RE-DEFINED
+genomeDir                     /tmp/.tmp8Xau8D/star-index     ~RE-DEFINED
+readFilesIn                   /tmp/.tmprB0gI4/r1.fq        ~RE-DEFINED
 ##### Finished reading parameters from all sources
 
 ##### Final user re-defined parameters-----------------:
-runThreadN                        1
-genomeDir                         /tmp/.tmpXv9ax7/star-index
-readFilesIn                       /tmp/.tmppDTorY/r1.fq   
-outStd                            SAM
-outSAMtype                        SAM   
+genomeDir                         /tmp/.tmp8Xau8D/star-index
+readFilesIn                       /tmp/.tmprB0gI4/r1.fq   
 
 -------------------------------
 ##### Final effective command line:
-/usr/lib/rna-star/bin/STAR-avx2   --runThreadN 1   --genomeDir /tmp/.tmpXv9ax7/star-index   --readFilesIn /tmp/.tmppDTorY/r1.fq      --outStd SAM   --outSAMtype SAM   
+/usr/lib/rna-star/bin/STAR-avx2   --genomeDir /tmp/.tmp8Xau8D/star-index   --readFilesIn /tmp/.tmprB0gI4/r1.fq   
 ----------------------------------------
 
 Number of fastq files for each mate = 1
 ParametersSolo: --soloCellFilterType CellRanger2.2 filtering parameters:  3000 0.99 10
 Finished loading and checking parameters
 Reading genome generation parameters:
-### /usr/lib/rna-star/bin/STAR-avx2   --runMode genomeGenerate      --runThreadN 1   --genomeDir /tmp/.tmpXv9ax7/star-index   --genomeFastaFiles /tmp/.tmpXv9ax7/tiny.fa      --genomeSAindexNbases 1
+### /usr/lib/rna-star/bin/STAR-avx2   --runMode genomeGenerate      --runThreadN 1   --genomeDir /tmp/.tmp8Xau8D/star-index   --genomeFastaFiles /tmp/.tmp8Xau8D/tiny.fa      --genomeSAindexNbases 1
 ### GstrandBit=32
 versionGenome                 2.7.4a     ~RE-DEFINED
 genomeType                    Full     ~RE-DEFINED
-genomeFastaFiles              /tmp/.tmpXv9ax7/tiny.fa        ~RE-DEFINED
+genomeFastaFiles              /tmp/.tmp8Xau8D/tiny.fa        ~RE-DEFINED
 genomeSAindexNbases           1     ~RE-DEFINED
 genomeChrBinNbits             18     ~RE-DEFINED
 genomeSAsparseD               1     ~RE-DEFINED
@@ -50,7 +43,7 @@ genomeFileSizes               262144   597        ~RE-DEFINED
 Genome version is compatible with current STAR
 Number of real (reference) chromosomes= 1
 1	chrTest	72	0
-Started loading the genome: Wed Aug 19 13:30:38 2026
+Started loading the genome: Fri Aug 21 13:28:18 2026
 
 Genome: size given as a parameter = 262144
 SA: size given as a parameter = 597
@@ -64,14 +57,23 @@ Loading Genome ... done! state: good=1 eof=0 fail=0 bad=0; loaded 262144 bytes
 SA file size: 597 bytes; state: good=1 eof=0 fail=0 bad=0
 Loading SA ... done! state: good=1 eof=0 fail=0 bad=0; loaded 597 bytes
 Loading SAindex ... done: 45 bytes
-Finished loading the genome: Wed Aug 19 13:30:38 2026
+Finished loading the genome: Fri Aug 21 13:28:18 2026
 
 alignIntronMax=alignMatesGapMax=0, the max intron size will be approximately determined by (2^winBinNbits)*winAnchorDistNbins=589824
 Thread #0 end of input stream, nextChar=-1
 Completed: thread #0
-Aug 19 13:30:38 ..... finished mapping
+Aug 21 13:28:19 ..... finished mapping
 RAM after mapping:
-VmPeak:	  160452 kB; VmSize:	  160452 kB; VmHWM:	  106152 kB; VmRSS:	  106152 kB; 
+VmPeak:	  160448 kB; VmSize:	  160448 kB; VmHWM:	  106248 kB; VmRSS:	  106248 kB; 
 RAM after freeing genome index memory:
-VmPeak:	  160452 kB; VmSize:	  160192 kB; VmHWM:	  106068 kB; VmRSS:	  105892 kB; 
+VmPeak:	  160448 kB; VmSize:	  160188 kB; VmHWM:	  106100 kB; VmRSS:	  105996 kB; 
+ALL DONE!
+oximately determined by (2^winBinNbits)*winAnchorDistNbins=589824
+Thread #0 end of input stream, nextChar=-1
+Completed: thread #0
+Aug 21 13:28:18 ..... finished mapping
+RAM after mapping:
+VmPeak:	  160452 kB; VmSize:	  160452 kB; VmHWM:	  106248 kB; VmRSS:	  106248 kB; 
+RAM after freeing genome index memory:
+VmPeak:	  160452 kB; VmSize:	  160192 kB; VmHWM:	  106164 kB; VmRSS:	  105988 kB; 
 ALL DONE!

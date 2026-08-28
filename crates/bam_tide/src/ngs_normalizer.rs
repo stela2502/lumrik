@@ -1,19 +1,16 @@
-use crate::fastq::{FastqRecord, FastqWriter,};// FastqPairReader, SimpleFastqReader, FastqRead};
-use crate::read_tag_table::{ReadTagRecord, ReadTagTable};
-use crate::index::FastTagFeatureIndex;
+use crate::fastq::{FastqRecord,};// FastqPairReader, SimpleFastqReader, FastqRead};
+use read_tag_table::{ReadTagRecord, ReadTagTable};
 
-use anyhow::{ Context, Result};
+use anyhow::{Context, Result};
 use mapping_info::MappingInfo;
 use sc_primer::Orientation;
 //use scdata::cell_data::GeneUmiHash;
 use scdata::{MatrixValueType, Scdata};
 
 
-use fast_tag_mapper::{FastTagMapper};
 
-use std::path::{Path};
 
-pub const CHUNK_SIZE: usize = 1_000_000;
+pub const CHUNK_SIZE: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct NormalizedMolecule {
@@ -76,18 +73,12 @@ impl NormalizerPartial {
         stats: &mut MappingInfo,
         read_tags: &mut ReadTagTable,
         feature_tag_table: &mut Scdata,
-        fastq: &mut FastqWriter,
-    ) -> Result<()> {
+    ) -> Vec<FastqRecord> {
         stats.merge(&self.stats);
         read_tags.merge(self.read_tags);
         feature_tag_table.merge(&self.feature_tag_table);
 
-        for record in self.fastq_records {
-            fastq.write(&record)?;
-            stats.report("fastq_reads_written");
-        }
-
-        Ok(())
+        self.fastq_records
     }
 }
 
@@ -134,7 +125,7 @@ impl NgsNormalizerSupport {
     }
 
     pub fn normalized_molecule_id(read_id: &str, molecule_index: usize) -> String {
-        format!("{read_id}/mol{molecule_index}")
+        format!("{read_id}_mol{molecule_index}")
     }
 
     pub fn encode_sequence_id(seq: &[u8]) -> u64 {
@@ -154,31 +145,33 @@ impl NgsNormalizerSupport {
         out
     }
 
-
-    pub fn write_feature_tag_table_if_present(
-        feature_tag_table: &mut Scdata,
-        mapper: Option<&FastTagMapper>,
-        fastq_out: &Path,
+    /// Attach the stored ReadTagRecord metadata to every mapper-facing QNAME
+    /// in a completed normalizer chunk.
+    ///
+    /// The batch stays allocated and owned by the normalizer, so callers can
+    /// consume it through a borrowed slice without a per-read callback or an
+    /// extra batch allocation.
+    pub fn prepare_emit_batch(
+        reads: &mut [(Option<FastqRecord>, FastqRecord)],
+        read_tags: &ReadTagTable,
     ) -> Result<()> {
-        if feature_tag_table.is_empty() {
-            return Ok(());
+        for (r1, r2) in reads {
+            let tag = read_tags
+                .get(&r2.id)
+                .with_context(|| {
+                    format!("missing ReadTagRecord for '{}'", r2.id)
+                })?;
+
+            r2.id = tag.extend_qname(
+                r2.id.split_whitespace().next().unwrap_or(&r2.id)
+            );
+
+            if let Some(r1) = r1 {
+                r1.id = tag.extend_qname(
+                    r1.id.split_whitespace().next().unwrap_or(&r1.id)
+                );
+            }
         }
-
-        let Some(mapper) = mapper else {
-            return Ok(());
-        };
-
-        let out_dir = fastq_out
-            .with_extension("")
-            .join("feature_tag_table_unfiltered");
-
-        std::fs::create_dir_all(&out_dir)
-            .with_context(|| format!("failed to create {}", out_dir.display()))?;
-
-        let feature_index = FastTagFeatureIndex::new(mapper);
-        feature_tag_table
-            .write_sparse(&out_dir, &feature_index)
-            .map_err(|err| anyhow::anyhow!("writing feature tag table failed: {err}"))?;
 
         Ok(())
     }

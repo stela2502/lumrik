@@ -82,9 +82,18 @@ impl StreamingMapper {
         }
     }
 
+    pub fn is_running(&mut self) -> Result<bool> {
+        self.process.is_running()
+    }
+
     pub fn header(&mut self) -> Result<&rust_htslib::bam::Header> {
         self.process.header()
     }
+
+    pub fn header_loaded(&mut self) -> bool {
+        self.process.header_loaded()
+    }
+
     
     /// Close mapper input and return every mapping result still outstanding.
     pub fn finish(self) -> Result<Vec<MappingCall>> {
@@ -111,6 +120,12 @@ pub trait MapperProcessLike: Send {
     fn finish(self: Box<Self>) -> Result<Vec<SamReadCluster>>;
 
     fn header(&mut self) -> Result<&Header>;
+
+    fn header_loaded(&mut self) -> bool;
+
+    fn is_running(
+        &mut self,
+    ) -> Result<bool>;
 }
 
 

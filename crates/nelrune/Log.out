@@ -1,0 +1,77 @@
+STAR version=2.7.11b
+STAR compilation time,server,dir=2024-04-14T23:10:25+00:00 <place not set in Debian package>
+##### Command Line:
+/usr/lib/rna-star/bin/STAR-avx2 --genomeDir tests/data/star_index --readFilesIn /tmp/qname_test.fastq --outSAMtype SAM --outStd SAM
+##### Initial USER parameters from Command Line:
+outStd                            SAM
+###### All USER parameters from Command Line:
+genomeDir                     tests/data/star_index     ~RE-DEFINED
+readFilesIn                   /tmp/qname_test.fastq        ~RE-DEFINED
+outSAMtype                    SAM        ~RE-DEFINED
+outStd                        SAM     ~RE-DEFINED
+##### Finished reading parameters from all sources
+
+##### Final user re-defined parameters-----------------:
+genomeDir                         tests/data/star_index
+readFilesIn                       /tmp/qname_test.fastq   
+outStd                            SAM
+outSAMtype                        SAM   
+
+-------------------------------
+##### Final effective command line:
+/usr/lib/rna-star/bin/STAR-avx2   --genomeDir tests/data/star_index   --readFilesIn /tmp/qname_test.fastq      --outStd SAM   --outSAMtype SAM   
+----------------------------------------
+
+Number of fastq files for each mate = 1
+ParametersSolo: --soloCellFilterType CellRanger2.2 filtering parameters:  3000 0.99 10
+Finished loading and checking parameters
+Reading genome generation parameters:
+### /usr/lib/rna-star/bin/STAR-avx2   --runMode genomeGenerate      --genomeDir /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index   --genomeFastaFiles /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa      --genomeSAindexNbases 2   --sjdbGTFfile /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf   --sjdbOverhang 59
+### GstrandBit=32
+versionGenome                 2.7.4a     ~RE-DEFINED
+genomeType                    Full     ~RE-DEFINED
+genomeFastaFiles              /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa        ~RE-DEFINED
+genomeSAindexNbases           2     ~RE-DEFINED
+genomeChrBinNbits             18     ~RE-DEFINED
+genomeSAsparseD               1     ~RE-DEFINED
+genomeTransformType           None     ~RE-DEFINED
+genomeTransformVCF            -     ~RE-DEFINED
+sjdbOverhang                  59     ~RE-DEFINED
+sjdbFileChrStartEnd           -        ~RE-DEFINED
+sjdbGTFfile                   /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf     ~RE-DEFINED
+sjdbGTFchrPrefix              -     ~RE-DEFINED
+sjdbGTFfeatureExon            exon     ~RE-DEFINED
+sjdbGTFtagExonParentTranscripttranscript_id     ~RE-DEFINED
+sjdbGTFtagExonParentGene      gene_id     ~RE-DEFINED
+sjdbInsertSave                Basic     ~RE-DEFINED
+genomeFileSizes               262263   4277        ~RE-DEFINED
+Genome version is compatible with current STAR
+Number of real (reference) chromosomes= 1
+1	chrTiny	400	0
+--sjdbOverhang = 59 taken from the generated genome
+Started loading the genome: Tue Aug 25 13:08:43 2026
+
+Genome: size given as a parameter = 262263
+SA: size given as a parameter = 4277
+SAindex: size given as a parameter = 1
+Read from SAindex: pGe.gSAindexNbases=2  nSAi=20
+nGenome=262263;  nSAbyte=4277
+GstrandBit=32   SA number of indices=1036
+Shared memory is not used for genomes. Allocated a private copy of the genome.
+Genome file size: 262263 bytes; state: good=1 eof=0 fail=0 bad=0
+Loading Genome ... done! state: good=1 eof=0 fail=0 bad=0; loaded 262263 bytes
+SA file size: 4277 bytes; state: good=1 eof=0 fail=0 bad=0
+Loading SA ... done! state: good=1 eof=0 fail=0 bad=0; loaded 4277 bytes
+Loading SAindex ... done: 123 bytes
+Finished loading the genome: Tue Aug 25 13:08:43 2026
+
+Processing splice junctions database sjdbN=1,   pGe.sjdbOverhang=59 
+alignIntronMax=alignMatesGapMax=0, the max intron size will be approximately determined by (2^winBinNbits)*winAnchorDistNbins=589824
+Thread #0 end of input stream, nextChar=-1
+Completed: thread #0
+Aug 25 13:08:43 ..... finished mapping
+RAM after mapping:
+VmPeak:	  160448 kB; VmSize:	  160448 kB; VmHWM:	  106292 kB; VmRSS:	  106292 kB; 
+RAM after freeing genome index memory:
+VmPeak:	  160448 kB; VmSize:	  160188 kB; VmHWM:	  106208 kB; VmRSS:	  106032 kB; 
+ALL DONE!

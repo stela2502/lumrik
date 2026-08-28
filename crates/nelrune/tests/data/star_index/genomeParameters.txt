@@ -1,0 +1,19 @@
+### /usr/lib/rna-star/bin/STAR-avx2   --runMode genomeGenerate      --genomeDir /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index   --genomeFastaFiles /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa      --genomeSAindexNbases 2   --sjdbGTFfile /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf   --sjdbOverhang 59
+### GstrandBit 32
+versionGenome	2.7.4a
+genomeType	Full
+genomeFastaFiles	/home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa 
+genomeSAindexNbases	2
+genomeChrBinNbits	18
+genomeSAsparseD	1
+genomeTransformType	None
+genomeTransformVCF	-
+sjdbOverhang	59
+sjdbFileChrStartEnd	- 
+sjdbGTFfile	/home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf
+sjdbGTFchrPrefix	-
+sjdbGTFfeatureExon	exon
+sjdbGTFtagExonParentTranscript	transcript_id
+sjdbGTFtagExonParentGene	gene_id
+sjdbInsertSave	Basic
+genomeFileSizes	262263 4277

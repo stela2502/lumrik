@@ -13,7 +13,7 @@ pub struct FastqPairReader {
 }
 
 impl FastqPairReader {
-    pub fn from_paths(r1: &PathBuf, r2: &PathBuf) -> Result<Self> {
+    pub fn from_paths(r1: &Path, r2: &Path) -> Result<Self> {
         Ok(Self {
             r1: Box::new(SimpleFastqReader::new(r1)?),
             r2: Box::new(SimpleFastqReader::new(r2)?),
@@ -43,8 +43,8 @@ pub struct SimpleFastqReader {
 }
 
 impl SimpleFastqReader {
-    pub fn new(path: &PathBuf) -> Result<Self> {
-        Self::from_path(path.as_path())
+    pub fn new(path: &Path) -> Result<Self> {
+        Self::from_path(path)
     }
 
     pub fn from_path(path: &Path) -> Result<Self> {

@@ -21,6 +21,8 @@ pub struct AmbientModel {
     pub guide_umis: Vec<u64>,
     pub total_umis: u64,
     pub background_droplets: usize,
+    /// Real FeatureIndex ids in dense model order.
+    pub feature_ids: Vec<u64>,
 }
 
 impl AmbientModel {
@@ -57,10 +59,15 @@ impl AmbientModel {
             guide_umis,
             total_umis,
             background_droplets: data.n_cells(),
+            feature_ids: data.feature_ids.clone(),
         })
     }
 
     pub fn p(&self, guide_id: u32) -> f64 {
         self.guide_probability[guide_id as usize]
+    }
+
+    pub fn feature_id(&self, guide_id: u32) -> u64 {
+        self.feature_ids[guide_id as usize]
     }
 }

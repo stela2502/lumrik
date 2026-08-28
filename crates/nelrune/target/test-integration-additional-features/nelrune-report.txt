@@ -1,0 +1,25 @@
+MappingInfo
+  started: 2026-08-27 10:06:20.883624715 UTC
+
+Read types (n=5)
+  Type                             Count           Fraction total [%]
+  -------------------------------------------------------------------
+  ExactJunctionChain:              1               20.00
+  Intronic:                        1               20.00
+  cell_umi from BAM tags:          2               40.00
+  secondary or supplementary:      1               20.00
+
+Timings
+  overall     : 0 h 0 min 0 sec 2 ms
+  file I/O    : 0 h 0 min 0 sec 0 ms
+  single-cpu  : 0 h 0 min 0 sec 0 ms
+  multi-cpu   : 0 h 0 min 0 sec 0 ms
+
+Named timings
+  bam_tide/multi_cpu/quantify_chunk: 0 h 0 min 0 sec 0 ms
+  bam_tide/single_cpu/merge_quantification: 0 h 0 min 0 sec 0 ms
+  nelrune/mapper_finish:           0 h 0 min 0 sec 88 ms
+  nelrune/normalization:           0 h 0 min 0 sec 2 ms
+  nelrune/quantification:          0 h 0 min 0 sec 0 ms
+  nelrune/startup:                 0 h 0 min 0 sec 16 ms
+  nelrune/writing:                 0 h 0 min 0 sec 1 ms

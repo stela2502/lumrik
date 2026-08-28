@@ -208,7 +208,7 @@ assert_eq!(index.feature_id("SampleTag07_mm"), Some(7));
 assert_eq!(index.feature_name(7), "SampleTag07_mm");
 assert_eq!(
     index.to_10x_feature_line(7),
-    "SampleTag07_mm\tSampleTag07_mm\tAntibody Capture"
+    "SampleTag07_mm\tSampleTag07_mm\tbd_sample_mouse"
 );
 ```
 

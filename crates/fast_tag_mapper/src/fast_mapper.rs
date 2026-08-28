@@ -7,7 +7,7 @@ use std::{
 use mapping_info::MappingInfo;
 use int_to_str::IntToStr;
 
-use crate::{FeatureEntry, TagEntry};
+use crate::{FeatureEntry, TagEntry, };
 
 const K: usize = 8;
 const TABLE_SIZE: usize = 1 << 16;
@@ -89,7 +89,25 @@ impl FastTagMapper {
         &mut self,
         path: P,
     ) -> std::io::Result<usize> {
+        self.load_fasta_as(path, "Antibody Capture")
+    }
+
+    /// Load FASTA features and assign every record the supplied feature type.
+    ///
+    /// Nelrune uses this to keep short-feature classes separate: for example
+    /// `hto.fa` is loaded with feature type `hto`, while the FASTA record names
+    /// remain the actual feature names.
+    pub fn load_fasta_as<P, S>(
+        &mut self,
+        path: P,
+        feature_type: S,
+    ) -> std::io::Result<usize>
+    where
+        P: AsRef<Path>,
+        S: AsRef<str>,
+    {
         let reader = BufReader::new(File::open(path)?);
+        let feature_type = feature_type.as_ref();
 
         let mut name: Option<String> = None;
         let mut seq: Vec<u8> = Vec::new();
@@ -105,7 +123,11 @@ impl FastTagMapper {
 
             if let Some(header) = line.strip_prefix('>') {
                 if let Some(old_name) = name.take() {
-                    added += self.add_loaded_fasta_record(old_name, &seq);
+                    added += self.add_loaded_fasta_record(
+                        old_name,
+                        &seq,
+                        feature_type,
+                    );
                     seq.clear();
                 }
 
@@ -116,13 +138,22 @@ impl FastTagMapper {
         }
 
         if let Some(old_name) = name {
-            added += self.add_loaded_fasta_record(old_name, &seq);
+            added += self.add_loaded_fasta_record(
+                old_name,
+                &seq,
+                feature_type,
+            );
         }
 
         Ok(added)
     }
 
-    fn add_loaded_fasta_record(&mut self, name: String, seq: &[u8]) -> usize {
+    fn add_loaded_fasta_record(
+        &mut self,
+        name: String,
+        seq: &[u8],
+        feature_type: &str,
+    ) -> usize {
         let feature_id = self
             .features()
             .iter()
@@ -133,7 +164,7 @@ impl FastTagMapper {
 
         self.add_feature(
             seq,
-            FeatureEntry::new(feature_id, name, "Antibody Capture"),
+            FeatureEntry::new(feature_id, name, feature_type),
         );
 
         1

@@ -3,6 +3,8 @@ use bam_tide::illumina_normalizer::{cli::Cli, IlluminaNormalizer};
 
 fn main() -> Result<()> {
     let cli = Cli::parse_args();
+    let r1 = cli.r1.clone();
+    let r2 = cli.r2.clone();
 
     let mut normalizer = IlluminaNormalizer::from_cli(cli)
         .context("failed to initialize Illumina normalizer")?;
@@ -11,7 +13,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("failed to create output directory: {}", normalizer.config().out.display()))?;
 
     normalizer
-        .run()
+        .run(&r1, &r2)
         .context("Illumina normalizer failed while processing input FASTQ files")?;
 
     eprintln!("{}", normalizer.stats_report());

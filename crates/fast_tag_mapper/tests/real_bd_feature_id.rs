@@ -167,6 +167,6 @@ fn feature_index_uses_feature_entries_not_table_entries() {
     assert_eq!(index.ordered_feature_ids(), (1_u64..=12).collect::<Vec<_>>());
     assert_eq!(
         index.to_10x_feature_line(7),
-        "SampleTag07_mm\tSampleTag07_mm\tAntibody Capture"
+        "SampleTag07_mm\tSampleTag07_mm\tbd_sample_mouse"
     );
 }

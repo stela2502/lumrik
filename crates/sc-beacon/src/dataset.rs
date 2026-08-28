@@ -1,99 +1,108 @@
 use std::collections::HashMap;
+
 use anyhow::Result;
 use int_to_str::IntToStr;
-use scdata::Scdata;
+use scdata::{FeatureIndex, Scdata};
 
 #[derive(Debug, Clone, Copy)]
 pub struct GuideObservation {
     pub cell_id: u64,
+    /// Dense model-local feature slot. Translate back with `feature_id()`.
     pub guide_id: u32,
     pub count: u32,
 }
 
-/// Two views of the same sparse guide data:
+/// Lightweight model view over lumrik-native [`Scdata`].
 ///
-/// * `cells` is the cell-major sparse representation owned by `scdata`.
-/// * `by_guide` is the complementary guide-major view used by model fitting.
-///
-/// The guide-major view deliberately stores only non-zero entries.
-pub struct GuideDataset {
-    pub cells: Scdata,
+/// `Scdata` remains the canonical cell-major store. `by_guide` is only the
+/// complementary sparse view needed by the statistical model. Feature IDs are
+/// not assumed to be dense: `feature_ids[guide_id]` maps the model-local slot
+/// back to the real [`FeatureIndex`] id.
+pub struct GuideDataset<'a> {
+    pub cells: &'a Scdata,
     pub by_guide: Vec<Vec<GuideObservation>>,
     pub cell_ids: Vec<u64>,
-    pub barcode_by_id: HashMap<u64, String>,
+    pub feature_ids: Vec<u64>,
+    pub cell_barcode_len: usize,
 }
 
-impl GuideDataset {
-
-    pub fn from_scdata(
-        cells: Scdata,
+impl<'a> GuideDataset<'a> {
+    pub fn from_scdata<I: FeatureIndex>(
+        cells: &'a Scdata,
+        feature_index: &I,
         cell_barcode_len: usize,
     ) -> Result<Self> {
-        let n_features = cells.n_features();
-        let mut by_guide =
-            vec![Vec::new(); n_features];
+        let mut cell_ids = cells.keys();
+        cell_ids.sort_unstable();
+        Self::from_scdata_with_cells(cells, cell_ids, feature_index, cell_barcode_len)
+    }
 
-        let cell_ids =
-            cells.export_cell_ids();
-
-        let barcode_by_id = cell_ids
+    /// Build a model view while preserving an explicit canonical cell set.
+    /// Cells with zero feature counts remain present in `cell_ids` even though
+    /// Scdata has no sparse entry for them.
+    pub fn from_scdata_with_cells<I: FeatureIndex>(
+        cells: &'a Scdata,
+        mut cell_ids: Vec<u64>,
+        feature_index: &I,
+        cell_barcode_len: usize,
+    ) -> Result<Self> {
+        cell_ids.sort_unstable();
+        cell_ids.dedup();
+        let feature_ids = feature_index.ordered_feature_ids();
+        let feature_to_guide: HashMap<u64, u32> = feature_ids
             .iter()
-            .map(|&cell_id| {
-                (
-                    cell_id,
-                    IntToStr::from_u64(cell_id)
-                        .to_string(cell_barcode_len),
-                )
-            })
+            .enumerate()
+            .map(|(guide_id, feature_id)| (*feature_id, guide_id as u32))
             .collect();
 
-        for cell_id in cell_ids {
-            let Some(cell) =
-                cells.get(cell_id)
-            else {
+        let mut by_guide = vec![Vec::new(); feature_ids.len()];
+
+        for cell_id in &cell_ids {
+            let Some(cell) = cells.get(cell_id) else {
                 continue;
             };
 
-            for (feature_id, value) in cell {
-                let guide_id =
-                    *feature_id as u32;
+            for (&feature_id, &value) in &cell.total_reads {
+                let Some(&guide_id) = feature_to_guide.get(&feature_id) else {
+                    continue;
+                };
 
-                if guide_id as usize >= n_features {
-                    panic!(
-                        "feature id {guide_id} exceeds feature count {n_features}"
-                    );
-                }
-
-                let count =
-                    value.round() as u32;
-
+                let count = value.round() as u32;
                 if count == 0 {
                     continue;
                 }
 
-                by_guide[guide_id as usize].push(
-                    GuideObservation {
-                        cell_id : *cell_id,
-                        guide_id,
-                        count,
-                    }
-                );
+                by_guide[guide_id as usize].push(GuideObservation {
+                    cell_id: *cell_id,
+                    guide_id,
+                    count,
+                });
             }
         }
 
         Ok(Self {
-            cell_ids: cell_ids.to_vec(),
             cells,
             by_guide,
-            barcode_by_id,
+            cell_ids,
+            feature_ids,
+            cell_barcode_len,
         })
     }
+
     pub fn n_cells(&self) -> usize {
         self.cell_ids.len()
     }
 
     pub fn n_guides(&self) -> usize {
-        self.by_guide.len()
+        self.feature_ids.len()
+    }
+
+    pub fn feature_id(&self, guide_id: u32) -> u64 {
+        self.feature_ids[guide_id as usize]
+    }
+
+    pub fn barcode(&self, cell_id: u64) -> String {
+        IntToStr::from_u64(cell_id).to_string(self.cell_barcode_len)
     }
 
     pub fn cell_total(&self, cell_id: u64) -> u32 {
@@ -114,19 +123,27 @@ impl GuideDataset {
             return Vec::new();
         };
 
+        let feature_to_guide: HashMap<u64, u32> = self
+            .feature_ids
+            .iter()
+            .enumerate()
+            .map(|(guide_id, feature_id)| (*feature_id, guide_id as u32))
+            .collect();
+
         let mut out: Vec<_> = cell
             .total_reads
             .iter()
-            .filter_map(|(&guide_id, &value)| {
+            .filter_map(|(&feature_id, &value)| {
                 if value <= 0.0 {
-                    None
-                } else {
-                    Some(GuideObservation {
-                        cell_id,
-                        guide_id: guide_id as u32,
-                        count: value.round() as u32,
-                    })
+                    return None;
                 }
+
+                let guide_id = *feature_to_guide.get(&feature_id)?;
+                Some(GuideObservation {
+                    cell_id,
+                    guide_id,
+                    count: value.round() as u32,
+                })
             })
             .collect();
 

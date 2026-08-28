@@ -1,11 +1,7 @@
 
 use clap::Args;
 
-use crate::{
-    background::BackgroundConfig,
-    caller::CallConfig,
-    model::FitConfig,
-};
+use sc_beacon::{BackgroundConfig, CallConfig, FitConfig};
 
 #[derive(Debug, Clone, Args)]
 pub struct GuideModelCli {

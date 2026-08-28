@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bam_tide::read_tag_table::{
+use read_tag_table::{
     PairStats, ReadTagTable, ReadTagTableCli, Summary,
 };
 use clap::Parser;

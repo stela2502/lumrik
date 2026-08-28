@@ -354,6 +354,8 @@ impl Scdata {
     /// The total number of exported sparse entries is the sum of
     /// `cell.total_reads.len()` across all retained cells.
     fn rebuild_feature_ids_with_data<I: FeatureIndex>(&mut self, index: &I) {
+        let allowed: HashSet<u64> = index.ordered_feature_ids().into_iter().collect();
+
         let (observed_feature_ids, total_entries) = self
             .data
             .par_iter()
@@ -363,10 +365,11 @@ impl Scdata {
 
                 for cell in bucket.values() {
                     for feature_id in cell.total_reads.keys() {
-                        local_ids.insert(*feature_id);
+                        if allowed.contains(feature_id) {
+                            local_ids.insert(*feature_id);
+                            local_entries += 1;
+                        }
                     }
-
-                    local_entries += cell.total_reads.len();
                 }
 
                 (local_ids, local_entries)

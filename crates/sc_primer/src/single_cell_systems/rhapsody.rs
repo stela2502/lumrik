@@ -10,6 +10,9 @@ use crate::single_cell_systems::whitelists::bd_const_blocks::{
 };
 use onehot_dna::{OneHot, OneHotSet};
 
+const BD_V2_LINKER_1: &[u8; 4] = b"GTGA";
+const BD_V2_LINKER_2: &[u8; 4] = b"GACA";
+
 pub struct BdCoords {
     pub c1: Range,
     pub c2: Range,
@@ -245,6 +248,49 @@ impl RhapsodyWhitelist {
         None
     }
 
+    /// Find the next outer grammar start that can possibly contain a BD v2
+    /// cassette without changing the matching semantics.
+    ///
+    /// `call_exact_shift()` accepts a cassette only when at least two of the
+    /// three barcode blocks are exact whitelist hits; the remaining block may
+    /// be corrected fuzzily.  Reuse exactly that necessary condition here.
+    /// This avoids the expensive fuzzy matcher at almost every base without
+    /// introducing any new sequence constraint (for example on the linkers).
+    ///
+    /// `shift_start..=shift_end` has the same meaning as in [`Self::call`].
+    pub fn next_candidate_start(
+        &self,
+        seq: &[u8],
+        from: usize,
+        shift_start: usize,
+        shift_end: usize,
+    ) -> Option<usize> {
+        if shift_end < shift_start || from >= seq.len() {
+            return None;
+        }
+
+        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+            return None;
+        }
+
+        let first_base = from.checked_add(shift_start)?;
+        for base in first_base..seq.len() {
+            if !self.has_two_exact_v2_blocks(seq, base) {
+                continue;
+            }
+
+            let latest_start = base.checked_sub(shift_start)?;
+            let earliest_start = base.saturating_sub(shift_end);
+            let candidate = from.max(earliest_start);
+
+            if candidate <= latest_start {
+                return Some(candidate);
+            }
+        }
+
+        None
+    }
+
     pub fn cell_id_to_parts_ids(&self, cell_id: u64) -> Option<(usize, usize, usize)> {
         if cell_id == 0 {
             return None;
@@ -296,42 +342,67 @@ impl RhapsodyWhitelist {
         shift: usize,
     ) -> Option<RhapsodyCellCall> {
         let base = offset.checked_add(shift)?;
+
         let coords = self.coords(base)?;
 
-        let c1 = coords.c1;
-        let c2 = coords.c2;
-        let c3 = coords.c3;
-        let umi = coords.umi;
-        let consumed = coords.consumed;
+        // consumed must be relative to the grammar start, not absolute
+        let consumed = coords.consumed.checked_sub(offset)?;
 
-        if seq.len() < umi.1 || qual.len() < umi.1 {
+        if seq.len() < coords.umi.1 || qual.len() < coords.umi.1 {
             return None;
         }
 
-        let c1_exact = Self::index_block_fast(&seq[c1.0..c1.1], &self.c1_exact);
+        if &seq[coords.c1.1..coords.c2.0] != b"GTGA"
+            || &seq[coords.c2.1..coords.c3.0] != b"GACA"
+        {
+            return None;
+        }
 
-        let c2_exact = Self::index_block_fast(&seq[c2.0..c2.1], &self.c2_exact);
+        let c1_exact = Self::index_block_fast(
+            &seq[coords.c1.0..coords.c1.1],
+            &self.c1_exact,
+        );
 
-        let c3_exact = Self::index_block_fast(&seq[c3.0..c3.1], &self.c3_exact);
+        let c2_exact = Self::index_block_fast(
+            &seq[coords.c2.0..coords.c2.1],
+            &self.c2_exact,
+        );
+
+        let c3_exact = Self::index_block_fast(
+            &seq[coords.c3.0..coords.c3.1],
+            &self.c3_exact,
+        );
 
         let missing =
-            c1_exact.is_none() as u8 + c2_exact.is_none() as u8 + c3_exact.is_none() as u8;
+            c1_exact.is_none() as u8
+            + c2_exact.is_none() as u8
+            + c3_exact.is_none() as u8;
 
         let (c1_idx, c2_idx, c3_idx) = match missing {
-            0 => (c1_exact.unwrap(), c2_exact.unwrap(), c3_exact.unwrap()),
+            0 => (
+                c1_exact.unwrap(),
+                c2_exact.unwrap(),
+                c3_exact.unwrap(),
+            ),
 
             1 => (
                 match c1_exact {
                     Some(v) => v,
-                    None => self.index_c1(&seq[c1.0..c1.1])?,
+                    None => self.index_c1(
+                        &seq[coords.c1.0..coords.c1.1],
+                    )?,
                 },
                 match c2_exact {
                     Some(v) => v,
-                    None => self.index_c2(&seq[c2.0..c2.1])?,
+                    None => self.index_c2(
+                        &seq[coords.c2.0..coords.c2.1],
+                    )?,
                 },
                 match c3_exact {
                     Some(v) => v,
-                    None => self.index_c3(&seq[c3.0..c3.1])?,
+                    None => self.index_c3(
+                        &seq[coords.c3.0..coords.c3.1],
+                    )?,
                 },
             ),
 
@@ -339,7 +410,10 @@ impl RhapsodyWhitelist {
         };
 
         let cell_id =
-            c1_idx * self.block_size * self.block_size + c2_idx * self.block_size + c3_idx + 1;
+            c1_idx * self.block_size * self.block_size
+            + c2_idx * self.block_size
+            + c3_idx
+            + 1;
 
         let mut cell_seq = Vec::with_capacity(27);
         let mut cell_qual = Vec::with_capacity(27);
@@ -349,23 +423,25 @@ impl RhapsodyWhitelist {
             &mut cell_qual,
             seq,
             qual,
-            c1,
+            coords.c1,
             Some(self.c1[c1_idx as usize]),
         );
+
         self.extend_part(
             &mut cell_seq,
             &mut cell_qual,
             seq,
             qual,
-            c2,
+            coords.c2,
             Some(self.c2[c2_idx as usize]),
         );
+
         self.extend_part(
             &mut cell_seq,
             &mut cell_qual,
             seq,
             qual,
-            c3,
+            coords.c3,
             Some(self.c3[c3_idx as usize]),
         );
 
@@ -374,19 +450,36 @@ impl RhapsodyWhitelist {
             cell_id,
             cell_seq,
             cell_qual,
-            umi_seq: seq[umi.0..umi.1].to_vec(),
-            umi_qual: qual[umi.0..umi.1].to_vec(),
+            umi_seq: seq[coords.umi.0..coords.umi.1].to_vec(),
+            umi_qual: qual[coords.umi.0..coords.umi.1].to_vec(),
             shift,
             consumed,
-            c1,
-            c2,
-            c3,
-            umi,
+            c1: coords.c1,
+            c2: coords.c2,
+            c3: coords.c3,
+            umi: coords.umi,
         })
     }
 
     pub fn expected_id(&self, c1: u64, c2: u64, c3: u64) -> u64 {
         c1 * self.block_size * self.block_size + c2 * self.block_size + c3 + 1
+    }
+
+    #[inline]
+    fn has_two_exact_v2_blocks(&self, seq: &[u8], base: usize) -> bool {
+        let Some(coords) = self.coords(base) else {
+            return false;
+        };
+
+        if coords.umi.1 > seq.len() {
+            return false;
+        }
+
+        let exact = usize::from(self.c1_exact.contains_key(&seq[coords.c1.0..coords.c1.1]))
+            + usize::from(self.c2_exact.contains_key(&seq[coords.c2.0..coords.c2.1]))
+            + usize::from(self.c3_exact.contains_key(&seq[coords.c3.0..coords.c3.1]));
+
+        exact >= 2
     }
 
     #[inline]
@@ -438,9 +531,9 @@ impl RhapsodyWhitelist {
 
             BdCellVersion::V2_96 | BdCellVersion::V2_384 => {
                 seq.extend_from_slice(c1s[c1_idx]);
-                seq.extend_from_slice(b"AAAA");
+                seq.extend_from_slice(BD_V2_LINKER_1);
                 seq.extend_from_slice(c2s[c2_idx]);
-                seq.extend_from_slice(b"AAAA");
+                seq.extend_from_slice(BD_V2_LINKER_2);
                 seq.extend_from_slice(c3s[c3_idx]);
                 seq.extend_from_slice(b"A");
             }

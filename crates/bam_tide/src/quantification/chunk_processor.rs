@@ -47,17 +47,22 @@ impl<'a> ChunkProcessor<'a> {
         let threads = rayon::current_num_threads().max(1);
         let chunk_size = (jobs.len() / threads).max(10_000);
 
+        merged.report.start_counter();
+        merged.report.start_timer("bam_tide/multi_cpu/quantify_chunk");
+
         let partials: Vec<QuantData> = jobs
             .par_chunks(chunk_size)
             .map(|chunk| self.process_partial(quant_mode, chunk))
             .collect();
 
+        merged.report.stop_timer("bam_tide/multi_cpu/quantify_chunk");
         merged.report.stop_multi_processor_time();
 
+        merged.report.start_timer("bam_tide/single_cpu/merge_quantification");
         for partial in partials {
             merged.merge(&partial);
         }
-
+        merged.report.stop_timer("bam_tide/single_cpu/merge_quantification");
         merged.report.stop_single_processor_time();
 
         Ok(())

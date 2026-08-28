@@ -11,13 +11,14 @@ members = [
     "crates/scdata",
     "crates/mapping_info",
     "crates/read-tag-table",
-    "crates/int_to_str", "crates/nelrune",
+    "crates/int_to_str", "crates/nelrune", 
 ]
 
 [workspace.package]
 edition = "2024"
 license = "AGPL-3.0-or-later"
 authors = ["Stefan Lang"]
+
 
 [workspace.dependencies]
 rust-htslib = { path = "crates/rust-htslib" }

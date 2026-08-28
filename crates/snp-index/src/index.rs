@@ -652,6 +652,8 @@ impl FeatureIndex for SnpIndex {
     fn ordered_feature_ids(&self) -> Vec<u64> {
         self.loci.iter().map(|locus| locus.id as u64).collect()
     }
+
+
 }
 
 pub struct SnpPosIter<'a> {
@@ -736,7 +738,7 @@ mod tests {
     use super::*;
     use crate::read::{AlignedRead, ReadOpKind, Strand};
     use crate::Genome;
-
+    use crate::ReadOpKind::*;
 
     /*fn locus(
         chr_id: usize,

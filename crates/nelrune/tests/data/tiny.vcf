@@ -1,0 +1,4 @@
+##fileformat=VCFv4.2
+##contig=<ID=chrTiny,length=400>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chrTiny	135	tiny_snp	A	C	.	PASS	.

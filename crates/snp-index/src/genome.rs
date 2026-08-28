@@ -30,7 +30,12 @@ impl Genome {
         let path_ref = path.as_ref();
         let reader = Self::open_fasta_reader(path_ref)?;
 
-        let mut records: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut genome = Self {
+            chr_names: Vec::new(),
+            seqs: Vec::new(),
+            name_to_id: HashMap::new(),
+        };
+
         let mut current_name: Option<String> = None;
         let mut current_seq: Vec<u8> = Vec::new();
 
@@ -41,7 +46,7 @@ impl Genome {
 
             if let Some(rest) = line.strip_prefix('>') {
                 if let Some(name) = current_name.take() {
-                    records.push((name, std::mem::take(&mut current_seq)));
+                    genome.push_record(name, std::mem::take(&mut current_seq))?;
                 }
 
                 let name = rest.split_whitespace().next().unwrap_or("").to_string();
@@ -51,20 +56,23 @@ impl Genome {
                 }
 
                 current_name = Some(name);
-            } else if !line.trim().is_empty() {
-                current_seq.extend(line.trim().as_bytes());
+            } else {
+                let seq = line.trim();
+                if !seq.is_empty() {
+                    current_seq.extend_from_slice(seq.as_bytes());
+                }
             }
         }
 
         if let Some(name) = current_name.take() {
-            records.push((name, current_seq));
+            genome.push_record(name, current_seq)?;
         }
 
-        if records.is_empty() {
+        if genome.seqs.is_empty() {
             anyhow::bail!("FASTA file contains no records: {}", path_ref.display());
         }
 
-        Self::new(records)
+        Ok(genome)
     }
 
     /// Open plain or gzip-compressed FASTA as a buffered reader.
@@ -87,33 +95,39 @@ impl Genome {
     ///
     /// Useful for tests and small synthetic references.
     pub fn new(records: Vec<(String, Vec<u8>)>) -> Result<Self> {
-        let mut chr_names = Vec::with_capacity(records.len());
-        let mut seqs = Vec::with_capacity(records.len());
-        let mut name_to_id = HashMap::with_capacity(records.len());
+        let mut genome = Self {
+            chr_names: Vec::with_capacity(records.len()),
+            seqs: Vec::with_capacity(records.len()),
+            name_to_id: HashMap::with_capacity(records.len()),
+        };
 
         for (name, seq) in records {
-            if name.is_empty() {
-                anyhow::bail!("empty chromosome name");
-            }
-
-            if name_to_id.contains_key(&name) {
-                anyhow::bail!("duplicate chromosome name: {name}");
-            }
-
-            let chr_id = chr_names.len();
-            for alias in Self::chr_aliases(&name) {
-                name_to_id.entry(alias).or_insert(chr_id);
-            }
-            name_to_id.insert(name.clone(), chr_id);
-            chr_names.push(name);
-            seqs.push(Self::uppercase_sequence(&seq));
+            genome.push_record(name, seq)?;
         }
 
-        Ok(Self {
-            chr_names,
-            seqs,
-            name_to_id,
-        })
+        Ok(genome)
+    }
+
+    fn push_record(&mut self, name: String, mut seq: Vec<u8>) -> Result<()> {
+        if name.is_empty() {
+            anyhow::bail!("empty chromosome name");
+        }
+
+        if self.name_to_id.contains_key(&name) {
+            anyhow::bail!("duplicate chromosome name: {name}");
+        }
+
+        let chr_id = self.chr_names.len();
+        for alias in Self::chr_aliases(&name) {
+            self.name_to_id.entry(alias).or_insert(chr_id);
+        }
+        self.name_to_id.insert(name.clone(), chr_id);
+
+        seq.make_ascii_uppercase();
+        self.chr_names.push(name);
+        self.seqs.push(seq);
+
+        Ok(())
     }
 
     fn chr_aliases(name: &str) -> Vec<String> {
@@ -179,7 +193,6 @@ impl Genome {
             .get(chr_id)
             .and_then(|seq| seq.get(pos0 as usize))
             .copied()
-            .map(|b| b.to_ascii_uppercase())
     }
 
     /// Return reference slice `[start0, end0)`.
@@ -213,10 +226,6 @@ impl Genome {
         Ok(name)
     }
 
-    /// Uppercase a sequence.
-    pub fn uppercase_sequence(seq: &[u8]) -> Vec<u8> {
-        seq.iter().map(|b| b.to_ascii_uppercase()).collect()
-    }
 }
 
 #[cfg(test)]

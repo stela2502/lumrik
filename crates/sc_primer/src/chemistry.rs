@@ -85,44 +85,44 @@ impl Chemistry {
         match self {
             Self::TenxThreePrimeV1 => Grammar::parse(
                 self.name(),
-                "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:10+POLYT:min=0",
+                "CELL:16+UMI:10+POLYT:min=0",
             ),
 
             Self::TenxThreePrimeV2 => Grammar::parse(
                 self.name(),
-                "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+TENX_CELL:3p-v2+UMI:10+POLYT:min=0",
+                "TENX_CELL:3p-v2+UMI:10+POLYT:min=0",
             ),
 
             Self::TenxThreePrimeV3 => Grammar::parse(
                 self.name(),
-                "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+TENX_CELL:3p-v3+UMI:12+POLYT:min=0",
+                "TENX_CELL:3p-v3+UMI:12+POLYT:min=0",
             ),
 
             Self::TenxThreePrimeV4 => Grammar::parse(
                 self.name(),
-                "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+TENX_CELL:3p-v4+UMI:12+POLYT:min=0",
+                "TENX_CELL:3p-v4+UMI:12+POLYT:min=0",
             ),
 
             Self::TenxFivePrime => Grammar::parse(
                 self.name(),
-                "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+TENX_CELL:5p+UMI:10",
+                "TENX_CELL:5p+UMI:10",
             ),
 
             Self::TenxMultiomeArcV1 => Grammar::parse(
                 self.name(),
-                "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+TENX_CELL:arc-v1+UMI:12",
+                "TENX_CELL:arc-v1+UMI:12",
             ),
 
             Self::BdV1 => Grammar::parse(self.name(), "BD_CELL:v1+POLYT:min=0"),
 
             Self::BdV2_96 => Grammar::parse(
                 self.name(),
-                "FIXED:ATAGGAAACTCATGGT:mm=2+BD_CELL:v2.96+POLYT:min=0",
+                "SEARCH:0..3+BD_CELL:v2.96+POLYT:min=0",
             ),
 
             Self::BdV2_384 => Grammar::parse(
                 self.name(),
-                "FIXED:ATAGGAAACTCATGGT:mm=2+BD_CELL:v2.384+POLYT:min=0",
+                "SEARCH:0..3+BD_CELL:v2.384+POLYT:min=0",
             ),
         }
     }

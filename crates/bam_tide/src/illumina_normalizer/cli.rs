@@ -115,6 +115,10 @@ pub struct Cli {
     )]
     pub read_tags: PathBuf,
 
+    /// Maximum number of raw reads/pairs to process per input.
+    #[arg(long)]
+    pub max_reads: Option<usize>,
+
     #[arg(
         long,
         value_enum,

@@ -32,23 +32,58 @@ impl AnchorSearch {
     }
 
     pub fn identify_cell_start(&self, read: &[u8]) -> Option<usize> {
-        self.identify_all_cell_starts(read).into_iter().next()
+        self.find_next_cell_start(read, 0)
     }
 
-    pub fn identify_all_cell_starts(&self, read: &[u8]) -> Vec<usize> {
-        let mut starts = Vec::new();
-
-        if read.len() < self.anchor.len() {
-            return starts;
+    /// Find the next candidate primer start at or after `from`.
+    ///
+    /// This is intentionally streaming: callers that only need the next
+    /// candidate do not have to allocate a `Vec` containing every anchor hit
+    /// in the read.
+    pub fn find_next_cell_start(&self, read: &[u8], from: usize) -> Option<usize> {
+        if read.len() < self.anchor.len() || from >= read.len() {
+            return None;
         }
 
-        for anchor_start in 0..=read.len() - self.anchor.len() {
+        // primer_start = anchor_start - anchor_offset.  Starting the anchor
+        // scan here guarantees that returned primer starts are >= `from`.
+        // For from == 0 keep the leading, saturating candidates accepted by
+        // the old implementation.
+        let first_anchor = if from == 0 {
+            0
+        } else {
+            from.checked_add(self.anchor_offset)?
+        };
+
+        let last_anchor = read.len().checked_sub(self.anchor.len())?;
+        if first_anchor > last_anchor {
+            return None;
+        }
+
+        for anchor_start in first_anchor..=last_anchor {
             let obs = &read[anchor_start..anchor_start + self.anchor.len()];
 
             if Self::mismatches(obs, &self.anchor) <= self.max_mismatches {
                 let primer_start = anchor_start.saturating_sub(self.anchor_offset);
-                starts.push(primer_start);
+                if primer_start >= from {
+                    return Some(primer_start);
+                }
             }
+        }
+
+        None
+    }
+
+    pub fn identify_all_cell_starts(&self, read: &[u8]) -> Vec<usize> {
+        let mut starts = Vec::new();
+        let mut from = 0usize;
+
+        while let Some(start) = self.find_next_cell_start(read, from) {
+            starts.push(start);
+            let Some(next) = start.checked_add(1) else {
+                break;
+            };
+            from = next;
         }
 
         starts

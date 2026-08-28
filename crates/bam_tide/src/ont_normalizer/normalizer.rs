@@ -1,11 +1,12 @@
 use crate::fastq::{record::FastqRecord, writer::FastqWriter};
 use crate::ngs_normalizer::{
-    NgsNormalizerSupport, NormalizedMolecule, NormalizerPartial, CHUNK_SIZE,
+    NgsNormalizerSupport, NormalizedMolecule, NormalizerPartial, CHUNK_SIZE
 };
 use crate::ont_normalizer::cli::Cli;
-use crate::read_tag_table::ReadTagTable;
+use crate::{AdditionalFeatureSource, FeatureTagCounts};
+use read_tag_table::ReadTagTable;
 
-use fast_tag_mapper::FastTagMapper;
+use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 
 use anyhow::{Context, Result};
 use mapping_info::MappingInfo;
@@ -24,8 +25,12 @@ pub struct OntNormalizerConfig {
     pub read_tags: PathBuf,
     pub min_transcript_len: usize,
 
+    /// Maximum number of raw FASTQ pairs to process from one input pair.
+    pub max_reads: Option<usize>,
+
     pub primer: PrimerDetector,
-    pub feature_tag_mapper: Option<FastTagMapper>,
+    pub additional_features: Vec<AdditionalFeatureSource>,
+    pub additional_feature_min_hits: u32,
 
     pub threads: usize,
     pub gzip_level: u32,
@@ -33,22 +38,29 @@ pub struct OntNormalizerConfig {
 }
 
 impl OntNormalizerConfig {
-    fn process_read(&self, read: &FastqRecord ) -> NormalizerPartial {
+
+
+    fn process_read(&self, read: &FastqRecord, feature_tag_mapper: &FastTagMapper) -> NormalizerPartial {
         let mut out = NormalizerPartial::new();
         out.stats.report("total_records");
+        out.stats.report("reads_processed");
 
         let matches = match self.primer.detect_all(&read.seq, &read.qual) {
             Ok(matches) => matches,
             Err(_) => {
                 out.stats.report("zero_cassette");
                 out.stats.report("no_primer_match");
+                out.stats.report("no_cell_umi");
                 return out;
             }
         };
 
+
+
         match matches.len() {
             0 => {
                 out.stats.report("zero_cassette");
+                out.stats.report("no_cell_umi");
                 return out;
             }
             1 => out.stats.report("one_cassette"),
@@ -102,15 +114,18 @@ impl OntNormalizerConfig {
             let umi_id = IntToStr::new(&umi.seq).into_u64();
 
 
-            if let Some(mapper) = &self.feature_tag_mapper
-                && let Some(id) = mapper.map_feature_id(&insert_record.seq, &mut out.stats)
-            {
-                out.feature_tag_table.try_insert(
+            if let Some(id) = feature_tag_mapper.map_feature_id(&insert_record.seq, &mut out.stats) {
+                if out.feature_tag_table.try_insert(
                     &cell_id,
                     GeneUmiHash(id, umi_id),
                     1.0,
                     &mut out.stats,
-                );
+                ) {
+                    out.stats.report("unique_feature");
+                    out.stats.report("feature_tag_match");
+                } else {
+                    out.stats.report("duplicate");
+                }
 
                 continue;
             }
@@ -125,6 +140,7 @@ impl OntNormalizerConfig {
                 umi_qual: umi.qual.to_vec(),
             });
             out.stats.report("emitted_molecules");
+            out.stats.report("unique_genomic");
         }
 
         out
@@ -135,31 +151,185 @@ pub struct OntNormalizer {
     config: OntNormalizerConfig,
     stats: MappingInfo,
     read_tags: ReadTagTable,
-    feature_tag_table: Scdata,
+    feature_tag_counts: FeatureTagCounts,
 }
 
 impl OntNormalizer {
-    pub fn new(config: OntNormalizerConfig) -> Self {
-        Self {
+    pub fn new(config: OntNormalizerConfig) -> Result<Self> {
+        let feature_tag_counts = FeatureTagCounts::from_sources(
+            &config.additional_features,
+            config.additional_feature_min_hits,
+        )?;
+
+        Ok(Self {
             config,
             stats: NgsNormalizerSupport::new_stats(),
             read_tags: ReadTagTable::new(),
-            feature_tag_table: NgsNormalizerSupport::new_feature_tag_table(),
-        }
+            feature_tag_counts,
+        })
+    }
+
+    
+    pub fn take_feature_tag_counts(&mut self) -> FeatureTagCounts {
+        std::mem::take(&mut self.feature_tag_counts)
     }
 
     pub fn from_cli(cli: Cli) -> Result<Self> {
-        Ok(Self::new(OntNormalizerConfig {
+        let mut additional_features = Vec::new();
+        if let Some(species) = cli.feature_tags.species {
+            additional_features.push(match species {
+                BuiltinTagSet::Human => AdditionalFeatureSource::BdSampleHuman,
+                BuiltinTagSet::Mouse => AdditionalFeatureSource::BdSampleMouse,
+            });
+        }
+        if let Some(path) = cli.feature_tags.tags {
+            additional_features.push(AdditionalFeatureSource::Fasta(path));
+        }
+
+        Self::new(OntNormalizerConfig {
             bam: cli.bam,
             out: cli.out,
             read_tags: cli.read_tags,
             min_transcript_len: cli.min_transcript_len,
+            max_reads: cli.max_reads,
             primer: cli.primer.detector().map_err(anyhow::Error::msg)?,
-            feature_tag_mapper: Some(cli.feature_tags.mapper()?),
+            additional_features,
+            additional_feature_min_hits: cli.feature_tags.min_hits,
             threads: cli.threads,
             gzip_level: cli.gzip_level,
             gzip: !cli.no_gzip,
-        }))
+        })
+    }
+    
+    /// Normalizes input reads and streams mapper-ready FASTQ records to `emit`.
+    ///
+    /// Reads are processed in chunks using the normalizer's existing parallel
+    /// normalization logic. Each accepted molecule is annotated with its
+    /// `ReadTagRecord` metadata in the FASTQ QNAME before being passed to `emit`.
+    ///
+    /// Each callback receives one completed chunk as a borrowed slice of
+    /// `(optional_r1, r2)` records. `r1` is `Some` when normalization produced
+    /// a usable paired read and `None` for single-read output. The batch is
+    /// mapper-ready and can be submitted without another per-read callback.
+    ///
+    /// This function does not write normalized FASTQ files. Instead, each
+    /// normalized molecule is handed directly to the callback, allowing callers
+    /// such as Nelrune to stream the reads into an external mapper.
+    ///
+    /// Returning `Ok(true)` from `emit` continues processing. Returning
+    /// `Ok(false)` stops processing further input without treating this as an
+    /// error.
+    ///
+    /// Normalization statistics, read tags, and feature-tag data are updated in
+    /// the same way as during the normal file-based normalization path.    
+    pub fn nelrune_run<F, P>(
+        &mut self,
+        mut emit: F,
+        mut report_progress: P,
+    ) -> Result<()>
+    where
+        F: FnMut(
+            &[(Option<FastqRecord>, FastqRecord)],
+        ) -> Result<bool>,
+        P: FnMut(&MappingInfo),
+    {
+        NgsNormalizerSupport::configure_rayon_threads(
+            self.config.threads,
+        );
+
+        let mut bam =
+            Reader::from_path(&self.config.bam)
+                .with_context(|| {
+                    format!(
+                        "failed to open BAM: {}",
+                        self.config.bam.display()
+                    )
+                })?;
+
+        if self.config.threads > 1 {
+            bam.set_threads(
+                self.config
+                    .threads
+                    .saturating_sub(1)
+                    .max(1),
+            )
+            .context(
+                "failed to set BAM reader threads"
+            )?;
+        }
+
+        let mut chunk =
+            Vec::<FastqRecord>::with_capacity(
+                CHUNK_SIZE,
+            );
+
+        let mut output =
+            Vec::<(Option<FastqRecord>, FastqRecord)>::new();
+
+        let mut records = bam.records();
+        let mut processed_from_input = 0usize;
+
+        while self
+            .config
+            .max_reads
+            .map_or(true, |max| processed_from_input < max)
+        {
+            let Some(rec_result) = records.next() else {
+                break;
+            };
+
+            let rec = rec_result.context(
+                "failed to read BAM record"
+            )?;
+
+            processed_from_input += 1;
+            chunk.push(
+                FastqRecord::from_bam_record(&rec)
+            );
+
+            if chunk.len() >= CHUNK_SIZE {
+                output.clear();
+
+                self.process_chunk(
+                    &chunk,
+                    &mut output,
+                )?;
+
+                NgsNormalizerSupport::prepare_emit_batch(
+                    &mut output,
+                    &self.read_tags,
+                )?;
+
+                if !output.is_empty() && !emit(&output)? {
+                    return Ok(());
+                }
+
+                report_progress(&self.stats);
+                chunk.clear();
+            }
+        }
+
+        if !chunk.is_empty() {
+            output.clear();
+
+            self.process_chunk(
+                &chunk,
+                &mut output,
+            )?;
+
+            NgsNormalizerSupport::prepare_emit_batch(
+                &mut output,
+                &self.read_tags,
+            )?;
+
+            if !output.is_empty() && !emit(&output)? {
+                return Ok(());
+            }
+
+            report_progress(&self.stats);
+        }
+
+        Ok(())
     }
 
     pub fn stats(&self) -> &MappingInfo {
@@ -170,54 +340,88 @@ impl OntNormalizer {
         &self.config
     }
 
-    pub fn write_feature_tag_table_if_present(&mut self) -> Result<()> {
-        NgsNormalizerSupport::write_feature_tag_table_if_present(
-            &mut self.feature_tag_table,
-            self.config.feature_tag_mapper.as_ref(),
-            &self.config.out,
-        )
+    pub fn collect_fastqs(
+        &mut self,
+    ) -> Result<Vec<(Option<FastqRecord>, FastqRecord)>> {
+        NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
+
+        let mut bam = Reader::from_path(&self.config.bam)
+            .with_context(|| {
+                format!(
+                    "failed to open BAM: {}",
+                    self.config.bam.display()
+                )
+            })?;
+
+        if self.config.threads > 1 {
+            bam.set_threads(
+                self.config.threads.saturating_sub(1).max(1)
+            )
+            .context("failed to set BAM reader threads")?;
+        }
+
+        let mut output:
+            Vec<(Option<FastqRecord>, FastqRecord)> = Vec::new();
+
+        let mut chunk: Vec<FastqRecord> =
+            Vec::with_capacity(CHUNK_SIZE);
+
+        let mut records = bam.records();
+        let mut processed_from_input = 0usize;
+
+        while self
+            .config
+            .max_reads
+            .map_or(true, |max| processed_from_input < max)
+        {
+            let Some(rec_result) = records.next() else {
+                break;
+            };
+
+            let rec = rec_result
+                .context("failed to read BAM record")?;
+
+            processed_from_input += 1;
+            chunk.push(FastqRecord::from_bam_record(&rec));
+
+            if chunk.len() >= CHUNK_SIZE {
+                self.process_chunk(&chunk, &mut output)?;
+                chunk.clear();
+
+                eprintln!(
+                    "processed {} reads; emitted {} molecules; sample-tag reads {}",
+                    self.stats.get_issue_count("total_records"),
+                    self.stats.get_issue_count("emitted_molecules"),
+                    self.stats.get_issue_count("feature_tag_match"),
+                );
+            }
+        }
+
+        if !chunk.is_empty() {
+            self.process_chunk(&chunk, &mut output)?;
+        }
+
+        Ok(output)
     }
 
     pub fn run(&mut self) -> Result<()> {
-        let mut bam = Reader::from_path(&self.config.bam)
-            .with_context(|| format!("failed to open BAM: {}", self.config.bam.display()))?;
-
-        if self.config.threads > 1 {
-            bam.set_threads(self.config.threads.saturating_sub(1).max(1))
-                .context("failed to set BAM reader threads")?;
-        }
+        let fastqs = self.collect_fastqs()?;
 
         let mut fastq = FastqWriter::new(
             &self.config.out,
             self.config.gzip,
             self.config.gzip_level,
         )
-        .with_context(|| format!("failed to create FASTQ: {}", self.config.out.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to create FASTQ: {}",
+                self.config.out.display()
+            )
+        })?;
 
-        let mut chunk: Vec<FastqRecord> = Vec::with_capacity(CHUNK_SIZE);
-
-        for rec_result in bam.records() {
-            let rec = rec_result.context("failed to read BAM record")?;
-            chunk.push(FastqRecord::from_bam_record(&rec));
-
-            if chunk.len() >= CHUNK_SIZE {
-                self.process_chunk(&chunk, &mut fastq )?;
-                chunk.clear();
-
-                eprintln!(
-                    "processed {} read pairs; written {} FASTQ reads; failed {} pairs; sample-tag reads {}",
-                    self.stats.get_issue_count("total_pairs"),
-                    self.stats.get_issue_count("fastq_reads_written"),
-                    self.stats.get_issue_count("failed_pairs"),
-                    self.stats.get_issue_count("feature_tag_match"),
-                );
-
-                chunk.clear();
-            }
-        }
-
-        if !chunk.is_empty() {
-            self.process_chunk(&chunk, &mut fastq )?;
+        for (_, read) in fastqs {
+            fastq.write(&read)?;
+            self.stats.report("fastq_reads_written");
         }
 
         fastq.finish()?;
@@ -231,26 +435,45 @@ impl OntNormalizer {
                 )
             })?;
 
-        self.write_feature_tag_table_if_present()?;
+        let out_root = self.config.out.parent().unwrap_or_else(|| std::path::Path::new("."));
+
+        let cell_barcode_len = self.config.primer.cell_len();
+
+        self.feature_tag_counts.finalize_and_write_all(cell_barcode_len, out_root)?;
 
         Ok(())
     }
 
-    fn process_chunk(&mut self, input: &[FastqRecord], fastq: &mut FastqWriter) -> Result<()> {
+    fn process_chunk(
+        &mut self,
+        input: &[FastqRecord],
+        output: &mut Vec<(Option<FastqRecord>, FastqRecord)>,
+    ) -> Result<()> {
         let config = self.config.clone();
+
+        self.stats.start_counter();
+        self.stats.start_timer("bam_tide/multi_cpu/ont_normalize_chunk");
 
         let partials: Vec<NormalizerPartial> = input
             .par_iter()
-            .map(|read| config.process_read(read ))
+            .map(|read| config.process_read(read, self.feature_tag_counts.mapper()))
             .collect();
 
+        self.stats.stop_timer("bam_tide/multi_cpu/ont_normalize_chunk");
+        self.stats.stop_multi_processor_time();
+
         for partial in partials {
-            partial.merge_into(
+            let fastqs = partial.merge_into(
                 &mut self.stats,
                 &mut self.read_tags,
-                &mut self.feature_tag_table,
-                fastq,
-            )?;
+                self.feature_tag_counts.data_mut(),
+            );
+
+            output.extend(
+                fastqs
+                    .into_iter()
+                    .map(|record| (None, record))
+            );
         }
 
         Ok(())

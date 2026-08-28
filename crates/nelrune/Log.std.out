@@ -1,0 +1,7 @@
+	/usr/lib/rna-star/bin/STAR-avx2 --genomeDir tests/data/star_index --readFilesIn /tmp/qname_test.fastq --outSAMtype SAM --outStd SAM
+	STAR version: 2.7.11b   compiled: 2024-04-14T23:10:25+00:00 <place not set in Debian package>
+Aug 25 13:08:43 ..... started STAR run
+Aug 25 13:08:43 ..... loading genome
+Aug 25 13:08:43 ..... started mapping
+Aug 25 13:08:43 ..... finished mapping
+Aug 25 13:08:43 ..... finished successfully

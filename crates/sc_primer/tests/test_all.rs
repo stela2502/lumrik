@@ -727,3 +727,37 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
         },
     );
 }
+#[test]
+fn bd_v2_384_detect_all_does_not_repeat_search_window_hits() {
+    let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
+    let wl = RhapsodyWhitelist::bd_v2_384();
+
+    let mut seq = Vec::new();
+    let mut qual = Vec::new();
+
+    for index in 0..2u64 {
+        let (c1, c2, c3) = wl
+            .cell_id_to_parts_ids(index + 1)
+            .expect("invalid BD cell id");
+        let cell = wl.create_cell_cassette(c1, c2, c3);
+        let umi = detector.grammar().umi_from_u64(index);
+
+        let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
+        primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
+
+        qual.extend(std::iter::repeat_n(b'I', primer.len()));
+        seq.extend_from_slice(&primer);
+    }
+
+    let hits = detector.detect_all(&seq, &qual).unwrap();
+
+    assert_eq!(hits.len(), 2, "SEARCH shifts must not duplicate a physical primer");
+    assert_eq!(hits[0].bd_cell_id, Some(1));
+    assert_eq!(hits[1].bd_cell_id, Some(2));
+
+    for hit in &hits {
+        assert!(hit.primer_end > hit.primer_start);
+    }
+
+    assert_eq!(hits[0].insert_end, hits[1].primer_start);
+}

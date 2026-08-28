@@ -25,6 +25,27 @@ pub struct FitConfig {
     pub prior_beta: f64,
 }
 
+impl Default for FitConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 500,
+            tolerance: 1e-5,
+
+            posterior_tolerance: 1e-3,
+            stable_iterations_required: 3,
+            minimum_posterior: 0.95,
+
+            initial_prior_real: 0.05,
+            initial_dispersion: 10.0,
+            minimum_true_mean: 0.5,
+            minimum_lambda: 1e-6,
+
+            prior_alpha: 0.5,
+            prior_beta: 9.5,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FitIteration {
     pub iteration: usize,

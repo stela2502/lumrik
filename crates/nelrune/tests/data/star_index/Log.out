@@ -1,0 +1,76 @@
+STAR version=2.7.11b
+STAR compilation time,server,dir=2024-04-14T23:10:25+00:00 <place not set in Debian package>
+##### Command Line:
+/usr/lib/rna-star/bin/STAR-avx2 --runMode genomeGenerate --genomeDir /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index --genomeFastaFiles /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa --sjdbGTFfile /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf --genomeSAindexNbases 2 --sjdbOverhang 59
+##### Initial USER parameters from Command Line:
+###### All USER parameters from Command Line:
+runMode                       genomeGenerate        ~RE-DEFINED
+genomeDir                     /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index     ~RE-DEFINED
+genomeFastaFiles              /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa        ~RE-DEFINED
+sjdbGTFfile                   /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf     ~RE-DEFINED
+genomeSAindexNbases           2     ~RE-DEFINED
+sjdbOverhang                  59     ~RE-DEFINED
+##### Finished reading parameters from all sources
+
+##### Final user re-defined parameters-----------------:
+runMode                           genomeGenerate   
+genomeDir                         /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index
+genomeFastaFiles                  /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa   
+genomeSAindexNbases               2
+sjdbGTFfile                       /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf
+sjdbOverhang                      59
+
+-------------------------------
+##### Final effective command line:
+/usr/lib/rna-star/bin/STAR-avx2   --runMode genomeGenerate      --genomeDir /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index   --genomeFastaFiles /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa      --genomeSAindexNbases 2   --sjdbGTFfile /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf   --sjdbOverhang 59
+----------------------------------------
+
+Number of fastq files for each mate = 1
+ParametersSolo: --soloCellFilterType CellRanger2.2 filtering parameters:  3000 0.99 10
+Finished loading and checking parameters
+--genomeDir directory exists and will be overwritten: /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index/
+Aug 25 13:01:43 ... starting to generate Genome files
+/home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.fa : chr # 0  "chrTiny" chrStart: 0
+Chromosome sequence lengths: 
+chrTiny	400
+Genome sequence total length = 400
+Genome size with padding = 262144
+Aug 25 13:01:43 ..... processing annotations GTF
+Processing pGe.sjdbGTFfile=/home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny.gtf, found:
+		2 transcripts
+		4 exons (non-collapsed)
+		2 collapsed junctions
+Total junctions: 2
+Aug 25 13:01:43 ..... finished GTF processing
+
+Estimated genome size with padding and SJs: total=genome+SJ=119262144 = 262144 + 119000000
+GstrandBit=32
+Number of SA indices: 800
+Aug 25 13:01:43 ... starting to sort Suffix Array. This may take a long time...
+Number of chunks: 1;   chunks size limit: 18599685304 bytes
+Aug 25 13:01:43 ... sorting Suffix Array chunks and saving them to disk...
+Writing 6400 bytes into /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index//SA_0 ; empty space on disk = 157704769536 bytes ... done
+Aug 25 13:01:43 ... loading chunks from disk, packing SA...
+Aug 25 13:01:43 ... finished generating suffix array
+Aug 25 13:01:43 ... generating Suffix Array index
+Aug 25 13:01:43 ... completed Suffix Array index
+Aug 25 13:01:43   Finished preparing junctions
+Aug 25 13:01:43 ..... inserting junctions into the genome indices
+Aug 25 13:01:43   Finished SA search: number of new junctions=1, old junctions=0
+Aug 25 13:01:43   Finished sorting SA indicesL nInd=236
+Genome size with junctions=262263  262144   119
+GstrandBit1=32   GstrandBit=32
+Aug 25 13:01:43   Finished inserting junction indices
+Aug 25 13:01:43   Finished SAi
+Aug 25 13:01:43 ..... finished inserting junctions into genome
+Aug 25 13:01:43 ... writing Genome to disk ...
+Writing 262263 bytes into /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index//Genome ; empty space on disk = 157704753152 bytes ... done
+SA size in bytes: 4277
+Aug 25 13:01:43 ... writing Suffix Array to disk ...
+Writing 4277 bytes into /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index//SA ; empty space on disk = 157704486912 bytes ... done
+Aug 25 13:01:43 ... writing SAindex to disk
+Writing 8 bytes into /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index//SAindex ; empty space on disk = 157704478720 bytes ... done
+Writing 24 bytes into /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index//SAindex ; empty space on disk = 157704478720 bytes ... done
+Writing 91 bytes into /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index//SAindex ; empty space on disk = 157704478720 bytes ... done
+Aug 25 13:01:43 ..... finished successfully
+DONE: Genome generation, EXITING

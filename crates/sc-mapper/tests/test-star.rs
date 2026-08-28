@@ -7,9 +7,9 @@ use bam_tide::fastq::FastqRecord;
 use tempfile::TempDir;
 
 use sc_mapper::core::MapperLaunch;
-use sc_mapper::process::Star;
+use sc_mapper::process::{Star};
 use sc_mapper::traits::ExternalMapper;
-
+use sc_mapper::{MapperKind, StreamingMapperCli};
 
 fn fq(id: &str, seq: &str) -> FastqRecord {
     FastqRecord {
@@ -39,6 +39,76 @@ fn star_available() -> bool {
     }
 }
 
+#[test]
+fn star_from_cli_requires_input_completion_before_header() -> Result<()> {
+    if !star_available() {
+        return Ok(());
+    }
+
+    let (_tmpdir, genome_dir) =
+        prepare_star_reference()?;
+
+    let cli = StreamingMapperCli {
+        mapper: MapperKind::Star,
+        mapper_bin: None,
+        mapper_index: genome_dir,
+        mapper_options: None,
+        mapper_threads: 1,
+        mapper_paired: false,
+        mapper_keep_multimappers: true,
+    };
+
+    let mut mapper =
+        cli.from_cli()
+            .context("starting STAR through from_cli")?;
+
+    let read = fq(
+        "read_001",
+        "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA",
+    );
+
+    mapper.submit(&read, None)?;
+
+    std::thread::sleep(
+        std::time::Duration::from_secs(1),
+    );
+
+    eprintln!(
+        "header before finish: {}",
+        mapper.header_loaded()
+    );
+
+    /*let calls =
+        mapper.finish()
+            .context("finishing STAR")?;
+   
+    eprintln!(
+        "calls after finish: {}",
+        calls.len()
+    );
+    */
+    assert!(
+        mapper.header_loaded(),
+        "STAR still produced no header after input was closed"
+    );
+
+    let header =
+        mapper.header()?.clone();
+
+    let header_text =
+        String::from_utf8(
+            header.to_bytes()
+        )?;
+
+    assert!(
+        header_text.contains("@SQ"),
+        "STAR header contains no @SQ records:\n{header_text}"
+    );
+
+
+    Ok(())
+}
+
 
 fn prepare_star_reference() -> Result<(TempDir, PathBuf)> {
     let tmpdir = tempfile::tempdir()
@@ -62,7 +132,8 @@ fn prepare_star_reference() -> Result<(TempDir, PathBuf)> {
     fs::create_dir(&genome_dir)
         .context("failed to create temporary STAR genome directory")?;
 
-    let status = Command::new("STAR")
+    let output = Command::new("STAR")
+        .current_dir(tmpdir.path())
         .arg("--runMode")
         .arg("genomeGenerate")
         .arg("--runThreadN")
@@ -76,12 +147,15 @@ fn prepare_star_reference() -> Result<(TempDir, PathBuf)> {
         .arg("--genomeSAindexNbases")
         .arg("1")
 
-        .status()
+        .output()
         .context("failed to run STAR genomeGenerate")?;
 
-    if !status.success() {
+    if !output.status.success() {
         bail!(
-            "STAR genomeGenerate failed with status {status}"
+            "STAR genomeGenerate failed with status {}\n\nstdout:\n{}\n\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
         );
     }
 
@@ -115,7 +189,12 @@ fn star_maps_a_real_fastq_record() -> Result<()> {
         paired: false,
     };
 
-    let mapper = Star::from_launch(launch);
+    let mapper = Star::from_launch(launch)?;
+
+    std::thread::sleep(
+        std::time::Duration::from_millis(500),
+    );    
+
 
     mapper.check()?;
 
@@ -160,6 +239,74 @@ fn star_maps_a_real_fastq_record() -> Result<()> {
             .iter()
             .any(|rec| !rec.record.is_unmapped()),
         "read_001 should map to the tiny STAR reference"
+    );
+
+    Ok(())
+}
+
+
+
+#[test]
+fn star_from_cli_maps_after_input_is_closed() -> Result<()> {
+    if !star_available() {
+        return Ok(());
+    }
+
+    let (_tmpdir, genome_dir) =
+        prepare_star_reference()?;
+
+    let cli = StreamingMapperCli {
+        mapper: MapperKind::Star,
+        mapper_bin: None,
+        mapper_index: genome_dir,
+        mapper_options: None,
+        mapper_threads: 1,
+        mapper_paired: false,
+        mapper_keep_multimappers: true,
+    };
+
+    let mut mapper =
+        cli.from_cli()
+            .context(
+                "starting STAR through StreamingMapperCli::from_cli"
+            )?;
+
+    assert!(
+        mapper.is_running()?,
+        "STAR exited immediately after startup"
+    );
+
+    let read = fq(
+        "read_001",
+        "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA",
+    );
+
+    mapper.submit(
+        &read,
+        None,
+    )?;
+
+
+    let calls =
+        mapper.finish()
+            .context(
+                "finishing STAR"
+            )?;
+
+    assert_eq!(
+        calls.len(),
+        1,
+        "expected exactly one STAR MappingCall"
+    );
+
+    assert_eq!(
+        calls[0].read_id,
+        "read_001"
+    );
+
+    assert!(
+        !calls[0].records.records.is_empty(),
+        "STAR returned no SAM records"
     );
 
     Ok(())

@@ -431,3 +431,32 @@ Related projects:
 AGPL-3.0-or-later.
 
 See the repository license for details.
+## Lumrik-native library API
+
+The statistical core no longer depends on 10x files. The standalone CLI is an
+adapter that loads 10x data into `scdata::Scdata` and then calls the same
+library entry point used by the rest of lumrik:
+
+```rust
+use sc_beacon::run_from_scdata;
+
+let (filtered_counts, background_counts) =
+    raw_feature_counts.split_by_cells(&retained_cells);
+
+let mut result = run_from_scdata(
+    &filtered_counts,
+    &background_counts,
+    &retained_cells,
+    cell_barcode_len,
+    &feature_index,
+    &background_config,
+    &fit_config,
+    &call_config,
+)?;
+```
+
+`FeatureIndex` defines the real feature ids and export order. Beacon uses a
+dense model-local slot internally, so feature ids do not need to be contiguous
+or start at zero. `BeaconResult::posteriors` is a native `Scdata` matrix using
+the original cell ids and feature ids; `BeaconResult::write()` exports it under
+`posteriors/` alongside the tabular model results.

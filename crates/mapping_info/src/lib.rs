@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use std::fmt;
 
 /// MappingInfo captures all mapping data and is a way to easily copy this data over multiple analysis runs.
+#[derive(Debug)]
 pub struct MappingInfo{
 	/// reads that did not pass the filters
 	pub quality:usize,
@@ -48,6 +49,11 @@ pub struct MappingInfo{
     pub multi_processor_time: Duration,
     pub file_io_time: Duration,
     pub subprocess_time: Duration,
+    /// Active named timers. Named timers are independent of the legacy relative stopwatch
+    /// and may overlap or nest.
+    named_timer_starts: HashMap<String, SystemTime>,
+    /// Accumulated wall-clock duration for each named timer.
+    pub named_timings: HashMap<String, Duration>,
     pub reads_log: BTreeMap<String, usize >,
     pub error_counts: HashMap<String, usize>,  // To store error types and their counts
     // log should also print (if not likely to tty)
@@ -213,6 +219,20 @@ impl fmt::Display for MappingInfo {
             writeln!(f, "  subprocess  : {}", dur_str(self.subprocess_time))?;
         }
 
+        if !self.named_timings.is_empty() {
+            writeln!(f)?;
+            writeln!(f, "Named timings")?;
+
+            let mut names: Vec<_> = self.named_timings.keys().collect();
+            names.sort();
+
+            for name in names {
+                if let Some(duration) = self.named_timings.get(name) {
+                    writeln!(f, "  {:<32} {}", format!("{name}:"), dur_str(*duration))?;
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -251,6 +271,8 @@ impl MappingInfo{
 			multi_processor_time,
 			file_io_time,
 			subprocess_time,
+			named_timer_starts: HashMap::new(),
+			named_timings: HashMap::new(),
 			reads_log,
 			error_counts: HashMap::new(),  // Initialize the HashMap
 			std_out_is_tty: is(atty::Stream::Stdout) ,
@@ -259,6 +281,53 @@ impl MappingInfo{
 		this.start_counter();
 		this
 	}
+
+
+    /// Start or restart a named wall-clock timer.
+    ///
+    /// Named timers are independent from `start_counter()` and the legacy
+    /// file-I/O / single-CPU / multi-CPU / subprocess buckets. Multiple named
+    /// timers may therefore overlap. Starting an already-running timer resets
+    /// that timer's start point without changing its accumulated duration.
+    pub fn start_timer(&mut self, name: impl Into<String>) {
+        self.named_timer_starts.insert(name.into(), SystemTime::now());
+    }
+
+    /// Stop a named timer and add the elapsed wall-clock time to its accumulator.
+    ///
+    /// Returns the elapsed duration for this timer interval. If the timer was not
+    /// running, returns `None` and leaves the accumulated timing unchanged.
+    pub fn stop_timer(&mut self, name: &str) -> Option<Duration> {
+        let start = self.named_timer_starts.remove(name)?;
+        let elapsed = start.elapsed().unwrap_or(Duration::ZERO);
+        *self
+            .named_timings
+            .entry(name.to_string())
+            .or_insert(Duration::ZERO) += elapsed;
+        Some(elapsed)
+    }
+
+    /// Add an externally measured duration to a named timer.
+    pub fn add_timer_duration(&mut self, name: impl Into<String>, duration: Duration) {
+        *self
+            .named_timings
+            .entry(name.into())
+            .or_insert(Duration::ZERO) += duration;
+    }
+
+    /// Accumulated duration for a named timer. Running time that has not yet been
+    /// stopped is intentionally not included.
+    pub fn timer_duration(&self, name: &str) -> Duration {
+        self.named_timings
+            .get(name)
+            .copied()
+            .unwrap_or(Duration::ZERO)
+    }
+
+    /// Whether a named timer currently has an active interval.
+    pub fn timer_is_running(&self, name: &str) -> bool {
+        self.named_timer_starts.contains_key(name)
+    }
 
 	pub fn iterate_hist( &mut self, id: usize) {
 		if id < self.hist.len(){
@@ -323,7 +392,11 @@ impl MappingInfo{
     
     // Optionally, add a method to retrieve counts for a specific issue
     pub fn get_issue_count(&self, issue: &str) -> usize {
-        *self.error_counts.get(issue).unwrap_or(&0)  // Return count or 0 if not present
+        self.reads_log
+            .get(issue)
+            .or_else(|| self.error_counts.get(issue))
+            .copied()
+            .unwrap_or(0)
     }
 
     // Method to export error_counts to a CSV file
@@ -408,6 +481,12 @@ impl MappingInfo{
         for (a, b) in self.hist.iter_mut().zip(&other.hist) {
 		    *a += *b;
 		}
+        for (name, duration) in &other.named_timings {
+            *self
+                .named_timings
+                .entry(name.clone())
+                .or_insert(Duration::ZERO) += *duration;
+        }
 	}
 
 
@@ -635,4 +714,54 @@ mod tests {
         let s1 = format!("{m1}");
         assert!(s1.contains("\nCounts\n"));
     }
+
+    #[test]
+    fn named_timers_accumulate_and_are_independent() {
+        let mut mi = MappingInfo::new(None, 0.0, 0);
+
+        mi.start_timer("read_fastq");
+        std::thread::sleep(Duration::from_millis(2));
+        let first = mi.stop_timer("read_fastq").expect("timer should be running");
+        assert!(first >= Duration::from_millis(1));
+
+        mi.start_timer("read_fastq");
+        mi.start_timer("collect_features");
+        std::thread::sleep(Duration::from_millis(2));
+        mi.stop_timer("collect_features").unwrap();
+        mi.stop_timer("read_fastq").unwrap();
+
+        assert!(mi.timer_duration("read_fastq") >= first);
+        assert!(mi.timer_duration("collect_features") >= Duration::from_millis(1));
+        assert!(!mi.timer_is_running("read_fastq"));
+    }
+
+    #[test]
+    fn merge_accumulates_named_timings() {
+        let mut left = MappingInfo::new(None, 0.0, 0);
+        let mut right = MappingInfo::new(None, 0.0, 0);
+
+        left.add_timer_duration("read_fastq", Duration::from_millis(10));
+        right.add_timer_duration("read_fastq", Duration::from_millis(15));
+        right.add_timer_duration("bam_collect", Duration::from_millis(7));
+
+        left.merge(&right);
+
+        assert_eq!(left.timer_duration("read_fastq"), Duration::from_millis(25));
+        assert_eq!(left.timer_duration("bam_collect"), Duration::from_millis(7));
+    }
+
+    #[test]
+    fn display_prints_named_timings_in_stable_order() {
+        let mut mi = MappingInfo::new(None, 0.0, 0);
+        mi.add_timer_duration("write_star", Duration::from_millis(3));
+        mi.add_timer_duration("read_fastq", Duration::from_millis(5));
+
+        let rendered = format!("{mi}");
+        assert!(rendered.contains("Named timings"));
+
+        let read = rendered.find("read_fastq:").unwrap();
+        let write = rendered.find("write_star:").unwrap();
+        assert!(read < write);
+    }
+
 }

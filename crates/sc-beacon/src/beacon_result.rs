@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use scdata::FeatureIndex;
+use scdata::{FeatureIndex, Scdata};
 
 use crate::{
     AmbientModel,
@@ -20,11 +21,13 @@ pub struct BeaconResult {
     pub calls: GuideCalls,
     pub assignments: CellGuideAssignments,
     pub multi_gap_stats: Vec<MultiGuideGapStats>,
+    /// Posterior probability matrix using the same cell and feature ids as the input Scdata.
+    pub posteriors: Scdata,
 }
 
 impl BeaconResult {
     pub fn write<P, I>(
-        &self,
+        &mut self,
         out: P,
         feature_index: &I,
         call_tag_len: usize,
@@ -108,6 +111,27 @@ impl BeaconResult {
             .context(
                 "writing Beacon multi-feature statistics",
             )?;
+
+        /*
+         * ------------------------------------------------------------
+         * Native posterior matrix
+         * ------------------------------------------------------------
+         */
+        let cells: HashSet<u64> = self
+            .assignments
+            .rows
+            .iter()
+            .map(|row| row.cell_id)
+            .collect();
+
+        self.posteriors
+            .finalize_for_cells(&cells, feature_index);
+
+        let posterior_out = out.join("posteriors");
+        self.posteriors
+            .write_sparse(&posterior_out, feature_index)
+            .map_err(anyhow::Error::msg)
+            .context("writing Beacon posterior matrix")?;
 
         /*
          * ------------------------------------------------------------

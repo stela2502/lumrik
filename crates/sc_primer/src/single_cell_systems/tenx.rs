@@ -7,7 +7,6 @@ use flate2::read::GzDecoder;
 use crate::error::{PrimerError, PrimerResult};
 use crate::single_cell_systems::models::Range;
 use crate::single_cell_systems::CellIdGenerator;
-use onehot_dna::{OneHot, OneHotSet};
 
 static TENX_3M_FEBRUARY_2018: &[u8] =
     include_bytes!("whitelists/3M-february-2018.txt.gz");
@@ -62,9 +61,8 @@ pub struct TenxCellCall {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenxWhitelist {
     version: TenxVersion,
-    cells: Vec<Vec<u8>>,
-    exact: HashMap<Vec<u8>, u64>,
-    fuzzy: OneHotSet<16>,
+    cells: Vec<u32>,
+    exact: HashMap<u32, u64>,
 }
 
 impl TenxVersion {
@@ -165,37 +163,73 @@ impl TenxWhitelist {
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
-            .map(|line| line.as_bytes().to_vec())
-            .collect::<Vec<_>>();
-
-        Self::new(version, cells)
-    }
-
-    pub fn new(version: TenxVersion, cells: Vec<Vec<u8>>) -> Self {
-        let exact = cells
-            .iter()
-            .enumerate()
-            .map(|(idx, seq)| (seq.clone(), idx as u64))
-            .collect();
-
-        let refs = cells
-            .iter()
-            .map(|v| {
-                <&[u8; 16]>::try_from(v.as_slice())
-                    .expect("10x whitelist cell must be 16 bp")
+            .map(|line| {
+                Self::encode_cell(line.as_bytes())
+                    .expect("10x whitelist cell must be a 16 bp A/C/G/T sequence")
             })
             .collect::<Vec<_>>();
 
-        let fuzzy =
-            OneHotSet::<16>::from_sequences(&refs)
-                .expect("10x whitelist must encode");
+        Self::from_encoded(version, cells)
+    }
 
-        Self {
-            version,
-            cells,
-            exact,
-            fuzzy,
+    pub fn new(version: TenxVersion, cells: Vec<Vec<u8>>) -> Self {
+        let cells = cells
+            .into_iter()
+            .map(|seq| {
+                Self::encode_cell(&seq)
+                    .expect("10x whitelist cell must be a 16 bp A/C/G/T sequence")
+            })
+            .collect();
+
+        Self::from_encoded(version, cells)
+    }
+
+    fn from_encoded(version: TenxVersion, cells: Vec<u32>) -> Self {
+        let exact = cells
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, seq)| (seq, idx as u64))
+            .collect();
+
+        Self { version, cells, exact }
+    }
+
+    #[inline]
+    fn encode_cell(seq: &[u8]) -> Option<u32> {
+        if seq.len() != 16 {
+            return None;
         }
+
+        let mut encoded = 0u32;
+        for &base in seq {
+            let bits = match base {
+                b'A' | b'a' => 0u32,
+                b'C' | b'c' => 1u32,
+                b'G' | b'g' => 2u32,
+                b'T' | b't' => 3u32,
+                _ => return None,
+            };
+            encoded = (encoded << 2) | bits;
+        }
+
+        Some(encoded)
+    }
+
+    #[inline]
+    fn decode_cell(mut encoded: u32) -> Vec<u8> {
+        let mut seq = vec![b'A'; 16];
+        for base in seq.iter_mut().rev() {
+            *base = match encoded & 0b11 {
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                3 => b'T',
+                _ => unreachable!(),
+            };
+            encoded >>= 2;
+        }
+        seq
     }
 
     pub fn version(&self) -> TenxVersion {
@@ -211,14 +245,34 @@ impl TenxWhitelist {
     }
 
     pub fn index_cell(&self, seq: &[u8]) -> Option<u64> {
-        if let Some(idx) = self.exact.get(seq) {
-            return Some(*idx);
+        let encoded = Self::encode_cell(seq)?;
+
+        if let Some(&idx) = self.exact.get(&encoded) {
+            return Some(idx);
         }
 
-        let obs = OneHot::<16>::from_bytes(seq).ok()?;
-        let (idx, _dist) = self.fuzzy.best_match(&obs, 1)?;
+        // A 16 bp barcode has only 16 * 3 = 48 Hamming-distance-1
+        // neighbours. Probe those directly against the already-built exact map
+        // instead of constructing a second fuzzy index over the whole whitelist.
+        let mut best = None;
+        for pos in 0..16 {
+            let shift = 2 * pos;
+            let mask = 0b11u32 << shift;
+            let observed = (encoded & mask) >> shift;
 
-        Some(idx as u64)
+            for replacement in 0..4u32 {
+                if replacement == observed {
+                    continue;
+                }
+
+                let candidate = (encoded & !mask) | (replacement << shift);
+                if let Some(&idx) = self.exact.get(&candidate) {
+                    best = Some(best.map_or(idx, |current: u64| current.min(idx)));
+                }
+            }
+        }
+
+        best
     }
 
     pub fn cell_id_to_seq(&self, cell_id: u64) -> Option<Vec<u8>> {
@@ -227,7 +281,7 @@ impl TenxWhitelist {
         }
 
         let idx = (cell_id - 1) as usize;
-        self.cells.get(idx).cloned()
+        self.cells.get(idx).copied().map(Self::decode_cell)
     }
 
     pub fn coords(&self, base: usize) -> Option<TenxCoords> {
@@ -259,7 +313,7 @@ impl TenxWhitelist {
         Some(TenxCellCall {
             version: self.version,
             cell_id,
-            cell_seq: self.cells.get(cell_idx as usize)?.clone(),
+            cell_seq: Self::decode_cell(*self.cells.get(cell_idx as usize)?),
             cell_qual: qual[cell.0..cell.1].to_vec(),
             umi_seq: seq[umi.0..umi.1].to_vec(),
             umi_qual: qual[umi.0..umi.1].to_vec(),
@@ -272,11 +326,15 @@ impl TenxWhitelist {
 
 impl CellIdGenerator for TenxWhitelist {
     fn cell_seq_for_index(&self, allocation_index: u64) -> Option<Vec<u8>> {
-        self.cells.get(allocation_index as usize).cloned()
+        self.cells
+            .get(allocation_index as usize)
+            .copied()
+            .map(Self::decode_cell)
     }
 
     fn cell_index_for_seq(&self, cell_seq: &[u8]) -> Option<u64> {
-        self.exact.get(cell_seq).copied()
+        Self::encode_cell(cell_seq)
+            .and_then(|encoded| self.exact.get(&encoded).copied())
     }
 }
 
@@ -309,6 +367,24 @@ mod tests {
         assert_eq!(call.cell_seq, b"AAACCCAAGAAACACT".to_vec());
         assert_eq!(call.umi_seq, b"ACGTACGTACGT".to_vec());
         assert_eq!(call.consumed, 28);
+    }
+
+    #[test]
+    fn tenx_one_mismatch_uses_same_exact_map() {
+        let wl = TenxWhitelist::from_text(
+            TenxVersion::ThreePrimeV3,
+            "AAACCCAAGAAACACT\nAAACCCAAGAAACCAT\n",
+        );
+
+        // One mismatch from the first whitelist barcode.
+        assert_eq!(wl.index_cell(b"TAACCCAAGAAACACT"), Some(0));
+    }
+
+    #[test]
+    fn tenx_binary_encoding_roundtrips() {
+        let seq = b"ACGTACGTACGTACGT";
+        let encoded = TenxWhitelist::encode_cell(seq).unwrap();
+        assert_eq!(TenxWhitelist::decode_cell(encoded), seq);
     }
 
     #[test]

@@ -3,17 +3,12 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use scdata::{load_10x_feature_matrix, read_10x_cell_ids, TenxFeatureIndex};
 
-use sc_beacon::background::AmbientModel;
-use sc_beacon::caller::GuideCalls;
-use sc_beacon::cli::GuideModelCli;
-use sc_beacon::model::fit_mixture;
-use sc_beacon::tenx::TenxGuideInput;
-use sc_beacon::{
-    CellGuideAssignments,
-    MultiGuideGapStats,
-    MultiGuideGapStatsTable,
-};
+mod cli;
+
+use cli::GuideModelCli;
+use sc_beacon::run_from_scdata;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -38,8 +33,6 @@ struct Cli {
     feature_type: String,
 
     /// Number of worker threads.
-    ///
-    /// If omitted, Rayon uses the available CPU count.
     #[arg(long)]
     threads: Option<usize>,
 
@@ -53,11 +46,6 @@ fn main() -> Result<()> {
     fs::create_dir_all(&cli.out)
         .with_context(|| format!("creating {}", cli.out.display()))?;
 
-    /*
-     * ------------------------------------------------------------
-     * Threads
-     * ------------------------------------------------------------
-     */
     if let Some(threads) = cli.threads {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads.max(1))
@@ -65,220 +53,34 @@ fn main() -> Result<()> {
             .context("failed to initialize Rayon thread pool")?;
     }
 
-    let threads = cli
-        .threads
-        .unwrap_or_else(rayon::current_num_threads);
+    let threads = cli.threads.unwrap_or_else(rayon::current_num_threads);
 
-    /*
-     * ------------------------------------------------------------
-     * Input
-     * ------------------------------------------------------------
-     */
-    let mut input = TenxGuideInput::new(
-        cli.raw,
-        cli.filtered,
-    );
+    let (raw, raw_index, cell_barcode_len) =
+        load_10x_feature_matrix(&cli.raw, &cli.feature_type, threads)?;
+    let filtered_index = TenxFeatureIndex::from_dir(&cli.filtered, &cli.feature_type)?;
+    raw_index.validate_compatible(&filtered_index)?;
+    let filtered_cells = read_10x_cell_ids(&cli.filtered)?;
 
-    input.feature_type = cli.feature_type;
-    input.threads = threads;
-
-    let (raw_index, filtered_index) =
-        input.indexes()?;
-
+    eprintln!("Found {} guide features.", raw_index.features().len());
     eprintln!(
-        "Found {} guide features.",
-        raw_index.guides().len()
+        "Running Beacon on {} retained cells using raw droplets for ambient estimation...",
+        filtered_cells.len(),
     );
 
-    /*
-     * ------------------------------------------------------------
-     * Ambient model
-     * ------------------------------------------------------------
-     */
-    eprintln!(
-        "Loading raw-only droplets..."
-    );
+    let (filtered_counts, background_counts) = raw.split_by_cells(&filtered_cells);
 
-    let background_data =
-        input.load_background(&raw_index)?;
-
-    let ambient = AmbientModel::fit(
-        &background_data,
-        &cli.model.background_config(),
-    )?;
-
-    eprintln!(
-        "Ambient model fitted from {} raw-only droplets / {} guide UMIs.",
-        ambient.background_droplets,
-        ambient.total_umis,
-    );
-
-    ambient.write_table(
-        &cli.out,
+    let mut result = run_from_scdata(
+        &filtered_counts,
+        &background_counts,
+        &filtered_cells,
+        cell_barcode_len,
         &raw_index,
-    )?;
-
-    /*
-     * ------------------------------------------------------------
-     * Filtered cells
-     * ------------------------------------------------------------
-     */
-    eprintln!(
-        "Loading filtered guide counts..."
-    );
-
-    let filtered =
-        input.load_filtered(&filtered_index)?;
-
-    eprintln!(
-        "Loaded {} filtered cells.",
-        filtered.n_cells()
-    );
-
-    /*
-     * ------------------------------------------------------------
-     * Mixture model
-     * ------------------------------------------------------------
-     */
-    eprintln!(
-        "Fitting ambient + true-guide mixture model..."
-    );
-
-    let fitted = fit_mixture(
-        &filtered,
-        &ambient,
+        &cli.model.background_config(),
         &cli.model.fit_config(),
-    )?;
-
-    if fitted.mathematical_converged {
-        eprintln!(
-            "Model converged after {} iterations.",
-            fitted.iterations
-        );
-    } else {
-        eprintln!(
-            "WARNING: model reached {} iterations without mathematical convergence.",
-            fitted.iterations
-        );
-    }
-
-    fitted.write_table(
-        &cli.out,
-        &filtered_index,
-    )?;
-
-    /*
-     * ------------------------------------------------------------
-     * Calls
-     * ------------------------------------------------------------
-     */
-    let calls = GuideCalls::from_model(
-        &fitted,
         &cli.model.call_config(),
-    );
-
-    calls.write_table(
-        &cli.out,
-        &filtered_index,
-        21,
     )?;
 
-    /*
-     * ------------------------------------------------------------
-     * Cell-level annotation
-     * ------------------------------------------------------------
-     */
-    let assignments = CellGuideAssignments::new(
-        &filtered_index,
-        &filtered,
-        &calls,
-    );
-
-    assignments.write_table(
-        &cli.out,
-    )?;
-
-    /*
-     * ------------------------------------------------------------
-     * Multi-guide QC
-     * ------------------------------------------------------------
-     */
-    let multi_gap_stats =
-        MultiGuideGapStats::collect(
-            &assignments,
-        );
-
-    println!();
-
-
-
-    let main_log =
-    multi_gap_stats.print_assignment_summary(
-        &assignments,
-    );
-
-    let guide_summary =
-        multi_gap_stats.primary_guide_counts(
-            &assignments,
-            100.0,
-        );
-
-    let run_log = format!(
-        "{}\n{}",
-        main_log,
-        guide_summary,
-    );
-
-    
-    /*
-     * Human-readable stdout.
-     */
-    println!("{run_log}");
-
-    /*
-     * Human-readable run log.
-     */
-    std::fs::write(
-        cli.out.join("sc_beacon.log"),
-        &run_log,
-    )
-    .with_context(|| {
-        format!(
-            "writing {}",
-            cli.out
-                .join("sc_beacon.log")
-                .display()
-        )
-    })?;
-
-    /*
-     * Detailed machine-readable statistics.
-     */
-    multi_gap_stats.write_table(
-        &cli.out,
-    )?;
-    
-
-
-    /*
-     * ------------------------------------------------------------
-     * Final summary
-     * ------------------------------------------------------------
-     */
-    let n_called =
-        calls
-            .flat
-            .iter()
-            .filter(|call| call.called)
-            .count();
-
-    eprintln!(
-        "Done: {} observed cell-guide pairs, {} called genuine.",
-        calls.flat.len(),
-        n_called
-    );
+    result.write(&cli.out, &raw_index, cell_barcode_len)?;
 
     Ok(())
 }
-
-

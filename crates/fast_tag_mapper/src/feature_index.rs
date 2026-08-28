@@ -36,6 +36,7 @@ impl<'a> FastTagFeatureIndex<'a> {
             .get(&feature_id)
             .and_then(|idx| self.mapper.feature(*idx))
     }
+    
 }
 
 impl FeatureIndex for FastTagFeatureIndex<'_> {
@@ -60,4 +61,6 @@ impl FeatureIndex for FastTagFeatureIndex<'_> {
 
         format!("{}	{}	{}", feature.name, feature.name, feature.feature_type)
     }
+
+
 }

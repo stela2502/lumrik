@@ -19,7 +19,7 @@ cassettes:
 
 Each detected molecule is written as one FASTQ record:
 
-    original_read_name/mol<N>
+    original_read_name_mol<N>
 
 The output sequence is normalized to the expected molecule orientation. Reads
 without a valid cassette are not emitted, but they are counted in the final
@@ -77,6 +77,10 @@ pub struct Cli {
         help = "Number of HTSlib threads used for BAM reading/decompression."
     )]
     pub threads: usize,
+
+    /// Maximum number of raw reads/pairs to process per input.
+    #[arg(long)]
+    pub max_reads: Option<usize>,
 
     #[arg(
         long,

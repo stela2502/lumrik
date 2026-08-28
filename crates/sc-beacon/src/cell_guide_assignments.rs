@@ -112,10 +112,10 @@ impl CellGuideAssignments {
             .map(|call| ((call.cell_id, call.guide_id), call))
             .collect();
 
-        let guide_names: Vec<String> = index
-            .ordered_feature_ids()
-            .into_iter()
-            .map(|id| index.feature_name(id).to_owned() )
+        let guide_names: Vec<String> = data
+            .feature_ids
+            .iter()
+            .map(|id| index.feature_name(*id).to_owned())
             .collect();
 
         let rows = data
@@ -213,11 +213,7 @@ impl CellGuideAssignments {
         data: &GuideDataset,
         call_lookup: &HashMap<(u64, u32), &GuideCall>,
     ) -> CellGuideAssignment {
-        let barcode = data
-            .barcode_by_id
-            .get(&cell_id)
-            .cloned()
-            .unwrap_or_else(|| "UNKNOWN".to_string());
+        let barcode = data.barcode(cell_id);
 
         let guides: Vec<GuideEvidence> = guide_names
             .iter()

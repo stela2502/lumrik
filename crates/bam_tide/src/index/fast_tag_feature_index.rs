@@ -36,6 +36,63 @@ impl<'a> FastTagFeatureIndex<'a> {
             .get(&feature_id)
             .and_then(|idx| self.mapper.feature(*idx))
     }
+
+        pub fn split_by_feature_type(
+        &self,
+    ) -> HashMap<String, FastTagFeatureIndex<'a>> {
+        let mut groups: HashMap<
+            String,
+            (
+                HashMap<String, u64>,
+                HashMap<u64, usize>,
+                Vec<u64>,
+            ),
+        > = HashMap::new();
+
+        for (feature_index, feature) in
+            self.mapper.features().iter().enumerate()
+        {
+            let group = groups
+                .entry(feature.feature_type.clone())
+                .or_default();
+
+            group.0.insert(
+                feature.name.clone(),
+                feature.id,
+            );
+
+            group.1.insert(
+                feature.id,
+                feature_index,
+            );
+
+            group.2.push(feature.id);
+        }
+
+        groups
+            .into_iter()
+            .map(
+                |(
+                    feature_type,
+                    (
+                        name_to_id,
+                        id_to_feature_index,
+                        ordered_ids,
+                    ),
+                )| {
+                    (
+                        feature_type,
+                        FastTagFeatureIndex {
+                            mapper: self.mapper,
+                            name_to_id,
+                            id_to_feature_index,
+                            ordered_ids,
+                        },
+                    )
+                },
+            )
+            .collect()
+        }
 }
 
 impl FeatureIndex for FastTagFeatureIndex<'_> {

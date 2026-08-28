@@ -33,7 +33,7 @@ sc_primer = { path = "../sc_primer" }
 scdata = { path = "../scdata" }
 snp-index = { path = "../snp-index" }
 int-to-str = { path = "../int_to_str" }
-
+sc-beacon = { path = "../sc-beacon" }
 
 [features]
 manual-tests = []

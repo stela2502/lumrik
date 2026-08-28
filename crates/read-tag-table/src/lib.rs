@@ -86,6 +86,7 @@ impl ReadTagTableCli {
         ReadTagTable::from_path_or_config(&config)
     }
 
+
     fn config_for_path(&self, path: PathBuf) -> ReadTagTableConfig {
         ReadTagTableConfig {
             path,
@@ -137,6 +138,76 @@ impl ReadTagRecord {
             umi_seq: umi_seq.as_ref().to_vec(),
             umi_qual: umi_qual.as_ref().to_vec(),
         }
+    }
+
+    /// Appends this record's cell/UMI metadata to an existing FASTQ/SAM QNAME.
+    ///
+    /// The metadata is hex encoded as:
+    ///
+    /// `|cell_seq|cell_qual|umi_seq|umi_qual|`
+    ///
+    /// The returned QNAME is whitespace-free and can safely pass through
+    /// an external mapper.
+    pub fn extend_qname(&self, qname: &str) -> String {
+        format!(
+            "{}|{}|{}|{}|{}|",
+            qname,
+            hex_encode(&self.cell_seq),
+            hex_encode(&self.cell_qual),
+            hex_encode(&self.umi_seq),
+            hex_encode(&self.umi_qual),
+        )
+    }
+
+    pub fn extend_fastq_qnames(&self, q1: &str, q2: &str) -> (String, String) {
+        ( self.extend_qname( q1 ), self.extend_qname( q2 ) )
+    }
+
+    /// Reconstructs a `ReadTagRecord` from a QNAME previously produced by
+    /// `extend_qname()`.
+    ///
+    /// The part before the first `|` becomes the normalized `read_id`.
+    pub fn from_qname(qname: &str) -> anyhow::Result<Self> {
+        let mut fields = qname.split('|');
+
+        let read_id = fields
+            .next()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("QNAME contains an empty read ID: '{qname}'"))?;
+
+        let cell_seq = fields
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("QNAME is missing cell sequence: '{qname}'"))?;
+
+        let cell_qual = fields
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("QNAME is missing cell quality: '{qname}'"))?;
+
+        let umi_seq = fields
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("QNAME is missing UMI sequence: '{qname}'"))?;
+
+        let umi_qual = fields
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("QNAME is missing UMI quality: '{qname}'"))?;
+
+        // extend_qname() terminates the extension with '|', therefore exactly
+        // one empty field must remain.
+        match (fields.next(), fields.next()) {
+            (Some(""), None) => {}
+            _ => anyhow::bail!(
+                "QNAME contains malformed ReadTagRecord metadata: '{qname}'"
+            ),
+        }
+
+        Ok(Self {
+            read_id: read_id.to_string(),
+            original_read_id: None,
+            cell_seq: hex_decode(cell_seq)?,
+            cell_qual: hex_decode(cell_qual)?,
+            umi_seq: hex_decode(umi_seq)?,
+            umi_qual: hex_decode(umi_qual)?,
+        })
     }
 
     pub fn from_slices(
@@ -192,6 +263,34 @@ impl ReadTagRecord {
     }
 }
 
+fn hex_encode(data: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut out = String::with_capacity(data.len() * 2);
+
+    for &byte in data {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    out
+}
+
+fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        anyhow::bail!("invalid hex string with odd length");
+    }
+
+    let mut out = Vec::with_capacity(s.len() / 2);
+
+    for pair in s.as_bytes().chunks_exact(2) {
+        let hex = std::str::from_utf8(pair)?;
+        out.push(u8::from_str_radix(hex, 16)?);
+    }
+
+    Ok(out)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReadTagTable {
     records: HashMap<String, ReadTagRecord>,
@@ -210,6 +309,13 @@ impl ReadTagTable {
         } else {
             Self::from_config(config)
         }
+    }
+
+    pub fn remove(
+        &mut self,
+        read_id: &str,
+    ) -> Option<ReadTagRecord> {
+        self.records.remove(read_id)
     }
 
     pub fn from_config(config: &ReadTagTableConfig) -> Result<Self> {
@@ -994,5 +1100,118 @@ mod tests {
 
         assert!(text.starts_with(&READ_TAG_TABLE_COLUMNS.join("\t")));
         assert!(text.contains("read1\torig1\t\tCELL1\tIIII\tUMI1\tJJJJ\tok"));
+    }
+
+
+        #[test]
+    fn qname_round_trip_preserves_read_tag_record() {
+        let record = ReadTagRecord {
+            read_id: "read123_mol0".to_string(),
+            original_read_id: None,
+            cell_seq: b"ACGTACGT".to_vec(),
+            cell_qual: b"IIIIIIII".to_vec(),
+            umi_seq: b"TGCATG".to_vec(),
+            umi_qual: b"JJJJJJ".to_vec(),
+        };
+
+        let qname =
+            record.extend_qname(&record.read_id);
+
+        let restored =
+            ReadTagRecord::from_qname(&qname)
+                .unwrap();
+
+        assert_eq!(
+            restored.read_id,
+            record.read_id
+        );
+
+        assert_eq!(
+            restored.cell_seq,
+            record.cell_seq
+        );
+
+        assert_eq!(
+            restored.cell_qual,
+            record.cell_qual
+        );
+
+        assert_eq!(
+            restored.umi_seq,
+            record.umi_seq
+        );
+
+        assert_eq!(
+            restored.umi_qual,
+            record.umi_qual
+        );
+
+        assert_eq!(
+            restored.original_read_id,
+            None
+        );
+    }
+
+    #[test]
+    fn qname_encoding_is_whitespace_free() {
+        let record = ReadTagRecord {
+            read_id: "read1".to_string(),
+            original_read_id: None,
+            cell_seq: b"ACGT".to_vec(),
+            cell_qual: b"I|I|".to_vec(),
+            umi_seq: b"TGCA".to_vec(),
+            umi_qual: b"|JJ|".to_vec(),
+        };
+
+        let qname =
+            record.extend_qname(&record.read_id);
+
+        assert!(
+            !qname.chars().any(char::is_whitespace)
+        );
+
+        let restored =
+            ReadTagRecord::from_qname(&qname)
+                .unwrap();
+
+        assert_eq!(
+            restored.cell_qual,
+            record.cell_qual
+        );
+
+        assert_eq!(
+            restored.umi_qual,
+            record.umi_qual
+        );
+    }
+
+    #[test]
+    fn from_qname_rejects_missing_metadata() {
+        let result =
+            ReadTagRecord::from_qname(
+                "read123"
+            );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_qname_rejects_truncated_metadata() {
+        let result =
+            ReadTagRecord::from_qname(
+                "read123|41434754|49494949|"
+            );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_qname_rejects_invalid_hex() {
+        let result =
+            ReadTagRecord::from_qname(
+                "read123|XX|4949|5447|4a4a|"
+            );
+
+        assert!(result.is_err());
     }
 }

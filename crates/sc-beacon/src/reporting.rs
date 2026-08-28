@@ -28,7 +28,7 @@ impl AmbientModel {
         )?;
 
         for guide_id in 0..self.guide_umis.len() {
-            let feature_id = guide_id as u64;
+            let feature_id = self.feature_ids[guide_id];
 
             writeln!(
                 writer,
@@ -123,7 +123,7 @@ impl FittedModel {
             self.guides.iter().enumerate()
         {
             let feature_id =
-                guide_id as u64;
+                self.ambient.feature_ids[guide_id];
 
             writeln!(
                 writer,
@@ -235,7 +235,7 @@ impl GuideCalls {
 
         for call in &self.flat {
             let feature_id =
-                call.guide_id as u64;
+                call.feature_id;
 
             let barcode =
             IntToStr::from_u64(call.cell_id)

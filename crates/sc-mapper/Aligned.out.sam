@@ -1,0 +1,5 @@
+@HD	VN:1.4
+@SQ	SN:chrTest	LN:72
+@PG	ID:STAR	PN:STAR	VN:2.7.11b	CL:/usr/lib/rna-star/bin/STAR-avx2   --genomeDir /tmp/.tmp8Xau8D/star-index   --readFilesIn /tmp/.tmprB0gI4/r1.fq   
+@CO	user command line: /usr/lib/rna-star/bin/STAR-avx2 --genomeDir /tmp/.tmp8Xau8D/star-index --readFilesIn /tmp/.tmprB0gI4/r1.fq
+read_001	0	chrTest	21	255	32M	*	0	0	ACGTTGCAACGTTGCAACGTTGCAACGTTGCA	jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj	NH:i:1	HI:i:1	AS:i:31	nM:i:0

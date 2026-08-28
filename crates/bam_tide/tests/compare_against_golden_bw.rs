@@ -8,13 +8,13 @@ use std::process::Command;
 use bigtools::BigWigRead;
 
 fn exe_path(name: &str) -> PathBuf {
-    let base = if cfg!(debug_assertions) {
-        PathBuf::from("./target/debug")
-    } else {
-        PathBuf::from("./target/release")
-    };
-    base.join(name)
+    match name {
+        "bam-coverage" => PathBuf::from(env!("CARGO_BIN_EXE_bam-coverage")),
+        "bw-compare" => PathBuf::from(env!("CARGO_BIN_EXE_bw-compare")),
+        _ => panic!("unsupported test binary: {name}"),
+    }
 }
+
 
 fn run_ok(cmd: &mut Command) -> Result<(), String> {
     let out = cmd

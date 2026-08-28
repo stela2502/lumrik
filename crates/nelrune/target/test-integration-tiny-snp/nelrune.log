@@ -1,0 +1,84 @@
+[+     0.000s] Nelrune started
+[+     0.000s] stage: health server disabled
+[+     0.000s] stage: loading chemistry
+[+     0.000s] stage: starting mapper
+[+     0.013s] stage: normalizing reads
+[+     0.014s] stage: normalizing /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1_snp.fastq
+[+     0.014s] input: /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1_snp.fastq
+[+     0.015s]            4 reads |        274 reads/s | no cell/UMI          0 | duplicate          0 | genomic          4 | feature          0
+[+     0.015s] Illumina normalization: /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1_snp.fastq
+-----------------------------------------------------------------------------------------------------
+MappingInfo
+  started: 2026-08-27 10:06:20.910471361 UTC
+
+Read types (n=32)
+  Type                             Count           Fraction total [%]
+  -------------------------------------------------------------------
+  accepted_pairs:                  4               12.50
+  bd_fast_mapper_no_hit:           4               12.50
+  candidate_pairs:                 4               12.50
+  forward_molecules:               4               12.50
+  no_usable_paired_r1_insert:      4               12.50
+  reads_processed:                 4               12.50
+  total_pairs:                     4               12.50
+  unique_genomic:                  4               12.50
+
+Timings
+  overall     : 0 h 0 min 0 sec 0 ms
+  file I/O    : 0 h 0 min 0 sec 0 ms
+  single-cpu  : 0 h 0 min 0 sec 0 ms
+  multi-cpu   : 0 h 0 min 0 sec 0 ms
+
+Named timings
+  bam_tide/multi_cpu/illumina_normalize_chunk: 0 h 0 min 0 sec 0 ms
+
+[+     0.016s] stage: finishing mapper
+[+     0.102s] stage: quantifying mapper BAM
+[+     0.103s] stage: writing quantification
+[+     0.104s] Nelrune timings
+---------------
+MappingInfo
+  started: 2026-08-27 10:06:21.000008297 UTC
+
+Timings
+  overall     : 0 h 0 min 0 sec 104 ms
+  file I/O    : 0 h 0 min 0 sec 0 ms
+  single-cpu  : 0 h 0 min 0 sec 0 ms
+  multi-cpu   : 0 h 0 min 0 sec 0 ms
+
+Named timings
+  nelrune/mapper_finish:           0 h 0 min 0 sec 86 ms
+  nelrune/normalization:           0 h 0 min 0 sec 2 ms
+  nelrune/quantification:          0 h 0 min 0 sec 0 ms
+  nelrune/startup:                 0 h 0 min 0 sec 13 ms
+  nelrune/writing:                 0 h 0 min 0 sec 1 ms
+
+[+     0.104s] Quantification report
+---------------------
+MappingInfo
+  started: 2026-08-27 10:06:21.000043658 UTC
+
+Read types (n=12)
+  Type                             Count           Fraction total [%]
+  -------------------------------------------------------------------
+  ExactJunctionChain:              2               16.67
+  Intronic:                        2               16.67
+  cell_umi from BAM tags:          4               33.33
+  snp hit:                         4               33.33
+
+Timings
+  overall     : 0 h 0 min 0 sec 2 ms
+  file I/O    : 0 h 0 min 0 sec 0 ms
+  single-cpu  : 0 h 0 min 0 sec 0 ms
+  multi-cpu   : 0 h 0 min 0 sec 0 ms
+
+Named timings
+  bam_tide/multi_cpu/quantify_chunk: 0 h 0 min 0 sec 0 ms
+  bam_tide/single_cpu/merge_quantification: 0 h 0 min 0 sec 0 ms
+  nelrune/mapper_finish:           0 h 0 min 0 sec 86 ms
+  nelrune/normalization:           0 h 0 min 0 sec 2 ms
+  nelrune/quantification:          0 h 0 min 0 sec 0 ms
+  nelrune/startup:                 0 h 0 min 0 sec 13 ms
+  nelrune/writing:                 0 h 0 min 0 sec 1 ms
+
+[+     0.104s] finished: 4 reads in 0.1s (38 reads/s average)

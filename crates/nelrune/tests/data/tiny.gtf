@@ -1,0 +1,6 @@
+chrTiny	test	gene	101	300	.	+	.	gene_id "gene_plus";
+chrTiny	test	exon	101	150	.	+	.	gene_id "gene_plus"; transcript_id "tx_plus";
+chrTiny	test	exon	251	300	.	+	.	gene_id "gene_plus"; transcript_id "tx_plus";
+chrTiny	test	gene	101	300	.	-	.	gene_id "gene_minus";
+chrTiny	test	exon	101	150	.	-	.	gene_id "gene_minus"; transcript_id "tx_minus";
+chrTiny	test	exon	251	300	.	-	.	gene_id "gene_minus"; transcript_id "tx_minus";
