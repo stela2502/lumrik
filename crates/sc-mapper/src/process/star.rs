@@ -1,7 +1,12 @@
 use anyhow::{Context, bail, Result};
 
 use crate::core::{MapperLaunch, StreamingMapper};
-use crate::process::{check_binary, MapperProcess};
+use crate::process::{
+    check_binary,
+    has_option,
+    remove_option,
+    MapperProcess,
+};
 use crate::traits::ExternalMapper;
 
 use std::path::Path;
@@ -127,6 +132,8 @@ impl ExternalMapper for Star {
         })
     }
 
+
+
     fn spawn(&self) -> Result<StreamingMapper> {
         /*
          * STAR mapping command:
@@ -149,18 +156,56 @@ impl ExternalMapper for Star {
 
         let mut args = self.launch.options.clone();
 
-        args.push("--runThreadN".to_string());
-        args.push(self.launch.threads.to_string());
-
-        args.push("--genomeDir".to_string());
-        args.push(
-            self.launch
-                .index
-                .to_string_lossy()
-                .to_string(),
+        remove_option(&mut args, "--runThreadN", Some(1));
+        remove_option(&mut args, "--genomeDir", Some(1));
+        remove_option(
+            &mut args,
+            "--readFilesIn",
+            Some(if self.launch.paired { 2 } else { 1 }),
         );
+        remove_option(&mut args, "--outSAMtype", Some(2));
+        remove_option(&mut args, "--outStd", Some(1));
 
-        args.push("--readFilesIn".to_string());
+        args.extend([
+            "--runThreadN".into(),
+            self.launch.threads.min(4).to_string(),
+
+            "--genomeDir".into(),
+            self.launch.index.to_string_lossy().into_owned(),
+
+            "--outSAMtype".into(),
+            "BAM".into(),
+            "Unsorted".into(),
+
+            "--outStd".into(),
+            "BAM_Unsorted".into(),
+        ]);
+
+        if !has_option(&args, "--outBAMcompression") {
+            args.extend([
+                "--outBAMcompression".into(),
+                "0".into(),
+            ]);
+        }
+
+        if !has_option(&args, "--outSAMattributes") {
+            args.extend([
+                "--outSAMattributes".into(),
+                "NH".into(),
+                "HI".into(),
+                "AS".into(),
+                "nM".into(),
+            ]);
+        }
+
+        if !has_option(&args, "--outReadsUnmapped") {
+            args.extend([
+                "--outReadsUnmapped".into(),
+                "None".into(),
+            ]);
+        }
+
+        args.push("--readFilesIn".into());
 
         let process = if self.launch.paired {
             MapperProcess::spawn_paired_fifo(
@@ -168,18 +213,14 @@ impl ExternalMapper for Star {
                 &args,
                 Some(self.header.clone()),
             )
-            .context(
-                "failed to spawn STAR with paired FIFO input",
-            )?
+            .context("failed to spawn STAR with paired FIFO input")?
         } else {
             MapperProcess::spawn_single_fifo(
                 &self.launch.mapper_bin,
                 &args,
                 Some(self.header.clone()),
             )
-            .context(
-                "failed to spawn STAR with single FIFO input",
-            )?
+            .context("failed to spawn STAR with single FIFO input")?
         };
 
         Ok(StreamingMapper::new(Box::new(process)))

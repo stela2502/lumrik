@@ -141,7 +141,7 @@ printf '  %s\n' "${R2[@]}"
 
 echo
 printf 'Input pairs: %d\n' "${#R1[@]}"
-printf 'Raw-read limit per pair: %s\n' "$MAX_READS"
+#printf 'Raw-read limit per pair: %s\n' "$MAX_READS"
 printf 'Maximum raw pairs total: %d\n' "$(( MAX_READS * ${#R1[@]} ))"
 printf 'Threads: %s\n' "$THREADS"
 printf 'Output: %s\n' "$OUT"
@@ -181,7 +181,6 @@ NELRUNE_ARGS=(
     --mapper-threads "$THREADS"
 
     --threads "$THREADS"
-    --max-reads "$MAX_READS"
 
     --index "$SPLICE_INDEX"
     --outpath "$OUT"

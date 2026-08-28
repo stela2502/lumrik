@@ -31,7 +31,7 @@ use gtf_splice_index::{
 
 use snp_index::Genome;
 
-const CHUNK: usize = 2_000_000;
+const CHUNK: usize = 100_000;
 
 
 
@@ -160,7 +160,7 @@ impl BamCollector {
     }
 
     pub fn run_paths(
-        mut self,
+        self,
         paths: &[std::path::PathBuf],
     ) -> Result<BamCollectorResult> {
         let mut data = QuantData::new();
@@ -184,7 +184,7 @@ impl BamCollector {
          * Open the first BAM so we have a header from which the
          * SNP side-channel can be constructed.
          */
-        let mut reader =
+        let reader =
             Reader::from_path(first_path)
                 .with_context(|| {
                     format!(
@@ -335,11 +335,6 @@ impl BamCollector {
             .context(
                 "mapper returned a non-UTF8 QNAME"
             )?;
-
-            eprintln!(
-                "This is my BAM record's name:\n{}",
-                String::from_utf8_lossy(record.qname())
-            );
 
         let read_tag =
             ReadTagRecord::from_qname(

@@ -352,7 +352,7 @@ impl IlluminaNormalizer {
 
                 NgsNormalizerSupport::prepare_emit_batch(
                     &mut output,
-                    &self.read_tags,
+                    &mut self.read_tags,
                 )?;
 
                 if !output.is_empty() && !emit(&output)? {
@@ -374,7 +374,7 @@ impl IlluminaNormalizer {
 
             NgsNormalizerSupport::prepare_emit_batch(
                 &mut output,
-                &self.read_tags,
+                &mut self.read_tags,
             )?;
 
             if !output.is_empty() && !emit(&output)? {

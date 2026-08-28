@@ -3,6 +3,7 @@
 mod mapper_process;
 mod sam_cluster_buffer;
 mod mapper_record;
+mod options;
 
 mod bwa;
 mod minimap2;
@@ -25,3 +26,8 @@ pub use mapper_record::{
 pub use bwa::Bwa;
 pub use minimap2::Minimap2;
 pub use star::Star;
+
+pub(crate) use options::{
+    has_option,
+    remove_option,
+};

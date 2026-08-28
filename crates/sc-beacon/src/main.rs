@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use scdata::{load_10x_feature_matrix, read_10x_cell_ids, TenxFeatureIndex};
+use scdata::{load_mtx_feature_matrix, read_mtx_cell_ids, MexFeatureIndex};
 
 mod cli;
 
@@ -56,10 +56,10 @@ fn main() -> Result<()> {
     let threads = cli.threads.unwrap_or_else(rayon::current_num_threads);
 
     let (raw, raw_index, cell_barcode_len) =
-        load_10x_feature_matrix(&cli.raw, &cli.feature_type, threads)?;
-    let filtered_index = TenxFeatureIndex::from_dir(&cli.filtered, &cli.feature_type)?;
+        load_mtx_feature_matrix(&cli.raw, &cli.feature_type, threads)?;
+    let filtered_index = MexFeatureIndex::from_dir(&cli.filtered, &cli.feature_type)?;
     raw_index.validate_compatible(&filtered_index)?;
-    let filtered_cells = read_10x_cell_ids(&cli.filtered)?;
+    let filtered_cells = read_mtx_cell_ids(&cli.filtered)?;
 
     eprintln!("Found {} guide features.", raw_index.features().len());
     eprintln!(

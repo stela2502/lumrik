@@ -252,15 +252,12 @@ impl<'a> JobBuilder<'a> {
     }
 
     fn build_aligned_read(&self, rec: &Record, chr_name: &str) -> Option<AlignedRead> {
-        if self.genome.is_none() && self.snp.is_none() {
-            return None;
-        }
-
-        let chr_id = if let Some(snp) = self.snp {
-            snp.chr_id(chr_name)?
-        } else {
-            *self.chr_map.get(chr_name)?
-        };
+        // AlignedRead owns copies of sequence, qualities, and CIGAR-derived
+        // operations. It is consumed only by the SNP side-channel, so building
+        // it merely because a genome FASTA was supplied wastes substantial
+        // memory during ordinary gene/transcript quantification.
+        let snp = self.snp?;
+        let chr_id = snp.chr_id(chr_name)?;
 
         let mut read = AlignedRead::from_record(rec, chr_id);
 

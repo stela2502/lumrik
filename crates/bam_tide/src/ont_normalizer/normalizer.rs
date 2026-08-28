@@ -13,7 +13,7 @@ use mapping_info::MappingInfo;
 use rayon::prelude::*;
 use rust_htslib::bam::{Read, Reader};
 use sc_primer::{Orientation, PrimerDetector};
-use scdata::{Scdata, GeneUmiHash};
+use scdata::GeneUmiHash;
 use int_to_str::IntToStr;
 
 use std::path::PathBuf;
@@ -297,7 +297,7 @@ impl OntNormalizer {
 
                 NgsNormalizerSupport::prepare_emit_batch(
                     &mut output,
-                    &self.read_tags,
+                    &mut self.read_tags,
                 )?;
 
                 if !output.is_empty() && !emit(&output)? {
@@ -319,7 +319,7 @@ impl OntNormalizer {
 
             NgsNormalizerSupport::prepare_emit_batch(
                 &mut output,
-                &self.read_tags,
+                &mut self.read_tags,
             )?;
 
             if !output.is_empty() && !emit(&output)? {

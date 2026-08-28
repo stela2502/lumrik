@@ -153,11 +153,16 @@ impl NgsNormalizerSupport {
     /// extra batch allocation.
     pub fn prepare_emit_batch(
         reads: &mut [(Option<FastqRecord>, FastqRecord)],
-        read_tags: &ReadTagTable,
+        read_tags: &mut ReadTagTable,
     ) -> Result<()> {
         for (r1, r2) in reads {
+            // In the Nelrune streaming path the complete ReadTagRecord is
+            // encoded into the mapper-facing QNAME. Once that is done there
+            // is no reason to retain a second copy in ReadTagTable for the
+            // remainder of the run. Consuming it here keeps memory bounded by
+            // the normalizer chunk size instead of the total read count.
             let tag = read_tags
-                .get(&r2.id)
+                .remove(&r2.id)
                 .with_context(|| {
                     format!("missing ReadTagRecord for '{}'", r2.id)
                 })?;
