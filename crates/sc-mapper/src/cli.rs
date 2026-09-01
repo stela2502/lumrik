@@ -1,13 +1,12 @@
-
-use anyhow::{Context, bail, Result};
-use std::path::PathBuf;
+use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
+use std::path::PathBuf;
 
 use crate::Bwa;
 use crate::Minimap2;
 use crate::Star;
 
-use crate::core::{StreamingMapper,MapperLaunch};
+use crate::core::{MapperLaunch, StreamingMapper};
 use crate::traits::ExternalMapper;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -67,41 +66,27 @@ pub struct StreamingMapperCli {
 
 impl StreamingMapperCli {
     pub fn launch(&self) -> Result<MapperLaunch> {
-        let mapper_bin =
-            self.mapper_bin
-                .clone()
-                .unwrap_or_else(|| {
-                    match self.mapper {
-                        MapperKind::Minimap2 =>
-                            "minimap2".into(),
+        let mapper_bin = self
+            .mapper_bin
+            .clone()
+            .unwrap_or_else(|| match self.mapper {
+                MapperKind::Minimap2 => "minimap2".into(),
 
-                        MapperKind::Star =>
-                            "STAR".into(),
+                MapperKind::Star => "STAR".into(),
 
-                        MapperKind::Bwa =>
-                            "bwa".into(),
-                    }
-                });
+                MapperKind::Bwa => "bwa".into(),
+            });
 
-        let mut options =
-            match &self.mapper_options {
-                Some(x) => {
-                    split_mapper_options(x)
-                        .with_context(|| {
-                            format!(
-                                "Failed to parse --mapper-options: {x:?}"
-                            )
-                        })?
-                }
+        let mut options = match &self.mapper_options {
+            Some(x) => split_mapper_options(x)
+                .with_context(|| format!("Failed to parse --mapper-options: {x:?}"))?,
 
-                None => Vec::new(),
-            };
+            None => Vec::new(),
+        };
 
         match self.mapper {
             MapperKind::Star => {
-                prepare_star_options(
-                    &mut options,
-                )?;
+                prepare_star_options(&mut options)?;
             }
 
             MapperKind::Minimap2 => {}
@@ -111,14 +96,11 @@ impl StreamingMapperCli {
 
         Ok(MapperLaunch {
             mapper_bin,
-            index:
-                self.mapper_index.clone(),
+            index: self.mapper_index.clone(),
 
-            threads:
-                self.mapper_threads,
+            threads: self.mapper_threads,
 
-            paired:
-                self.mapper_paired,
+            paired: self.mapper_paired,
 
             options,
         })
@@ -147,9 +129,7 @@ impl StreamingMapperCli {
 
         eprintln!("[sc-mapper] mapper check passed");
 
-        let process =
-            mapper.spawn()
-                .context("failed to spawn selected mapper")?;
+        let process = mapper.spawn().context("failed to spawn selected mapper")?;
 
         eprintln!("[sc-mapper] mapper spawned");
 
@@ -158,13 +138,10 @@ impl StreamingMapperCli {
 }
 
 fn split_mapper_options(options: &str) -> Result<Vec<String>> {
-    shell_words::split(options)
-        .with_context(|| format!("Invalid mapper options: {options:?}"))
+    shell_words::split(options).with_context(|| format!("Invalid mapper options: {options:?}"))
 }
 
-fn prepare_star_options(
-    options: &mut Vec<String>,
-) -> Result<()> {
+fn prepare_star_options(options: &mut Vec<String>) -> Result<()> {
     /*
      * These options are owned by sc-mapper.
      *
@@ -180,9 +157,7 @@ fn prepare_star_options(
     ];
 
     for option in options.iter() {
-        if PROTECTED.contains(
-            &option.as_str()
-        ) {
+        if PROTECTED.contains(&option.as_str()) {
             bail!(
                 "STAR option `{option}` is managed by sc-mapper \
                  and must not be supplied through --mapper-options"
@@ -194,12 +169,9 @@ fn prepare_star_options(
          * uses whitespace-separated arguments.
          */
         for protected in PROTECTED {
-            let prefix =
-                format!("{protected}=");
+            let prefix = format!("{protected}=");
 
-            if option.starts_with(
-                &prefix,
-            ) {
+            if option.starts_with(&prefix) {
                 bail!(
                     "STAR option `{protected}` is managed by sc-mapper \
                      and must not be supplied through --mapper-options"
@@ -217,7 +189,6 @@ fn prepare_star_options(
         "--outSAMtype".to_string(),
         "BAM".to_string(),
         "Unsorted".to_string(),
-
         "--outStd".to_string(),
         "BAM_Unsorted".to_string(),
     ]);

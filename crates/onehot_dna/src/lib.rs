@@ -31,10 +31,16 @@ impl fmt::Display for OneHotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::WrongLength { expected, observed } => {
-                write!(f, "wrong sequence length: expected {expected}, observed {observed}")
+                write!(
+                    f,
+                    "wrong sequence length: expected {expected}, observed {observed}"
+                )
             }
             Self::TooLong { max, observed } => {
-                write!(f, "sequence too long for u128 one-hot encoding: max {max}, observed {observed}")
+                write!(
+                    f,
+                    "sequence too long for u128 one-hot encoding: max {max}, observed {observed}"
+                )
             }
         }
     }
@@ -54,7 +60,6 @@ pub struct OneHot<const N: usize> {
 pub type OneHot9 = OneHot<9>;
 
 impl<const N: usize> OneHot<N> {
-
     /// Maximum supported length for this implementation.
     pub const MAX_LEN: usize = 32;
 
@@ -147,9 +152,7 @@ impl<const N: usize> OneHot<N> {
     pub fn within(self, other: Self, max_mismatches: u32) -> bool {
         self.mismatches(other) <= max_mismatches
     }
-
 }
-
 
 impl<const N: usize> fmt::Debug for OneHot<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -206,9 +209,7 @@ pub struct OneHotSet<const N: usize> {
 }
 
 impl<const N: usize> OneHotSet<N> {
-    pub fn from_sequences<S: AsRef<[u8]>>(
-        seqs: &[S],
-    ) -> Result<Self, OneHotError> {
+    pub fn from_sequences<S: AsRef<[u8]>>(seqs: &[S]) -> Result<Self, OneHotError> {
         let data = seqs
             .iter()
             .map(|s| OneHot::<N>::from_bytes(s.as_ref()))
@@ -226,9 +227,7 @@ impl<const N: usize> OneHotSet<N> {
 
         for i in 0..self.data.len() {
             for j in (i + 1)..self.data.len() {
-                best = best.min(
-                    self.data[i].mismatches(self.data[j]) as usize
-                );
+                best = best.min(self.data[i].mismatches(self.data[j]) as usize);
             }
         }
 
@@ -252,11 +251,7 @@ impl<const N: usize> OneHotSet<N> {
     ///
     /// Returns `(index, distance)` if the best match is unique and within
     /// `max_mismatches`. Returns `None` for no hit or ties.
-    pub fn best_match(
-        &self,
-        query: &OneHot<N>,
-        max_mismatches: u32,
-    ) -> Option<(usize, u32)> {
+    pub fn best_match(&self, query: &OneHot<N>, max_mismatches: u32) -> Option<(usize, u32)> {
         let mut best_index = None;
         let mut best_dist = max_mismatches + 1;
         let mut ties = 0u32;
@@ -278,10 +273,7 @@ impl<const N: usize> OneHotSet<N> {
             _ => None,
         }
     }
-
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -324,11 +316,9 @@ mod tests {
 
     #[test]
     fn best_match_rejects_ties() {
-        let candidates = OneHotSet::<9>::from_sequences(&[
-            b"AAAAAAAAA".as_slice(),
-            b"AAAAAAAAC".as_slice(),
-        ])
-        .unwrap();
+        let candidates =
+            OneHotSet::<9>::from_sequences(&[b"AAAAAAAAA".as_slice(), b"AAAAAAAAC".as_slice()])
+                .unwrap();
 
         let obs = OneHot9::from_bytes(b"AAAAAAAAN").unwrap();
         assert_eq!(candidates.best_match(&obs, 1), None);

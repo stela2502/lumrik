@@ -25,7 +25,6 @@ const DNA_COMPLEMENT: [u8; 256] = {
     table
 };
 
-
 #[derive(Debug, Clone)]
 pub struct FastqRecord {
     pub id: String,
@@ -43,9 +42,7 @@ impl std::fmt::Display for FastqRecord {
     }
 }
 
-
 impl FastqRecord {
-
     pub fn new(id: impl Into<String>, seq: &[u8], qual: &[u8]) -> Self {
         assert_eq!(
             seq.len(),
@@ -63,13 +60,12 @@ impl FastqRecord {
     pub fn len(&self) -> usize {
         self.seq.len()
     }
-    pub fn is_empty(&self) -> bool{
+    pub fn is_empty(&self) -> bool {
         self.seq.is_empty()
     }
 
     pub fn clean_id(&self) -> String {
-        self
-            .id
+        self.id
             .split_whitespace()
             .next()
             .unwrap_or(&self.id)
@@ -100,18 +96,15 @@ impl FastqRecord {
             .collect()
     }
 
-    pub fn revcomp(&self ) -> Self {
+    pub fn revcomp(&self) -> Self {
         let rc_seq = Self::revcomp_seq(&self.seq);
 
         let rc_qual: Vec<u8> = self.qual.iter().rev().copied().collect();
         Self::new(self.id.clone(), &rc_seq, &rc_qual)
     }
-    
+
     pub fn revcomp_seq(seq: &[u8]) -> Vec<u8> {
-        seq.iter()
-            .rev()
-            .map(|&b| Self::complement(b))
-            .collect()
+        seq.iter().rev().map(|&b| Self::complement(b)).collect()
     }
 
     #[inline(always)]
@@ -138,7 +131,6 @@ impl FastqRecord {
 
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -159,11 +151,7 @@ mod tests {
 
     #[test]
     fn test_fastq_record_clipping() {
-        let rec = FastqRecord::new(
-            "read1",
-            b"ACGTACGT",
-            &[10, 11, 12, 13, 14, 15, 16, 17],
-        );
+        let rec = FastqRecord::new("read1", b"ACGTACGT", &[10, 11, 12, 13, 14, 15, 16, 17]);
 
         let clipped = rec.clipped("read1_mol1", 2, 6);
 
@@ -187,10 +175,7 @@ mod tests {
 
         let result = String::from_utf8(out).unwrap();
 
-        assert_eq!(
-            result,
-            "@read1\nACGT\n+\n!\"#$\n"
-        );
+        assert_eq!(result, "@read1\nACGT\n+\n!\"#$\n");
     }
 
     #[test]
@@ -200,15 +185,11 @@ mod tests {
     }
     #[test]
     fn test_fastq_record_revcomp() {
-        let rec = FastqRecord::new(
-            "read1",
-            b"ACGTNacgtn",
-            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-        );
+        let rec = FastqRecord::new("read1", b"ACGTNacgtn", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
         let rc = rec.revcomp();
 
-        assert_eq!(rc.id, rec.id );
+        assert_eq!(rc.id, rec.id);
         assert_eq!(rc.seq, b"nacgtNACGT");
         assert_eq!(rc.qual, vec![10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
     }

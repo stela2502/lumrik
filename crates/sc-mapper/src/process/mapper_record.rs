@@ -32,7 +32,6 @@ impl MapperRecord {
     pub fn into_inner(self) -> Record {
         self.record
     }
-
 }
 
 impl Deref for MapperRecord {
@@ -43,13 +42,11 @@ impl Deref for MapperRecord {
     }
 }
 
-
 impl From<Record> for MapperRecord {
     fn from(record: Record) -> Self {
         Self::new(record)
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct SamReadCluster {

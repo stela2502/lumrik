@@ -7,11 +7,7 @@ use anyhow::{Context, Result};
 use scdata::{FeatureIndex, Scdata};
 
 use crate::{
-    AmbientModel,
-    CellGuideAssignments,
-    FittedModel,
-    GuideCalls,
-    MultiGuideGapStats,
+    AmbientModel, CellGuideAssignments, FittedModel, GuideCalls, MultiGuideGapStats,
     MultiGuideGapStatsTable,
 };
 
@@ -26,12 +22,7 @@ pub struct BeaconResult {
 }
 
 impl BeaconResult {
-    pub fn write<P, I>(
-        &mut self,
-        out: P,
-        feature_index: &I,
-        call_tag_len: usize,
-    ) -> Result<()>
+    pub fn write<P, I>(&mut self, out: P, feature_index: &I, call_tag_len: usize) -> Result<()>
     where
         P: AsRef<Path>,
         I: FeatureIndex,
@@ -40,12 +31,7 @@ impl BeaconResult {
         //let filtered = feature_index.ordered_feature_ids().into_iter().map(|id| feature_index.feature_name(id).to_owned()).collect();
 
         fs::create_dir_all(&out)
-            .with_context(|| {
-                format!(
-                    "creating Beacon output directory {}",
-                    out.display()
-                )
-            })?;
+            .with_context(|| format!("creating Beacon output directory {}", out.display()))?;
 
         /*
          * ------------------------------------------------------------
@@ -53,13 +39,8 @@ impl BeaconResult {
          * ------------------------------------------------------------
          */
         self.ambient
-            .write_table(
-                &out,
-                feature_index,
-            )
-            .context(
-                "writing Beacon ambient model",
-            )?;
+            .write_table(&out, feature_index)
+            .context("writing Beacon ambient model")?;
 
         /*
          * ------------------------------------------------------------
@@ -67,13 +48,8 @@ impl BeaconResult {
          * ------------------------------------------------------------
          */
         self.fitted
-            .write_table(
-                &out,
-                feature_index,
-            )
-            .context(
-                "writing Beacon fitted model",
-            )?;
+            .write_table(&out, feature_index)
+            .context("writing Beacon fitted model")?;
 
         /*
          * ------------------------------------------------------------
@@ -81,14 +57,8 @@ impl BeaconResult {
          * ------------------------------------------------------------
          */
         self.calls
-            .write_table(
-                &out,
-                feature_index,
-                call_tag_len,
-            )
-            .context(
-                "writing Beacon feature calls",
-            )?;
+            .write_table(&out, feature_index, call_tag_len)
+            .context("writing Beacon feature calls")?;
 
         /*
          * ------------------------------------------------------------
@@ -97,9 +67,7 @@ impl BeaconResult {
          */
         self.assignments
             .write_table(&out)
-            .context(
-                "writing Beacon cell assignments",
-            )?;
+            .context("writing Beacon cell assignments")?;
 
         /*
          * ------------------------------------------------------------
@@ -108,9 +76,7 @@ impl BeaconResult {
          */
         self.multi_gap_stats
             .write_table(&out)
-            .context(
-                "writing Beacon multi-feature statistics",
-            )?;
+            .context("writing Beacon multi-feature statistics")?;
 
         /*
          * ------------------------------------------------------------
@@ -124,8 +90,7 @@ impl BeaconResult {
             .map(|row| row.cell_id)
             .collect();
 
-        self.posteriors
-            .finalize_for_cells(&cells, feature_index);
+        self.posteriors.finalize_for_cells(&cells, feature_index);
 
         let posterior_out = out.join("posteriors");
         self.posteriors
@@ -138,38 +103,20 @@ impl BeaconResult {
          * Human-readable summary
          * ------------------------------------------------------------
          */
-        let main_log =
-            self.multi_gap_stats
-                .print_assignment_summary(
-                    &self.assignments,
-                );
+        let main_log = self
+            .multi_gap_stats
+            .print_assignment_summary(&self.assignments);
 
-        let feature_summary =
-            self.multi_gap_stats
-                .primary_guide_counts(
-                    &self.assignments,
-                    100.0,
-                );
+        let feature_summary = self
+            .multi_gap_stats
+            .primary_guide_counts(&self.assignments, 100.0);
 
-        let run_log = format!(
-            "{}\n{}",
-            main_log,
-            feature_summary,
-        );
+        let run_log = format!("{}\n{}", main_log, feature_summary,);
 
-        let log_path =
-            out.join("sc_beacon.log");
+        let log_path = out.join("sc_beacon.log");
 
-        fs::write(
-            &log_path,
-            &run_log,
-        )
-        .with_context(|| {
-            format!(
-                "writing {}",
-                log_path.display()
-            )
-        })?;
+        fs::write(&log_path, &run_log)
+            .with_context(|| format!("writing {}", log_path.display()))?;
 
         Ok(())
     }

@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
-use clap::Parser;
+use anyhow::{Result, bail};
+use clap::{Parser, parser::ValueSource};
 
-use bam_tide::quantification::bam_collector::BamCollectorConfig;
 use bam_tide::AdditionalFeatureSource;
+use bam_tide::quantification::bam_collector::BamCollectorConfig;
 use sc_mapper::StreamingMapperCli;
 use sc_primer::PrimerCli;
-
 
 #[derive(Parser, Debug)]
 #[command(
@@ -123,5 +122,42 @@ impl Cli {
         }
 
         Ok(())
+    }
+
+    pub fn print_overrides(command: &clap::Command, matches: &clap::ArgMatches) {
+        let mut shown_header = false;
+
+        for arg in command.get_arguments() {
+            if arg.is_required_set() {
+                continue;
+            }
+
+            let id = arg.get_id().as_str();
+
+            if matches.value_source(id) != Some(ValueSource::CommandLine) {
+                continue;
+            }
+
+            let Some(values) = matches.get_raw(id) else {
+                continue;
+            };
+
+            if !shown_header {
+                eprintln!("Nelrune command-line overrides");
+                eprintln!("------------------------------");
+                shown_header = true;
+            }
+
+            let value = values
+                .map(|v| v.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            eprintln!("  --{}: {}", id.replace('_', "-"), value);
+        }
+
+        if shown_header {
+            eprintln!();
+        }
     }
 }

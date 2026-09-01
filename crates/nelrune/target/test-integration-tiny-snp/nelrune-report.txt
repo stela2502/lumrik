@@ -1,13 +1,13 @@
 MappingInfo
-  started: 2026-08-27 10:06:21.000074487 UTC
+  started: 2026-09-01 09:39:06.001855863 UTC
 
-Read types (n=12)
+Read types (n=1)
   Type                             Count           Fraction total [%]
   -------------------------------------------------------------------
-  ExactJunctionChain:              2               16.67
-  Intronic:                        2               16.67
-  cell_umi from BAM tags:          4               33.33
-  snp hit:                         4               33.33
+  ExactJunctionChain:              2               200.00
+  Intronic:                        2               200.00
+  cell_umi from BAM tags:          4               400.00
+  snp hit:                         4               400.00
 
 Timings
   overall     : 0 h 0 min 0 sec 2 ms
@@ -18,8 +18,8 @@ Timings
 Named timings
   bam_tide/multi_cpu/quantify_chunk: 0 h 0 min 0 sec 0 ms
   bam_tide/single_cpu/merge_quantification: 0 h 0 min 0 sec 0 ms
-  nelrune/mapper_finish:           0 h 0 min 0 sec 86 ms
-  nelrune/normalization:           0 h 0 min 0 sec 2 ms
+  nelrune/input_and_mapper:        0 h 0 min 0 sec 2 ms
+  nelrune/mapper_finish:           0 h 0 min 0 sec 137 ms
   nelrune/quantification:          0 h 0 min 0 sec 0 ms
-  nelrune/startup:                 0 h 0 min 0 sec 13 ms
+  nelrune/startup:                 0 h 0 min 0 sec 14 ms
   nelrune/writing:                 0 h 0 min 0 sec 1 ms

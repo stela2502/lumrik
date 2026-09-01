@@ -1,7 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use flate2::read::MultiGzDecoder;
 use mapping_info::MappingInfo;
-use sc_primer::{PrimerDetector};
+use sc_primer::PrimerDetector;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,6 @@ use read_tag_table::{
     //ReadTagTableConfig,
     //ReadTagRecord,
 };
-
 
 #[derive(Debug, Clone)]
 pub struct PrimerRestoreConfig {
@@ -61,17 +60,14 @@ impl PrimerRestore {
         let mut reader = FastqReader::from_path(&self.config.fastq)
             .with_context(|| format!("failed to open FASTQ: {}", self.config.fastq.display()))?;
 
-        let mut writer = FastqWriter::new(
-            &self.config.out,
-            self.config.gzip,
-            self.config.gzip_level,
-        )
-        .with_context(|| {
-            format!(
-                "failed to create restored FASTQ: {}",
-                self.config.out.display()
-            )
-        })?;
+        let mut writer =
+            FastqWriter::new(&self.config.out, self.config.gzip, self.config.gzip_level)
+                .with_context(|| {
+                    format!(
+                        "failed to create restored FASTQ: {}",
+                        self.config.out.display()
+                    )
+                })?;
 
         while let Some(record) = reader.next_record()? {
             self.stats.report("total_reads");
@@ -190,11 +186,7 @@ impl FastqReader {
             );
         }
 
-        let clean_id = id[1..]
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let clean_id = id[1..].split_whitespace().next().unwrap_or("").to_string();
 
         let qual_phred: Vec<u8> = qual
             .as_bytes()
@@ -226,8 +218,7 @@ impl FastqReader {
 }
 
 fn open_maybe_gz(path: &Path) -> Result<Box<dyn Read>> {
-    let file = File::open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
 
     if path.extension().is_some_and(|e| e == "gz") {
         Ok(Box::new(MultiGzDecoder::new(file)))

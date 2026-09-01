@@ -40,8 +40,18 @@ impl PrimerDetector {
         })
     }
 
+    /// Length of the normalized cell barcode returned in `PrimerMatch::cell_seq`.
+    ///
+    /// BD Rhapsody cassettes contain linker/spacing sequence in the read, but the
+    /// normalized cell barcode is the three corrected 9 bp blocks (27 bp).
+    /// `grammar.cell_len()` describes the full BD cassette representation used by
+    /// synthesis and must therefore not be used for matrix barcode export.
     pub fn cell_len(&self) -> usize {
-        self.grammar.cell_len()
+        match &self.single_cell_system {
+            Some(SingleCellSystem::Rhapsody(_)) => 27,
+            Some(SingleCellSystem::Tenx(system)) => system.version().cell_len(),
+            None => self.grammar.cell_len(),
+        }
     }
 
     pub fn detect(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Vec<PrimerMatch>> {
@@ -243,13 +253,11 @@ impl PrimerDetector {
         // matcher at positions that can actually be a cassette.
         if let Some((search_start, search_end)) = self.leading_bd_search() {
             if let Some(SingleCellSystem::Rhapsody(rhapsody)) = &self.single_cell_system {
-                if matches!(rhapsody.version(), BdCellVersion::V2_96 | BdCellVersion::V2_384) {
-                    return rhapsody.next_candidate_start(
-                        seq,
-                        from,
-                        search_start,
-                        search_end,
-                    );
+                if matches!(
+                    rhapsody.version(),
+                    BdCellVersion::V2_96 | BdCellVersion::V2_384
+                ) {
+                    return rhapsody.next_candidate_start(seq, from, search_start, search_end);
                 }
             }
         }
@@ -328,6 +336,18 @@ impl PrimerDetector {
         Ok(attempts)
     }
 
+    pub fn explain_failure(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<String> {
+        Self::validate_read(seq, qual)?;
+
+        if let Some((search_start, search_end)) = self.leading_bd_search() {
+            if let Some(SingleCellSystem::Rhapsody(rhapsody)) = &self.single_cell_system {
+                return Ok(rhapsody.explain_call_failure(seq, 0, search_start, search_end));
+            }
+        }
+
+        Ok("no complete primer match".to_string())
+    }
+
     pub fn grammar(&self) -> &Grammar {
         &self.grammar
     }
@@ -392,10 +412,14 @@ impl PrimerDetector {
                     }
                     pos += count;
                 }
-                GrammarOp::Insert { seq: fixed, mismatches } => {
+                GrammarOp::Insert {
+                    seq: fixed,
+                    mismatches,
+                } => {
                     //saw_insert_constraint = true;
 
-                    let Ok(Some(_chosen)) = Self::find_fixed(seq, pos, fixed, *mismatches, search) else {
+                    let Ok(Some(_chosen)) = Self::find_fixed(seq, pos, fixed, *mismatches, search)
+                    else {
                         /*eprintln!(
                             "I have not found the INSERT {} in sequence {} at position {}",
                             String::from_utf8_lossy(fixed),

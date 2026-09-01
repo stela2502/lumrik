@@ -49,8 +49,6 @@
 /// assert_eq!(index.feature_name(1), "GeneB");
 /// ```
 
-use std::collections::HashMap;
-
 pub trait FeatureIndex: Send + Sync {
     /// name to id translation
     fn feature_name(&self, feature_id: u64) -> &str;

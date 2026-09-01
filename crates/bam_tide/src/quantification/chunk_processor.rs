@@ -6,10 +6,9 @@ use scdata::cell_data::GeneUmiHash;
 
 use crate::quantification::cli::QuantMode;
 use crate::quantification::job::Job;
-use crate::quantification::snp::SnpSideChannel;
 use crate::quantification::processor_options::ProcessorOptions;
+use crate::quantification::snp::SnpSideChannel;
 use crate::results::QuantData;
-
 
 pub struct ChunkProcessor<'a> {
     idx: &'a SpliceIndex,
@@ -48,21 +47,29 @@ impl<'a> ChunkProcessor<'a> {
         let chunk_size = (jobs.len() / threads).max(10_000);
 
         merged.report.start_counter();
-        merged.report.start_timer("bam_tide/multi_cpu/quantify_chunk");
+        merged
+            .report
+            .start_timer("bam_tide/multi_cpu/quantify_chunk");
 
         let partials: Vec<QuantData> = jobs
             .par_chunks(chunk_size)
             .map(|chunk| self.process_partial(quant_mode, chunk))
             .collect();
 
-        merged.report.stop_timer("bam_tide/multi_cpu/quantify_chunk");
+        merged
+            .report
+            .stop_timer("bam_tide/multi_cpu/quantify_chunk");
         merged.report.stop_multi_processor_time();
 
-        merged.report.start_timer("bam_tide/single_cpu/merge_quantification");
+        merged
+            .report
+            .start_timer("bam_tide/single_cpu/merge_quantification");
         for partial in partials {
             merged.merge(&partial);
         }
-        merged.report.stop_timer("bam_tide/single_cpu/merge_quantification");
+        merged
+            .report
+            .stop_timer("bam_tide/single_cpu/merge_quantification");
         merged.report.stop_single_processor_time();
 
         Ok(())
@@ -145,8 +152,6 @@ impl<'a> ChunkProcessor<'a> {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,10 +192,7 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         let mut spliced = SplicedRead::new(
             chr_id,
             Strand::Plus,
-            vec![
-                RefBlock::new(110, 150),
-                RefBlock::new(200, 250),
-            ],
+            vec![RefBlock::new(110, 150), RefBlock::new(200, 250)],
         );
         spliced.finalize();
 
@@ -235,10 +237,7 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         let mut spliced = SplicedRead::new(
             chr_id,
             Strand::Plus,
-            vec![
-                RefBlock::new(110, 150),
-                RefBlock::new(200, 250),
-            ],
+            vec![RefBlock::new(110, 150), RefBlock::new(200, 250)],
         );
         spliced.finalize();
 

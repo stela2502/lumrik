@@ -20,7 +20,7 @@ pub enum GrammarOp {
     Cell { len: usize },
     Umi { len: usize },
     PolyT { min: usize },
-    Insert { seq: Vec<u8>, mismatches: usize  },
+    Insert { seq: Vec<u8>, mismatches: usize },
     Skip { len: usize },
     Search { start: usize, end: usize },
 
@@ -68,7 +68,6 @@ impl Grammar {
                 GrammarOp::Fixed { seq, mismatches } if anchor_search.is_none() => {
                     anchor_search = AnchorSearch::new(seq, *mismatches);
                 }
-
 
                 _ => {}
             }
@@ -191,9 +190,12 @@ impl Grammar {
                     seq.extend(std::iter::repeat_n(b'A', 4));
                 }
 
-                GrammarOp::Insert  { seq: fixed, mismatches: _ } => {
+                GrammarOp::Insert {
+                    seq: fixed,
+                    mismatches: _,
+                } => {
                     seq.extend_from_slice(fixed);
-                },
+                }
 
                 GrammarOp::Tag { len } | GrammarOp::Feature { len } => {
                     seq.extend(std::iter::repeat_n(b'A', *len));

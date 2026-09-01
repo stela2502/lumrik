@@ -1,12 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::core::{MapperLaunch, StreamingMapper};
-use crate::process::{
-    check_binary,
-    has_option,
-    remove_option,
-    MapperProcess,
-};
+use crate::process::{MapperProcess, check_binary, has_option, remove_option};
 use crate::traits::ExternalMapper;
 
 #[derive(Debug, Clone)]
@@ -48,43 +43,23 @@ impl ExternalMapper for Minimap2 {
         // PAF output is incompatible with StreamingMapper.
         remove_option(&mut args, "-c", Some(0));
 
-        args.extend([
-            "-t".into(),
-            self.launch.threads.to_string(),
-        ]);
+        args.extend(["-t".into(), self.launch.threads.to_string()]);
 
         // Force SAM output unless the user already requested it.
         if !has_option(&args, "-a") {
             args.push("-a".into());
         }
 
-        args.push(
-            self.launch
-                .index
-                .to_string_lossy()
-                .into_owned(),
-        );
+        args.push(self.launch.index.to_string_lossy().into_owned());
 
         let process = if self.launch.paired {
-            MapperProcess::spawn_paired_fifo(
-                &self.launch.mapper_bin,
-                &args,
-                None,
-            )
-            .context(
-                "failed to spawn minimap2 with paired FIFO input",
-            )?
+            MapperProcess::spawn_paired_fifo(&self.launch.mapper_bin, &args, None)
+                .context("failed to spawn minimap2 with paired FIFO input")?
         } else {
             args.push("-".into());
 
-            MapperProcess::spawn_single_stdin(
-                &self.launch.mapper_bin,
-                &args,
-                None,
-            )
-            .context(
-                "failed to spawn minimap2 with single-end stdin input",
-            )?
+            MapperProcess::spawn_single_stdin(&self.launch.mapper_bin, &args, None)
+                .context("failed to spawn minimap2 with single-end stdin input")?
         };
 
         Ok(StreamingMapper::new(Box::new(process)))

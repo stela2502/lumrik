@@ -1,4 +1,3 @@
-
 use clap::Args;
 
 use sc_beacon::{BackgroundConfig, CallConfig, FitConfig};
@@ -61,7 +60,6 @@ pub struct GuideModelCli {
     #[arg(long, default_value_t = 9.5)]
     pub prior_beta: f64,
 }
-
 
 impl GuideModelCli {
     pub fn background_config(&self) -> BackgroundConfig {

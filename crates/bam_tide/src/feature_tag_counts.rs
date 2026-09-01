@@ -2,20 +2,14 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use scdata::Scdata;
 
 use crate::index::FastTagFeatureIndex;
 use crate::ngs_normalizer::NgsNormalizerSupport;
 
-use sc_beacon::{
-    run_from_scdata,
-    BackgroundConfig,
-    CallConfig,
-    FitConfig,
-};
-
+use sc_beacon::{BackgroundConfig, CallConfig, FitConfig, run_from_scdata};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdditionalFeatureSource {
@@ -87,10 +81,7 @@ impl FeatureTagCounts {
         }
     }
 
-    pub fn from_sources(
-        sources: &[AdditionalFeatureSource],
-        min_hits: u32,
-    ) -> Result<Self> {
+    pub fn from_sources(sources: &[AdditionalFeatureSource], min_hits: u32) -> Result<Self> {
         let mut mapper = FastTagMapper::new();
 
         for source in sources {
@@ -103,14 +94,12 @@ impl FeatureTagCounts {
                 }
                 AdditionalFeatureSource::Fasta(path) => {
                     let feature_type = source.feature_type()?;
-                    mapper
-                        .load_fasta_as(path, &feature_type)
-                        .with_context(|| {
-                            format!(
-                                "failed to load additional feature FASTA '{}'",
-                                path.display()
-                            )
-                        })?;
+                    mapper.load_fasta_as(path, &feature_type).with_context(|| {
+                        format!(
+                            "failed to load additional feature FASTA '{}'",
+                            path.display()
+                        )
+                    })?;
                 }
             }
         }
@@ -136,7 +125,6 @@ impl FeatureTagCounts {
     pub(crate) fn merge_table(&mut self, other: &Scdata) {
         self.data.merge(other);
     }
-
 
     /// Restrict feature counts to the canonical GEX cells, write one
     /// 10x-style directory per feature type, and run sc-beacon
@@ -170,40 +158,23 @@ impl FeatureTagCounts {
 
         let feature_index = FastTagFeatureIndex::new(&self.mapper);
 
-        for (feature_type, feature_index) in
-            feature_index.split_by_feature_type()
-        {
+        for (feature_type, feature_index) in feature_index.split_by_feature_type() {
             /*
              * ------------------------------------------------------------
              * Raw filtered feature counts
              * ------------------------------------------------------------
              */
-            filtered.finalize_for_cells(
-                cells,
-                &feature_index,
-            );
+            filtered.finalize_for_cells(cells, &feature_index);
 
             let out_dir = out.join(&feature_type);
 
             std::fs::create_dir_all(&out_dir)
-                .with_context(|| {
-                    format!(
-                        "failed to create {}",
-                        out_dir.display()
-                    )
-                })?;
+                .with_context(|| format!("failed to create {}", out_dir.display()))?;
 
             filtered
-                .write_sparse(
-                    &out_dir,
-                    &feature_index,
-                )
+                .write_sparse_with_cell_len(&out_dir, &feature_index, cell_barcode_len)
                 .map_err(anyhow::Error::msg)
-                .with_context(|| {
-                    format!(
-                        "writing feature table '{feature_type}'"
-                    )
-                })?;
+                .with_context(|| format!("writing feature table '{feature_type}'"))?;
 
             /*
              * ------------------------------------------------------------
@@ -226,36 +197,13 @@ impl FeatureTagCounts {
                 Ok(mut beacon) => {
                     let beacon_out = out_dir.join("beacon");
 
-                    beacon
-                        .write(
-                            &beacon_out,
-                            &feature_index,
-                            cell_barcode_len,
-                        )
-                        .with_context(|| {
-                            format!(
-                                "writing sc-beacon results for '{feature_type}'"
-                            )
-                        })?;
-                }
-
-                Err(err)
-                    if err
-                        .to_string()
-                        .contains("Cannot fit ambient model without background droplets") =>
-                {
-                    eprintln!(
-                        "[bam-tide] sc-beacon skipped for '{}': no background droplets available",
-                        feature_type
-                    );
+                    if let Err(err) = beacon.write(&beacon_out, &feature_index, cell_barcode_len) {
+                        write_beacon_error(&out_dir, &feature_type, "writing results", &err);
+                    }
                 }
 
                 Err(err) => {
-                    return Err(err).with_context(|| {
-                        format!(
-                            "running sc-beacon for feature type '{feature_type}'"
-                        )
-                    });
+                    write_beacon_error(&out_dir, &feature_type, "running model", &err);
                 }
             }
         }
@@ -270,7 +218,6 @@ impl FeatureTagCounts {
         Ok(())
     }
 
-
     /// Standalone normalizer output: retain every observed cell.
     pub fn finalize_and_write_all(&mut self, cell_barcode_len: usize, out: &Path) -> Result<()> {
         if self.data.is_empty() {
@@ -281,6 +228,28 @@ impl FeatureTagCounts {
     }
 }
 
+fn write_beacon_error(out_dir: &Path, feature_type: &str, phase: &str, err: &anyhow::Error) {
+    let beacon_out = out_dir.join("beacon");
+    let error_path = beacon_out.join("sc_beacon.error.log");
+    let message =
+        format!("sc-beacon failed for feature type '{feature_type}' while {phase}\n\n{err:#}\n");
+
+    eprintln!(
+        "[bam-tide] sc-beacon failed for '{}' while {}: {:#}",
+        feature_type, phase, err,
+    );
+
+    if let Err(write_err) =
+        std::fs::create_dir_all(&beacon_out).and_then(|_| std::fs::write(&error_path, message))
+    {
+        eprintln!(
+            "[bam-tide] could not write sc-beacon error log {}: {}",
+            error_path.display(),
+            write_err,
+        );
+    }
+}
+
 impl Default for FeatureTagCounts {
     fn default() -> Self {
         Self::empty()
@@ -288,15 +257,12 @@ impl Default for FeatureTagCounts {
 }
 
 fn fasta_feature_type(path: &Path) -> Result<String> {
-    let filename = path
-        .file_name()
-        .and_then(|x| x.to_str())
-        .with_context(|| {
-            format!(
-                "additional feature FASTA has no usable file name: {}",
-                path.display()
-            )
-        })?;
+    let filename = path.file_name().and_then(|x| x.to_str()).with_context(|| {
+        format!(
+            "additional feature FASTA has no usable file name: {}",
+            path.display()
+        )
+    })?;
 
     let name = filename
         .strip_suffix(".fa.gz")

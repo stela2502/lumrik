@@ -1,4 +1,4 @@
-pub const HTML: &str = r#"<!doctype html>
+pub const HTML: &str = r##"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -109,6 +109,11 @@ Live processing status
 </div>
 
 <div class="card">
+    <div class="label">Elapsed</div>
+    <div class="value" id="elapsed">00:00:00</div>
+</div>
+
+<div class="card">
     <div class="label">
         Reads processed
     </div>
@@ -156,6 +161,26 @@ Live processing status
 </div>
 
 <div class="card">
+    <div class="label">Duplicate fraction</div>
+    <div class="value" id="duplicate_pct">0%</div>
+</div>
+
+<div class="card">
+    <div class="label">Unique molecule yield</div>
+    <div class="value" id="unique_yield_pct">0%</div>
+</div>
+
+<div class="card">
+    <div class="label">Nelrune RSS / peak</div>
+    <div class="value" id="process_memory">0 / 0 MiB</div>
+</div>
+
+<div class="card">
+    <div class="label">System memory available</div>
+    <div class="value" id="system_available">0 MiB</div>
+</div>
+
+<div class="card">
     <div class="label">
         Current FASTQ
     </div>
@@ -178,6 +203,22 @@ Live processing status
 </div>
 
 <script>
+let runStartedMs = null;
+let runFinishedMs = null;
+
+function updateElapsed() {
+    if (runStartedMs === null) return;
+    const endMs = runFinishedMs ?? Date.now();
+    const totalSeconds = Math.floor(Math.max(0, endMs - runStartedMs) / 1000);
+    const seconds = totalSeconds % 60;
+    const minutes = Math.floor(totalSeconds / 60) % 60;
+    const hours = Math.floor(totalSeconds / 3600);
+    document.getElementById("elapsed").textContent =
+        String(hours).padStart(2, "0") + ":" +
+        String(minutes).padStart(2, "0") + ":" +
+        String(seconds).padStart(2, "0");
+}
+
 async function updateStatus() {
     try {
         const response =
@@ -196,6 +237,16 @@ async function updateStatus() {
 
         const status =
             await response.json();
+
+        if (runStartedMs === null) {
+            runStartedMs = Number(status.started_unix_ms);
+        }
+        runFinishedMs = status.finished_unix_ms === null
+            ? null
+            : Number(status.finished_unix_ms);
+        updateElapsed();
+        document.querySelector("#elapsed").previousElementSibling.textContent =
+            runFinishedMs === null ? "Elapsed" : "Total elapsed";
 
         document
             .getElementById("stage")
@@ -237,6 +288,19 @@ async function updateStatus() {
             .textContent =
             status.unique_feature.toLocaleString();
 
+        document.getElementById("duplicate_pct").textContent =
+            status.duplicate_pct.toFixed(2) + "%";
+
+        document.getElementById("unique_yield_pct").textContent =
+            status.unique_yield_pct.toFixed(2) + "%";
+
+        document.getElementById("process_memory").textContent =
+            status.process_rss_mib.toFixed(0) + " / " +
+            status.process_peak_rss_mib.toFixed(0) + " MiB";
+
+        document.getElementById("system_available").textContent =
+            status.system_available_mib.toFixed(0) + " MiB";
+
         document
             .getElementById("file")
             .textContent =
@@ -262,14 +326,12 @@ async function updateStatus() {
     }
 }
 
+updateElapsed();
 updateStatus();
-
-setInterval(
-    updateStatus,
-    1000
-);
+setInterval(updateElapsed, 1000);
+setInterval(updateStatus, 1000);
 </script>
 
 </body>
 </html>
-"#;
+"##;

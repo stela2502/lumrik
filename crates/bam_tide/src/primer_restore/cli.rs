@@ -1,7 +1,7 @@
 use clap::Parser;
-use std::path::PathBuf;
-use sc_primer::PrimerCli;
 use read_tag_table::ReadTagTableCli;
+use sc_primer::PrimerCli;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Parser)]
 #[command(

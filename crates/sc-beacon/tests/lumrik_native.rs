@@ -19,17 +19,21 @@ impl SparseIdIndex {
         ]
         .into_iter()
         .collect::<HashMap<_, _>>();
-        let ids = names
-            .iter()
-            .map(|(id, name)| (name.clone(), *id))
-            .collect();
-        Self { names, ids, ordered }
+        let ids = names.iter().map(|(id, name)| (name.clone(), *id)).collect();
+        Self {
+            names,
+            ids,
+            ordered,
+        }
     }
 }
 
 impl FeatureIndex for SparseIdIndex {
     fn feature_name(&self, feature_id: u64) -> &str {
-        self.names.get(&feature_id).map(String::as_str).unwrap_or("NA")
+        self.names
+            .get(&feature_id)
+            .map(String::as_str)
+            .unwrap_or("NA")
     }
 
     fn feature_id(&self, name: &str) -> Option<u64> {

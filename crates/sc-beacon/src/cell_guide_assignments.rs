@@ -1,13 +1,13 @@
+use anyhow::{Context, Result};
+use scdata::FeatureIndex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-use scdata::FeatureIndex;
-use anyhow::{Context, Result};
 
 use crate::caller::{GuideCall, GuideCalls};
 use crate::dataset::GuideDataset;
-use crate::utils::{ percent};
+use crate::utils::percent;
 
 #[derive(Debug, Clone)]
 pub struct GuideEvidence {
@@ -21,10 +21,7 @@ pub struct GuideEvidence {
 }
 
 impl GuideEvidence {
-    fn missing(
-        guide_id: u32,
-        guide_name: String,
-    ) -> Self {
+    fn missing(guide_id: u32, guide_name: String) -> Self {
         Self {
             guide_id,
             guide_name,
@@ -36,10 +33,7 @@ impl GuideEvidence {
         }
     }
 
-    fn from_call(
-        guide_name: String,
-        call: &GuideCall,
-    ) -> Self {
+    fn from_call(guide_name: String, call: &GuideCall) -> Self {
         Self {
             guide_id: call.guide_id,
             guide_name,
@@ -51,7 +45,6 @@ impl GuideEvidence {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct CellGuideAssignment {
@@ -78,21 +71,16 @@ impl CellGuideAssignment {
         self.n_called_guides >= 2
     }
 
-    pub fn has_clear_primary_guide(
-        &self,
-        minimum_odds_ratio: f64,
-    ) -> bool {
+    pub fn has_clear_primary_guide(&self, minimum_odds_ratio: f64) -> bool {
         if self.n_called_guides == 0 {
             return false;
         }
 
-        let minimum_log_odds_gap =
-            minimum_odds_ratio.ln();
+        let minimum_log_odds_gap = minimum_odds_ratio.ln();
 
         self.log_odds_gap >= minimum_log_odds_gap
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct CellGuideAssignments {
@@ -101,11 +89,7 @@ pub struct CellGuideAssignments {
 }
 
 impl CellGuideAssignments {
-    pub fn new<I: FeatureIndex>(
-        index: &I,
-        data: &GuideDataset,
-        calls: &GuideCalls,
-    ) -> Self {
+    pub fn new<I: FeatureIndex>(index: &I, data: &GuideDataset, calls: &GuideCalls) -> Self {
         let call_lookup: HashMap<(u64, u32), &GuideCall> = calls
             .flat
             .iter()
@@ -122,26 +106,13 @@ impl CellGuideAssignments {
             .cell_ids
             .iter()
             .copied()
-            .map(|cell_id| {
-                Self::build_row(
-                    cell_id,
-                    &guide_names,
-                    data,
-                    &call_lookup,
-                )
-            })
+            .map(|cell_id| Self::build_row(cell_id, &guide_names, data, &call_lookup))
             .collect();
 
-        Self {
-            rows,
-            guide_names,
-        }
+        Self { rows, guide_names }
     }
 
-    pub fn primary_guide_summary(
-        &self,
-        minimum_odds_ratio: f64,
-    ) -> String {
+    pub fn primary_guide_summary(&self, minimum_odds_ratio: f64) -> String {
         use std::fmt::Write;
 
         let guide_positive = self
@@ -153,47 +124,29 @@ impl CellGuideAssignments {
         let clear = self
             .rows
             .iter()
-            .filter(|row| {
-                row.has_clear_primary_guide(
-                    minimum_odds_ratio,
-                )
-            })
+            .filter(|row| row.has_clear_primary_guide(minimum_odds_ratio))
             .count();
 
-        let ambiguous =
-            guide_positive - clear;
+        let ambiguous = guide_positive - clear;
 
         let mut out = String::new();
 
         writeln!(out).unwrap();
 
-        writeln!(
-            out,
-            "Primary-guide RNA analysis eligibility"
-        ).unwrap();
+        writeln!(out, "Primary-guide RNA analysis eligibility").unwrap();
 
-        writeln!(
-            out,
-            "--------------------------------------"
-        ).unwrap();
+        writeln!(out, "--------------------------------------").unwrap();
 
-        writeln!(
-            out,
-            "{:<34} {:>8}",
-            "Guide-positive cells:",
-            guide_positive,
-        ).unwrap();
+        writeln!(out, "{:<34} {:>8}", "Guide-positive cells:", guide_positive,).unwrap();
 
         writeln!(
             out,
             "{:<34} {:>8}  ({:>5.1}%)",
-            format!(
-                "Clear primary guide (>{:.0}:1):",
-                minimum_odds_ratio
-            ),
+            format!("Clear primary guide (>{:.0}:1):", minimum_odds_ratio),
             clear,
             percent(clear, guide_positive),
-        ).unwrap();
+        )
+        .unwrap();
 
         writeln!(
             out,
@@ -201,11 +154,11 @@ impl CellGuideAssignments {
             "Excluded as ambiguous:",
             ambiguous,
             percent(ambiguous, guide_positive),
-        ).unwrap();
+        )
+        .unwrap();
 
         out
     }
-
 
     fn build_row(
         cell_id: u64,
@@ -218,22 +171,12 @@ impl CellGuideAssignments {
         let guides: Vec<GuideEvidence> = guide_names
             .iter()
             .enumerate()
-            .map(|(guide_id, guide_name)| {
-                match call_lookup.get(&(cell_id, guide_id as u32)) {
-                    Some(call) => {
-                        GuideEvidence::from_call(
-                            guide_name.clone(),
-                            call,
-                        )
-                    }
-                    None => {
-                        GuideEvidence::missing(
-                            guide_id as u32,
-                            guide_name.clone(),
-                        )
-                    }
-                }
-            })
+            .map(
+                |(guide_id, guide_name)| match call_lookup.get(&(cell_id, guide_id as u32)) {
+                    Some(call) => GuideEvidence::from_call(guide_name.clone(), call),
+                    None => GuideEvidence::missing(guide_id as u32, guide_name.clone()),
+                },
+            )
             .collect();
 
         let called_guides: Vec<String> = guides
@@ -250,14 +193,10 @@ impl CellGuideAssignments {
             _ => "multi",
         };
 
-        let mut ranked: Vec<&GuideEvidence> = guides
-            .iter()
-            .filter(|guide| guide.umi_count > 0)
-            .collect();
+        let mut ranked: Vec<&GuideEvidence> =
+            guides.iter().filter(|guide| guide.umi_count > 0).collect();
 
-        ranked.sort_unstable_by(|a, b| {
-            b.log_odds.total_cmp(&a.log_odds)
-        });
+        ranked.sort_unstable_by(|a, b| b.log_odds.total_cmp(&a.log_odds));
 
         let best = ranked.first().copied();
         let second = ranked.get(1).copied();
@@ -279,9 +218,7 @@ impl CellGuideAssignments {
             .unwrap_or(f64::NEG_INFINITY);
 
         let log_odds_gap = match (best, second) {
-            (Some(best), Some(second)) => {
-                best.log_odds - second.log_odds
-            }
+            (Some(best), Some(second)) => best.log_odds - second.log_odds,
             _ => f64::INFINITY,
         };
 
@@ -300,24 +237,14 @@ impl CellGuideAssignments {
         }
     }
 
-    pub fn multi_guide_gaps(
-        &self,
-    ) -> impl Iterator<Item = (usize, f64)> + '_ {
+    pub fn multi_guide_gaps(&self) -> impl Iterator<Item = (usize, f64)> + '_ {
         self.rows
             .iter()
             .filter(|row| row.is_multi())
-            .map(|row| {
-                (
-                    row.n_called_guides,
-                    row.log_odds_gap,
-                )
-            })
+            .map(|row| (row.n_called_guides, row.log_odds_gap))
     }
 
-    fn write_tsv<W: Write>(
-        &self,
-        writer: &mut W,
-    ) -> Result<()> {
+    fn write_tsv<W: Write>(&self, writer: &mut W) -> Result<()> {
         write!(
             writer,
             concat!(
@@ -337,11 +264,7 @@ impl CellGuideAssignments {
             write!(
                 writer,
                 "\t{}_umi\t{}_posterior\t{}_log_odds\t{}_qvalue\t{}_called",
-                guide_name,
-                guide_name,
-                guide_name,
-                guide_name,
-                guide_name,
+                guide_name, guide_name, guide_name, guide_name, guide_name,
             )?;
         }
 
@@ -366,11 +289,7 @@ impl CellGuideAssignments {
                 write!(
                     writer,
                     "\t{}\t{:.8}\t{:.8}\t{:.8e}\t{}",
-                    guide.umi_count,
-                    guide.posterior,
-                    guide.log_odds,
-                    guide.q_value,
-                    guide.called,
+                    guide.umi_count, guide.posterior, guide.log_odds, guide.q_value, guide.called,
                 )?;
             }
 
@@ -380,21 +299,15 @@ impl CellGuideAssignments {
         Ok(())
     }
 
-    pub fn print_table(
-        &self,
-    ) -> Result<()> {
+    pub fn print_table(&self) -> Result<()> {
         let stdout = std::io::stdout();
         let mut writer = stdout.lock();
         self.write_tsv(&mut writer)
     }
 
-    pub fn write_table(
-        &self,
-        out: &PathBuf,
-    ) -> Result<()> {
+    pub fn write_table(&self, out: &PathBuf) -> Result<()> {
         let path = out.join("cell_guide_assignments.tsv");
-        let file = File::create(&path)
-            .with_context(|| format!("creating {}", path.display()))?;
+        let file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         let mut writer = BufWriter::new(file);
 
         self.write_tsv(&mut writer)?;

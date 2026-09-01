@@ -2,11 +2,7 @@
 ///
 /// `Some(n)` removes exactly `n` arguments after the option.
 /// `None` removes arguments until the next `-` or `--` option.
-pub fn remove_option(
-    args: &mut Vec<String>,
-    option: &str,
-    n: Option<usize>,
-) {
+pub fn remove_option(args: &mut Vec<String>, option: &str, n: Option<usize>) {
     while let Some(pos) = args.iter().position(|arg| arg == option) {
         let end = match n {
             Some(n) => (pos + 1 + n).min(args.len()),

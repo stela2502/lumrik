@@ -1,5 +1,5 @@
-use std::env;
 use int_to_str::int_to_str::IntToStr;
+use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use scdata::{load_mtx_feature_matrix, read_mtx_cell_ids, MexFeatureIndex};
+use scdata::{MexFeatureIndex, load_mtx_feature_matrix, read_mtx_cell_ids};
 
 mod cli;
 
@@ -43,8 +43,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    fs::create_dir_all(&cli.out)
-        .with_context(|| format!("creating {}", cli.out.display()))?;
+    fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
 
     if let Some(threads) = cli.threads {
         rayon::ThreadPoolBuilder::new()

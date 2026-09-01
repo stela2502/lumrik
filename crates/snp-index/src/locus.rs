@@ -28,7 +28,7 @@ impl SnpLocus {
         reference: u8,
         alternates: &[u8],
         name: &str,
-        vcf_id: &str
+        vcf_id: &str,
     ) -> Self {
         Self {
             id,
@@ -114,15 +114,7 @@ mod tests {
 
     #[test]
     fn new_creates_locus() {
-        let locus = SnpLocus::new(
-            7,
-            1,
-            100,
-            b'A',
-            b"G",
-            "chr2:101:A>G",
-            "rs_test_7",
-        );
+        let locus = SnpLocus::new(7, 1, 100, b'A', b"G", "chr2:101:A>G", "rs_test_7");
 
         assert_eq!(locus.id, 7);
         assert_eq!(locus.chr_id, 1);
@@ -206,15 +198,7 @@ mod tests {
 
     #[test]
     fn allele_checks_are_case_insensitive() {
-        let locus = SnpLocus::new(
-            0,
-            0,
-            10,
-            b'C',
-            b"AT",
-            "snp",
-            "rs_snp",
-        );
+        let locus = SnpLocus::new(0, 0, 10, b'C', b"AT", "snp", "rs_snp");
 
         assert!(locus.is_reference_base(b'C'));
         assert!(locus.is_reference_base(b'c'));
@@ -234,6 +218,4 @@ mod tests {
 
         assert_eq!(locus.pos1(), 100);
     }
-
-
 }

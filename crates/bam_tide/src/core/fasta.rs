@@ -1,9 +1,8 @@
-use anyhow::{anyhow, Result, Context};
+use anyhow::{Context, Result, anyhow};
 use std::io::Write;
 
-use gtf_splice_index::{Transcript, Strand};
+use gtf_splice_index::{Strand, Transcript};
 use snp_index::Genome;
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastaRecord {
@@ -13,10 +12,7 @@ pub struct FastaRecord {
 
 impl FastaRecord {
     pub fn new(id: impl Into<String>, seq: Vec<u8>) -> Self {
-        Self {
-            id: id.into(),
-            seq,
-        }
+        Self { id: id.into(), seq }
     }
 
     pub fn revcomp(mut self) -> Self {
@@ -29,11 +25,7 @@ impl FastaRecord {
         self
     }
 
-    pub fn from_transcript(
-        genome: &Genome,
-        tx: &Transcript,
-        chr_name: &str,
-    ) -> Result<Self> {
+    pub fn from_transcript(genome: &Genome, tx: &Transcript, chr_name: &str) -> Result<Self> {
         let tx_name = tx
             .primary_name()
             .ok_or_else(|| anyhow!("transcript has no primary name"))?;
@@ -116,19 +108,15 @@ const DNA_COMPLEMENT: [u8; 256] = {
 #[test]
 fn fasta_record_from_transcript_builds_strand_oriented_mrna() {
     use crate::core::fasta::FastaRecord;
-    use snp_index::Genome;
-    use gtf_splice_index::types::{RefBlock, Strand};
     use gtf_splice_index::Transcript;
+    use gtf_splice_index::types::{RefBlock, Strand};
+    use snp_index::Genome;
 
-    let genome = Genome::new(vec![(
-        "chr1".to_string(),
-        b"AAAACCGTGGCAtttt".to_vec(),
-    )])
-    .unwrap();
+    let genome = Genome::new(vec![("chr1".to_string(), b"AAAACCGTGGCAtttt".to_vec())]).unwrap();
 
     let mut plus = Transcript::new(0, 0, "tx_plus", 0, Strand::Plus);
-    plus.add_exon(RefBlock::new(4, 8));   // CCGT
-    plus.add_exon(RefBlock::new(8, 12));  // GGCA
+    plus.add_exon(RefBlock::new(4, 8)); // CCGT
+    plus.add_exon(RefBlock::new(8, 12)); // GGCA
     plus.finalize();
 
     let plus_record = FastaRecord::from_transcript(&genome, &plus, "chr1").unwrap();
@@ -137,8 +125,8 @@ fn fasta_record_from_transcript_builds_strand_oriented_mrna() {
     assert_eq!(plus_record.seq, b"CCGTGGCA");
 
     let mut minus = Transcript::new(1, 0, "tx_minus", 0, Strand::Minus);
-    minus.add_exon(RefBlock::new(4, 8));   // CCGT
-    minus.add_exon(RefBlock::new(8, 12));  // GGCA
+    minus.add_exon(RefBlock::new(4, 8)); // CCGT
+    minus.add_exon(RefBlock::new(8, 12)); // GGCA
     minus.finalize();
 
     let minus_record = FastaRecord::from_transcript(&genome, &minus, "chr1").unwrap();

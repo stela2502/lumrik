@@ -1,0 +1,16 @@
+[package]
+name = "sc-vdj"
+version = "0.2.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Posterior single-cell V(D)J reconstruction and antigen-receptor locus-state analysis for lumrik/nelrune"
+
+[dependencies]
+anyhow = "1"
+flate2 = "1"
+gtf_splice_index = { path = "../gtf_splice_index" }
+rust-htslib = { path="../rust-htslib" }
+rayon = "1"
+
+[dev-dependencies]
+tempfile = "3"

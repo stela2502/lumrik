@@ -1,16 +1,27 @@
 use anyhow::{Context, Result};
-use bam_tide::illumina_normalizer::{cli::Cli, IlluminaNormalizer};
+use bam_tide::illumina_normalizer::{IlluminaNormalizer, cli::Cli};
 
 fn main() -> Result<()> {
     let cli = Cli::parse_args();
     let r1 = cli.r1.clone();
     let r2 = cli.r2.clone();
 
-    let mut normalizer = IlluminaNormalizer::from_cli(cli)
-        .context("failed to initialize Illumina normalizer")?;
+    let mut normalizer =
+        IlluminaNormalizer::from_cli(cli).context("failed to initialize Illumina normalizer")?;
 
-    std::fs::create_dir_all(normalizer.config().out.parent().unwrap_or_else(|| normalizer.config().out.as_path()))
-        .with_context(|| format!("failed to create output directory: {}", normalizer.config().out.display()))?;
+    std::fs::create_dir_all(
+        normalizer
+            .config()
+            .out
+            .parent()
+            .unwrap_or_else(|| normalizer.config().out.as_path()),
+    )
+    .with_context(|| {
+        format!(
+            "failed to create output directory: {}",
+            normalizer.config().out.display()
+        )
+    })?;
 
     normalizer
         .run(&r1, &r2)

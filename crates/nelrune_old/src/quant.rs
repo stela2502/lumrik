@@ -112,6 +112,7 @@ pub fn write_quantification(
                 &args.outpath,
                 &feature_index,
                 snp.map(|s| &s.index),
+                32,
             )
             .map_err(anyhow::Error::msg)
             .context(
@@ -127,6 +128,7 @@ pub fn write_quantification(
                 &args.outpath,
                 &feature_index,
                 snp.map(|s| &s.index),
+                32,
             )
             .map_err(anyhow::Error::msg)
             .context(

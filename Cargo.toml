@@ -11,7 +11,9 @@ members = [
     "crates/scdata",
     "crates/mapping_info",
     "crates/read-tag-table",
-    "crates/int_to_str", "crates/nelrune", 
+    "crates/int_to_str", 
+    "crates/nelrune", 
+    "crates/sc-vdj",
 ]
 
 [workspace.package]

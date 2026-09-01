@@ -1742,6 +1742,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sc-vdj"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "gtf_splice_index",
+ "rayon",
+ "rust-htslib",
+ "tempfile",
+]
+
+[[package]]
 name = "sc_primer"
 version = "0.2.0"
 dependencies = [

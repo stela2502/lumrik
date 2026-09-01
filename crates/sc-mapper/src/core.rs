@@ -1,17 +1,15 @@
 use anyhow::Result;
 use bam_tide::fastq::FastqRecord;
+use rust_htslib::bam::Header;
 use std::path::PathBuf;
-use rust_htslib::bam::{Header};
 
 use crate::process::SamReadCluster;
-
 
 #[derive(Debug, Clone)]
 pub struct SamRecord {
     pub qname: String,
     pub raw: String,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct MapperLaunch {
@@ -22,11 +20,9 @@ pub struct MapperLaunch {
     pub options: Vec<String>,
 }
 
-
 pub struct StreamingMapper {
     process: Box<dyn MapperProcessLike>,
 }
-
 
 impl StreamingMapper {
     pub fn new(process: Box<dyn MapperProcessLike>) -> Self {
@@ -36,11 +32,7 @@ impl StreamingMapper {
     /// Submit one FASTQ read/pair to the external mapper.
     ///
     /// This does not imply that a mapping result is immediately available.
-    pub fn submit(
-        &mut self,
-        r1: &FastqRecord,
-        r2: Option<&FastqRecord>,
-    ) -> Result<()> {
+    pub fn submit(&mut self, r1: &FastqRecord, r2: Option<&FastqRecord>) -> Result<()> {
         self.process.write_fastq(r1, r2)
     }
 
@@ -94,28 +86,18 @@ impl StreamingMapper {
         self.process.header_loaded()
     }
 
-    
     /// Close mapper input and return every mapping result still outstanding.
     pub fn finish(self) -> Result<Vec<MappingCall>> {
         let clusters = self.process.finish()?;
 
-        Ok(clusters
-            .into_iter()
-            .map(Self::cluster_to_call)
-            .collect())
+        Ok(clusters.into_iter().map(Self::cluster_to_call).collect())
     }
 }
 
 pub trait MapperProcessLike: Send {
-    fn write_fastq(
-        &mut self,
-        r1: &FastqRecord,
-        r2: Option<&FastqRecord>,
-    ) -> Result<()>;
+    fn write_fastq(&mut self, r1: &FastqRecord, r2: Option<&FastqRecord>) -> Result<()>;
 
-    fn next_cluster(
-        &mut self,
-    ) -> Result<Option<SamReadCluster>>;
+    fn next_cluster(&mut self) -> Result<Option<SamReadCluster>>;
 
     fn finish(self: Box<Self>) -> Result<Vec<SamReadCluster>>;
 
@@ -123,12 +105,8 @@ pub trait MapperProcessLike: Send {
 
     fn header_loaded(&mut self) -> bool;
 
-    fn is_running(
-        &mut self,
-    ) -> Result<bool>;
+    fn is_running(&mut self) -> Result<bool>;
 }
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MappingClass {
@@ -143,5 +121,3 @@ pub struct MappingCall {
     pub gene_name: Option<String>,
     pub records: SamReadCluster,
 }
-
-

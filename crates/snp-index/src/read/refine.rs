@@ -202,14 +202,7 @@ mod tests {
 
     impl AlignedRead {
         fn make_read(seq: &[u8], pairs: Vec<(ReadOpKind, u32)>) -> Self {
-            Self::new(
-                0,
-                Strand::Plus,
-                100,
-                seq,
-                Some(vec![30; seq.len()]),
-                &pairs,
-            )
+            Self::new(0, Strand::Plus, 100, seq, Some(vec![30; seq.len()]), &pairs)
         }
     }
 

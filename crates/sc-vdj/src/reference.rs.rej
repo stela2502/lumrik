@@ -1,0 +1,22 @@
+--- crates/sc-vdj/src/reference.rs
++++ crates/sc-vdj/src/reference.rs
+@@ -1,10 +1,15 @@
+-use crate::sequence::{normalize_dna, reverse_complement};
++use crate::sequence::{expand_iupac, normalize_reference_dna, reverse_complement};
+ use crate::types::{Chain, SegmentKind, VdjSegment};
+ 
+-            if tx.strand==Strand::Minus { sequence=reverse_complement(&sequence); } else if tx.strand!=Strand::Plus { bail!("immune transcript {} has unknown strand",entry.transcript_id); }
++            if tx.strand!=Strand::Plus && tx.strand!=Strand::Minus { bail!("immune transcript {} has unknown strand",entry.transcript_id); }
+             if sequence.is_empty(){continue}
+-            segments.push(VdjSegment{name:entry.gene_name.clone(),transcript_id:entry.transcript_id.clone(),gene_id:entry.gene_id.clone(),chain:entry.chain,kind:entry.kind,chr:chr_name.clone(),start,end,strand_minus:tx.strand==Strand::Minus,locus_rank:0,locus_fraction:0.0,distance_to_recombination_center:0,sequence});
++            // Keep one biological identity while providing concrete mapper
++            // variants for constrained IUPAC ambiguity.
++            for mut variant in expand_iupac(&sequence, 8)? {
++                if tx.strand==Strand::Minus { variant=reverse_complement(&variant); }
++                segments.push(VdjSegment{name:entry.gene_name.clone(),transcript_id:entry.transcript_id.clone(),gene_id:entry.gene_id.clone(),chain:entry.chain,kind:entry.kind,chr:chr_name.clone(),start,end,strand_minus:tx.strand==Strand::Minus,locus_rank:0,locus_fraction:0.0,distance_to_recombination_center:0,sequence:variant});
++            }
+         }
+         segments.sort_by(|a,b|(a.chain,a.kind,&a.name,&a.transcript_id).cmp(&(b.chain,b.kind,&b.name,&b.transcript_id)));
+ 
+-fn read_fasta(path:&Path)->Result<HashMap<String,Vec<u8>>> { let reader=BufReader::new(File::open(path).with_context(||format!("opening genome FASTA {}",path.display()))?); let mut genome=HashMap::new(); let mut name:Option<String>=None; let mut seq=Vec::new(); for line in reader.lines(){let line=line?;if let Some(header)=line.strip_prefix('>'){if let Some(old)=name.take(){genome.insert(old,normalize_dna(&seq)?);seq.clear();}name=Some(header.split_whitespace().next().ok_or_else(||anyhow!("empty FASTA header"))?.to_string());}else{seq.extend_from_slice(line.as_bytes());}}if let Some(old)=name{genome.insert(old,normalize_dna(&seq)?);}Ok(genome)}
++fn read_fasta(path:&Path)->Result<HashMap<String,Vec<u8>>> { let reader=BufReader::new(File::open(path).with_context(||format!("opening genome FASTA {}",path.display()))?); let mut genome=HashMap::new(); let mut name:Option<String>=None; let mut seq=Vec::new(); for line in reader.lines(){let line=line?;if let Some(header)=line.strip_prefix('>'){if let Some(old)=name.take(){genome.insert(old,normalize_reference_dna(&seq)?);seq.clear();}name=Some(header.split_whitespace().next().ok_or_else(||anyhow!("empty FASTA header"))?.to_string());}else{seq.extend_from_slice(line.as_bytes());}}if let Some(old)=name{genome.insert(old,normalize_reference_dna(&seq)?);}Ok(genome)}

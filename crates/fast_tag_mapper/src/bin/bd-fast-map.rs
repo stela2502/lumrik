@@ -36,10 +36,7 @@ fn main() {
             let reader = match File::open(&path) {
                 Ok(file) => BufReader::new(file),
                 Err(err) => {
-                    panic!(
-                        "Failed to open input file '{}': {err}",
-                        path.display()
-                    );
+                    panic!("Failed to open input file '{}': {err}", path.display());
                 }
             };
 

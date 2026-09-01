@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::utils::{quantile, percent};
+use crate::utils::{percent, quantile};
 
 use crate::cell_guide_assignments::CellGuideAssignments;
 
@@ -27,10 +27,7 @@ pub struct MultiGuideGapStats {
 }
 
 impl MultiGuideGapStats {
-    pub fn new(
-        n_called_guides: Option<usize>,
-        values: &[f64],
-    ) -> Self {
+    pub fn new(n_called_guides: Option<usize>, values: &[f64]) -> Self {
         assert!(
             !values.is_empty(),
             "cannot calculate statistics from an empty value set"
@@ -56,18 +53,12 @@ impl MultiGuideGapStats {
         }
     }
 
-    pub fn collect(
-        assignments: &CellGuideAssignments,
-    ) -> Vec<Self> {
-        let mut by_multiplicity:
-            BTreeMap<usize, Vec<f64>> =
-            BTreeMap::new();
+    pub fn collect(assignments: &CellGuideAssignments) -> Vec<Self> {
+        let mut by_multiplicity: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
 
         let mut all_multi = Vec::new();
 
-        for (n_called, log_odds_gap)
-            in assignments.multi_guide_gaps()
-        {
+        for (n_called, log_odds_gap) in assignments.multi_guide_gaps() {
             by_multiplicity
                 .entry(n_called)
                 .or_default()
@@ -76,27 +67,14 @@ impl MultiGuideGapStats {
             all_multi.push(log_odds_gap);
         }
 
-        let mut result =
-            Vec::with_capacity(by_multiplicity.len() + 1);
+        let mut result = Vec::with_capacity(by_multiplicity.len() + 1);
 
-        for (n_called_guides, values)
-            in by_multiplicity
-        {
-            result.push(
-                Self::new(
-                    Some(n_called_guides),
-                    &values,
-                )
-            );
+        for (n_called_guides, values) in by_multiplicity {
+            result.push(Self::new(Some(n_called_guides), &values));
         }
 
         if !all_multi.is_empty() {
-            result.push(
-                Self::new(
-                    None,
-                    &all_multi,
-                )
-            );
+            result.push(Self::new(None, &all_multi));
         }
 
         result
@@ -165,10 +143,7 @@ impl MultiGuideGapStats {
 }
 
 impl Display for MultiGuideGapStats {
-    fn fmt(
-        &self,
-        f: &mut Formatter<'_>,
-    ) -> FmtResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
             "{}\t{}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{:.8}",
@@ -186,14 +161,10 @@ impl Display for MultiGuideGapStats {
     }
 }
 
-
 pub trait MultiGuideGapStatsTable {
     fn print_table(&self);
 
-    fn print_assignment_summary(
-        &self,
-        assignments: &CellGuideAssignments,
-    ) -> String;
+    fn print_assignment_summary(&self, assignments: &CellGuideAssignments) -> String;
 
     fn primary_guide_counts(
         &self,
@@ -201,10 +172,7 @@ pub trait MultiGuideGapStatsTable {
         minimum_odds_ratio: f64,
     ) -> String;
 
-    fn write_table(
-        &self,
-        out: &PathBuf,
-    ) -> Result<()>;
+    fn write_table(&self, out: &PathBuf) -> Result<()>;
 }
 
 impl MultiGuideGapStatsTable for [MultiGuideGapStats] {
@@ -217,22 +185,13 @@ impl MultiGuideGapStatsTable for [MultiGuideGapStats] {
         }
     }
 
-    fn write_table(
-        &self,
-        out: &PathBuf,
-    ) -> Result<()> {
-        let path =
-            out.join("multi_guide_log_odds_gap_stats.tsv");
+    fn write_table(&self, out: &PathBuf) -> Result<()> {
+        let path = out.join("multi_guide_log_odds_gap_stats.tsv");
 
-        let file = File::create(&path)
-            .with_context(|| format!("creating {}", path.display()))?;
+        let file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         let mut writer = BufWriter::new(file);
 
-        writeln!(
-            writer,
-            "{}",
-            MultiGuideGapStats::header()
-        )?;
+        writeln!(writer, "{}", MultiGuideGapStats::header())?;
 
         for stat in self {
             writeln!(writer, "{stat}")?;
@@ -246,265 +205,216 @@ impl MultiGuideGapStatsTable for [MultiGuideGapStats] {
     }
 
     fn primary_guide_counts(
-	    &self,
-	    assignments: &CellGuideAssignments,
-	    minimum_odds_ratio: f64,
-	) -> String {
-	    use std::collections::BTreeMap;
-	    use std::fmt::Write;
+        &self,
+        assignments: &CellGuideAssignments,
+        minimum_odds_ratio: f64,
+    ) -> String {
+        use std::collections::BTreeMap;
+        use std::fmt::Write;
 
-	    let minimum_log_odds_gap =
-	        minimum_odds_ratio.ln();
+        let minimum_log_odds_gap = minimum_odds_ratio.ln();
 
-	    let mut best_guide_counts:
-	        BTreeMap<&str, usize> =
-	        BTreeMap::new();
+        let mut best_guide_counts: BTreeMap<&str, usize> = BTreeMap::new();
 
-	    for assignment in &assignments.rows {
-	        if assignment.n_called_guides == 0 {
-	            continue;
-	        }
+        for assignment in &assignments.rows {
+            if assignment.n_called_guides == 0 {
+                continue;
+            }
 
-	        if assignment.log_odds_gap
-	            < minimum_log_odds_gap
-	        {
-	            continue;
-	        }
+            if assignment.log_odds_gap < minimum_log_odds_gap {
+                continue;
+            }
 
-	        *best_guide_counts
-	            .entry(
-	                assignment.best_guide.as_str()
-	            )
-	            .or_default() += 1;
-	    }
+            *best_guide_counts
+                .entry(assignment.best_guide.as_str())
+                .or_default() += 1;
+        }
 
-	    let total_confident: usize =
-	        best_guide_counts
-	            .values()
-	            .sum();
+        let total_confident: usize = best_guide_counts.values().sum();
 
-	    let mut out =
-	        String::new();
+        let mut out = String::new();
 
-	    writeln!(
-	        out,
-	        "\nHigh-confidence primary-guide counts"
-	    ).unwrap();
+        writeln!(out, "\nHigh-confidence primary-guide counts").unwrap();
 
-	    writeln!(
-	        out,
-	        "------------------------------------"
-	    ).unwrap();
+        writeln!(out, "------------------------------------").unwrap();
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}",
-	        "guide",
-	        "cells",
-	    ).unwrap();
+        writeln!(out, "{:<32} {:>8}", "guide", "cells",).unwrap();
 
-	    for (guide, count) in &best_guide_counts {
-	        writeln!(
-	            out,
-	            "{:<32} {:>8}",
-	            guide,
-	            count,
-	        ).unwrap();
-	    }
+        for (guide, count) in &best_guide_counts {
+            writeln!(out, "{:<32} {:>8}", guide, count,).unwrap();
+        }
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}",
-	        "TOTAL",
-	        total_confident,
-	    ).unwrap();
+        writeln!(out, "{:<32} {:>8}", "TOTAL", total_confident,).unwrap();
 
-	    out
-	}
+        out
+    }
 
-	fn print_assignment_summary(
-	    &self,
-	    assignments: &CellGuideAssignments,
-	) -> String {
-	    use std::fmt::Write;
+    fn print_assignment_summary(&self, assignments: &CellGuideAssignments) -> String {
+        use std::fmt::Write;
 
-	    const LOG_ODDS_10: f64 = std::f64::consts::LN_10;
-	    const LOG_ODDS_100: f64 =
-	        2.0 * std::f64::consts::LN_10;
+        const LOG_ODDS_10: f64 = std::f64::consts::LN_10;
+        const LOG_ODDS_100: f64 = 2.0 * std::f64::consts::LN_10;
 
-	    let total = assignments.rows.len();
+        let total = assignments.rows.len();
 
-	    let mut no_guide = 0usize;
-	    let mut single = 0usize;
-	    let mut multi = 0usize;
+        let mut no_guide = 0usize;
+        let mut single = 0usize;
+        let mut multi = 0usize;
 
-	    let mut ambiguous = 0usize;
-	    let mut moderate = 0usize;
-	    let mut clear = 0usize;
+        let mut ambiguous = 0usize;
+        let mut moderate = 0usize;
+        let mut clear = 0usize;
 
-	    let mut min_gap = f64::INFINITY;
+        let mut min_gap = f64::INFINITY;
 
-	    for row in &assignments.rows {
-	        match row.n_called_guides {
-	            0 => {
-	                no_guide += 1;
-	            }
+        for row in &assignments.rows {
+            match row.n_called_guides {
+                0 => {
+                    no_guide += 1;
+                }
 
-	            1 => {
-	                single += 1;
-	            }
+                1 => {
+                    single += 1;
+                }
 
-	            _ => {
-	                multi += 1;
+                _ => {
+                    multi += 1;
 
-	                let gap = row.log_odds_gap;
+                    let gap = row.log_odds_gap;
 
-	                if !gap.is_finite() {
-	                    continue;
-	                }
+                    if !gap.is_finite() {
+                        continue;
+                    }
 
-	                min_gap = min_gap.min(gap);
+                    min_gap = min_gap.min(gap);
 
-	                if gap < LOG_ODDS_10 {
-	                    ambiguous += 1;
-	                } else if gap < LOG_ODDS_100 {
-	                    moderate += 1;
-	                } else {
-	                    clear += 1;
-	                }
-	            }
-	        }
-	    }
+                    if gap < LOG_ODDS_10 {
+                        ambiguous += 1;
+                    } else if gap < LOG_ODDS_100 {
+                        moderate += 1;
+                    } else {
+                        clear += 1;
+                    }
+                }
+            }
+        }
 
-	    let mut out = String::new();
+        let mut out = String::new();
 
-	    writeln!(out).unwrap();
-	    writeln!(out, "Guide assignment summary").unwrap();
-	    writeln!(out, "------------------------").unwrap();
+        writeln!(out).unwrap();
+        writeln!(out, "Guide assignment summary").unwrap();
+        writeln!(out, "------------------------").unwrap();
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}  ({:>5.1}%)",
-	        "Total cells:",
-	        total,
-	        100.0,
-	    )
-	    .unwrap();
+        writeln!(
+            out,
+            "{:<32} {:>8}  ({:>5.1}%)",
+            "Total cells:", total, 100.0,
+        )
+        .unwrap();
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}  ({:>5.1}%)",
-	        "No guide assigned:",
-	        no_guide,
-	        percent(no_guide, total),
-	    )
-	    .unwrap();
+        writeln!(
+            out,
+            "{:<32} {:>8}  ({:>5.1}%)",
+            "No guide assigned:",
+            no_guide,
+            percent(no_guide, total),
+        )
+        .unwrap();
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}  ({:>5.1}%)",
-	        "Single guide called:",
-	        single,
-	        percent(single, total),
-	    )
-	    .unwrap();
+        writeln!(
+            out,
+            "{:<32} {:>8}  ({:>5.1}%)",
+            "Single guide called:",
+            single,
+            percent(single, total),
+        )
+        .unwrap();
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}  ({:>5.1}%)",
-	        "Multiple guides called:",
-	        multi,
-	        percent(multi, total),
-	    )
-	    .unwrap();
+        writeln!(
+            out,
+            "{:<32} {:>8}  ({:>5.1}%)",
+            "Multiple guides called:",
+            multi,
+            percent(multi, total),
+        )
+        .unwrap();
 
-	    if multi == 0 {
-	        return out;
-	    }
+        if multi == 0 {
+            return out;
+        }
 
-	    writeln!(out).unwrap();
-	    writeln!(out, "Multi-guide resolution").unwrap();
-	    writeln!(out, "----------------------").unwrap();
+        writeln!(out).unwrap();
+        writeln!(out, "Multi-guide resolution").unwrap();
+        writeln!(out, "----------------------").unwrap();
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}  ({:>5.1}%)",
-	        "Clear best guide (>100:1):",
-	        clear,
-	        percent(clear, multi),
-	    )
-	    .unwrap();
+        writeln!(
+            out,
+            "{:<32} {:>8}  ({:>5.1}%)",
+            "Clear best guide (>100:1):",
+            clear,
+            percent(clear, multi),
+        )
+        .unwrap();
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}  ({:>5.1}%)",
-	        "Moderate separation (10-100:1):",
-	        moderate,
-	        percent(moderate, multi),
-	    )
-	    .unwrap();
+        writeln!(
+            out,
+            "{:<32} {:>8}  ({:>5.1}%)",
+            "Moderate separation (10-100:1):",
+            moderate,
+            percent(moderate, multi),
+        )
+        .unwrap();
 
-	    writeln!(
-	        out,
-	        "{:<32} {:>8}  ({:>5.1}%)",
-	        "Ambiguous best guide (<10:1):",
-	        ambiguous,
-	        percent(ambiguous, multi),
-	    )
-	    .unwrap();
+        writeln!(
+            out,
+            "{:<32} {:>8}  ({:>5.1}%)",
+            "Ambiguous best guide (<10:1):",
+            ambiguous,
+            percent(ambiguous, multi),
+        )
+        .unwrap();
 
-	    /*
-	     * `self` already contains the distribution statistics.
-	     *
-	     * The ALL row is the combined multi-guide population.
-	     */
-	    if let Some(all) = self
-	        .iter()
-	        .find(|stats| stats.n_called_guides().is_none())
-	    {
-	        writeln!(out).unwrap();
-	        writeln!(out, "Best-vs-second evidence").unwrap();
-	        writeln!(out, "-----------------------").unwrap();
+        /*
+         * `self` already contains the distribution statistics.
+         *
+         * The ALL row is the combined multi-guide population.
+         */
+        if let Some(all) = self.iter().find(|stats| stats.n_called_guides().is_none()) {
+            writeln!(out).unwrap();
+            writeln!(out, "Best-vs-second evidence").unwrap();
+            writeln!(out, "-----------------------").unwrap();
 
-	        writeln!(
-	            out,
-	            "{:<32} {:>12.2}",
-	            "Median log-odds difference:",
-	            all.median(),
-	        )
-	        .unwrap();
+            writeln!(
+                out,
+                "{:<32} {:>12.2}",
+                "Median log-odds difference:",
+                all.median(),
+            )
+            .unwrap();
 
-	        writeln!(
-	            out,
-	            "{:<32} {:>12.2}",
-	            "Q1 log-odds difference:",
-	            all.q1(),
-	        )
-	        .unwrap();
+            writeln!(out, "{:<32} {:>12.2}", "Q1 log-odds difference:", all.q1(),).unwrap();
 
-	        writeln!(
-	            out,
-	            "{:<32} {:>12.2}",
-	            "Smallest log-odds difference:",
-	            all.min(),
-	        )
-	        .unwrap();
-	    }
+            writeln!(
+                out,
+                "{:<32} {:>12.2}",
+                "Smallest log-odds difference:",
+                all.min(),
+            )
+            .unwrap();
+        }
 
-	    if min_gap.is_finite() && min_gap < 700.0 {
-	        writeln!(
-	            out,
-	            "{:<32} {:>12.1}:1",
-	            "Weakest odds advantage:",
-	            min_gap.exp(),
-	        )
-	        .unwrap();
-	    }
+        if min_gap.is_finite() && min_gap < 700.0 {
+            writeln!(
+                out,
+                "{:<32} {:>12.1}:1",
+                "Weakest odds advantage:",
+                min_gap.exp(),
+            )
+            .unwrap();
+        }
 
-	    writeln!(out).unwrap();
+        writeln!(out).unwrap();
 
-	    out
-	}
+        out
+    }
 }
-
-

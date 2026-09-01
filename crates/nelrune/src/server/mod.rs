@@ -53,12 +53,11 @@ pub fn spawn_health_server(
     Ok(HealthServer { handle, addr })
 }
 
-fn handle_connection(
-    mut stream: TcpStream,
-    state: &Arc<RwLock<RunStatus>>,
-) -> Result<()> {
+fn handle_connection(mut stream: TcpStream, state: &Arc<RwLock<RunStatus>>) -> Result<()> {
     let mut buffer = [0u8; 4096];
-    let n = stream.read(&mut buffer).context("reading health-server request")?;
+    let n = stream
+        .read(&mut buffer)
+        .context("reading health-server request")?;
     if n == 0 {
         return Ok(());
     }
@@ -76,12 +75,9 @@ fn handle_connection(
             "text/html; charset=utf-8",
             dashboard::HTML,
         )?,
-        ("GET", "/health") => write_response(
-            &mut stream,
-            "200 OK",
-            "text/plain; charset=utf-8",
-            "OK\n",
-        )?,
+        ("GET", "/health") => {
+            write_response(&mut stream, "200 OK", "text/plain; charset=utf-8", "OK\n")?
+        }
         ("GET", "/status") => {
             let body = status_json(state)?;
             write_response(
@@ -107,12 +103,18 @@ fn status_json(state: &Arc<RwLock<RunStatus>>) -> Result<String> {
         .read()
         .map_err(|_| anyhow::anyhow!("RunStatus lock poisoned"))?;
 
+    let finished_unix_ms = state
+        .finished_unix_ms
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string());
     let input_file = json_optional_string(state.input_file.as_deref());
     let public_url = json_optional_string(state.public_url.as_deref());
 
     Ok(format!(
         concat!(
             "{{",
+            "\"started_unix_ms\":{},",
+            "\"finished_unix_ms\":{},",
             "\"stage\":\"{}\",",
             "\"reads_processed\":{},",
             "\"reads_per_second\":{:.3},",
@@ -120,10 +122,17 @@ fn status_json(state: &Arc<RwLock<RunStatus>>) -> Result<String> {
             "\"duplicates\":{},",
             "\"unique_genomic\":{},",
             "\"unique_feature\":{},",
+            "\"duplicate_pct\":{:.3},",
+            "\"unique_yield_pct\":{:.3},",
+            "\"process_rss_mib\":{:.3},",
+            "\"process_peak_rss_mib\":{:.3},",
+            "\"system_available_mib\":{:.3},",
             "\"input_file\":{},",
             "\"public_url\":{}",
             "}}\n"
         ),
+        state.started_unix_ms,
+        finished_unix_ms,
         escape_json(&state.stage),
         state.reads_processed,
         state.reads_per_second,
@@ -131,6 +140,11 @@ fn status_json(state: &Arc<RwLock<RunStatus>>) -> Result<String> {
         state.duplicates,
         state.unique_genomic,
         state.unique_feature,
+        state.duplicate_pct,
+        state.unique_yield_pct,
+        state.process_rss_mib,
+        state.process_peak_rss_mib,
+        state.system_available_mib,
         input_file,
         public_url,
     ))

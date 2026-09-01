@@ -96,11 +96,7 @@ fn main() -> Result<()> {
 
     let pre = build_stats(&cb_umi_counts, 1, 1);
 
-    let post = build_stats(
-        &cb_umi_counts,
-        cli.min_pair_count,
-        cli.min_cb_umis,
-    );
+    let post = build_stats(&cb_umi_counts, cli.min_pair_count, cli.min_cb_umis);
 
     println!("Input: {}", cli.input.display());
     println!();
@@ -261,8 +257,7 @@ fn summarize(mut values: Vec<u64>) -> Summary {
 }
 
 fn open_maybe_gz(path: &PathBuf) -> Result<Box<dyn Read>> {
-    let file = File::open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
 
     let reader = BufReader::new(file);
 

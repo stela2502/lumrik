@@ -143,7 +143,7 @@ impl Scdata {
         }
     }
 
-    pub fn n_features(&self) -> usize{
+    pub fn n_features(&self) -> usize {
         self.feature_ids_with_data.len()
     }
 
@@ -418,37 +418,23 @@ impl Scdata {
     ///
     /// Useful for workflows such as ambient-background estimation
     /// where both called cells and non-cell droplets are required.
-    pub fn split_by_cells(
-        self,
-        keep: &HashSet<u64>,
-    ) -> (Self, Self) {
-        let mut kept = Self::new(
-            self.num_threads,
-            self.value_type.clone(),
-        );
+    pub fn split_by_cells(self, keep: &HashSet<u64>) -> (Self, Self) {
+        let mut kept = Self::new(self.num_threads, self.value_type.clone());
 
-        let mut rejected = Self::new(
-            self.num_threads,
-            self.value_type,
-        );
+        let mut rejected = Self::new(self.num_threads, self.value_type);
 
-        for (bucket_idx, bucket) in
-            self.data.into_iter().enumerate()
-        {
+        for (bucket_idx, bucket) in self.data.into_iter().enumerate() {
             for (cell_id, cell_data) in bucket {
                 if keep.contains(&cell_id) {
-                    kept.data[bucket_idx]
-                        .insert(cell_id, cell_data);
+                    kept.data[bucket_idx].insert(cell_id, cell_data);
                 } else {
-                    rejected.data[bucket_idx]
-                        .insert(cell_id, cell_data);
+                    rejected.data[bucket_idx].insert(cell_id, cell_data);
                 }
             }
         }
 
         (kept, rejected)
     }
-
 
     /// Prepare the object for export.
     ///
@@ -516,7 +502,7 @@ impl Scdata {
         self.total_feature_data_entries = 0;
         self.export_cell_ids.clear();
     }
-    
+
     /// quickly compare two Scdata objects.
     pub fn compare(&self, other: &Self, label: &str) -> Result<(), String> {
         if self.export_cell_ids != other.export_cell_ids {

@@ -1,7 +1,9 @@
 use pretty_assertions::assert_eq;
 use read_tag_table::ReadTagRecord;
 
-use sc_primer::{BdCellVersion, Grammar, Orientation, Chemistry, PrimerDetector, RhapsodyWhitelist, single_cell_systems::CellIdGenerator};
+use sc_primer::{
+    BdCellVersion, Chemistry, Grammar, Orientation, PrimerDetector, RhapsodyWhitelist,
+};
 
 struct TestData;
 
@@ -31,11 +33,7 @@ impl TestData {
     }
 
     fn tenx_3p_v3_no_polyt_grammar(name: &str) -> Grammar {
-        Grammar::parse(
-            name,
-            "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12",
-        )
-        .unwrap()
+        Grammar::parse(name, "FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12").unwrap()
     }
 
     fn tenx_cell() -> &'static [u8] {
@@ -117,9 +115,7 @@ impl TenxOntMultimerTest {
         v
     }
 
-    fn build_read(
-        grammar: &Grammar,
-    ) -> BuiltRead {
+    fn build_read(grammar: &Grammar) -> BuiltRead {
         let mut out = BuiltRead {
             seq: Vec::new(),
             qual: Vec::new(),
@@ -137,7 +133,8 @@ impl TenxOntMultimerTest {
             let mut primer = grammar.synthesize(&cell, &umi).unwrap();
             primer.extend_from_slice(&insert);
 
-            out.qual.extend(std::iter::repeat_n(monomer_quality, primer.len()));
+            out.qual
+                .extend(std::iter::repeat_n(monomer_quality, primer.len()));
             out.seq.extend_from_slice(&primer);
 
             out.cells.push(cell);
@@ -194,21 +191,12 @@ impl TenxOntMultimerTest {
                 std::str::from_utf8(&built.inserts[index]),
             );
 
-            assert_eq!(
-                cell.qual,
-                expected_quality,
-                "{index}: cell qual mismatch"
-            );
+            assert_eq!(cell.qual, expected_quality, "{index}: cell qual mismatch");
         }
     }
 }
 
-pub fn bench<F: FnMut()>(
-    name: &str,
-    iterations: usize,
-    hits_per_op: usize,
-    mut f: F,
-) {
+pub fn bench<F: FnMut()>(name: &str, iterations: usize, hits_per_op: usize, mut f: F) {
     use std::time::Instant;
 
     let start = Instant::now();
@@ -219,17 +207,13 @@ pub fn bench<F: FnMut()>(
 
     let elapsed = start.elapsed();
 
-    let us_per_op =
-        elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
+    let us_per_op = elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64;
 
-    let us_per_hit =
-        us_per_op / hits_per_op as f64;
+    let us_per_hit = us_per_op / hits_per_op as f64;
 
     eprintln!(
         "{:<40} {:>10.3} µs/op {:>10.3} µs/hit",
-        name,
-        us_per_op,
-        us_per_hit,
+        name, us_per_op, us_per_hit,
     );
 }
 
@@ -581,10 +565,7 @@ fn stress_detect_all_bd_v2_384_1000x() {
 #[test]
 #[ignore = "benchmark"]
 fn benchmark_detect_all_tenx_multimer() {
-    let detector = PrimerDetector::from_chemistry(
-        Chemistry::TenxThreePrimeV3,
-    )
-    .unwrap();
+    let detector = PrimerDetector::from_chemistry(Chemistry::TenxThreePrimeV3).unwrap();
 
     let grammar = detector.grammar().clone();
 
@@ -594,17 +575,14 @@ fn benchmark_detect_all_tenx_multimer() {
     assert_eq!(hits.len(), 10);
 
     bench("10x detect_all multimer", 100_000, 10, || {
-        std::hint::black_box(
-            detector.detect_all(&built.seq, &built.qual).unwrap()
-        );
+        std::hint::black_box(detector.detect_all(&built.seq, &built.qual).unwrap());
     });
 }
 
 #[test]
 #[ignore = "benchmark"]
 fn benchmark_detect_all_bd_v2_384_multimer() {
-    let detector =
-        PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
+    let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
 
     let mut seq = Vec::new();
     let mut qual = Vec::new();
@@ -614,34 +592,25 @@ fn benchmark_detect_all_bd_v2_384_multimer() {
     for i in 0..100 {
         let cell_id = (i + 1) as u64;
 
-        let (c1, c2, c3) = wl
-            .cell_id_to_parts_ids(cell_id)
-            .expect("invalid cell id");
+        let (c1, c2, c3) = wl.cell_id_to_parts_ids(cell_id).expect("invalid cell id");
 
         let cell = wl.create_cell_cassette(c1, c2, c3);
 
         let umi = detector.grammar().umi_from_u64(i as u64);
 
-        let mut primer = detector
-            .grammar()
-            .synthesize(&cell, &umi)
-            .unwrap();
+        let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
 
-        primer.extend_from_slice(
-            b"GATCGATCGATCGATCGATCGATCGATCG",
-        );
+        primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
 
         seq.extend_from_slice(&primer);
         qual.extend(std::iter::repeat_n(b'I', primer.len()));
-    };
+    }
 
     let hits = detector.detect_all(&seq, &qual).unwrap();
     assert_eq!(hits.len(), 100);
 
     bench("BD detect_all multimer", 100_000, 100, || {
-        std::hint::black_box(
-            detector.detect_all(&seq, &qual).unwrap()
-        );
+        std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
     });
 }
 
@@ -670,9 +639,7 @@ fn benchmark_detect_all_tenx_multimer_fuzzy() {
         100_000,
         hits_per_read,
         || {
-            std::hint::black_box(
-                detector.detect_all(&built.seq, &built.qual).unwrap()
-            );
+            std::hint::black_box(detector.detect_all(&built.seq, &built.qual).unwrap());
         },
     );
 }
@@ -702,10 +669,7 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
 
         let umi = detector.grammar().umi_from_u64(i as u64);
 
-        let mut primer = detector
-            .grammar()
-            .synthesize(&cell, &umi)
-            .unwrap();
+        let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
 
         primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
 
@@ -721,9 +685,7 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
         100_000,
         hits_per_read,
         || {
-            std::hint::black_box(
-                detector.detect_all(&seq, &qual).unwrap()
-            );
+            std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
         },
     );
 }
@@ -751,7 +713,11 @@ fn bd_v2_384_detect_all_does_not_repeat_search_window_hits() {
 
     let hits = detector.detect_all(&seq, &qual).unwrap();
 
-    assert_eq!(hits.len(), 2, "SEARCH shifts must not duplicate a physical primer");
+    assert_eq!(
+        hits.len(),
+        2,
+        "SEARCH shifts must not duplicate a physical primer"
+    );
     assert_eq!(hits[0].bd_cell_id, Some(1));
     assert_eq!(hits[1].bd_cell_id, Some(2));
 

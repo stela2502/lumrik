@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use crate::process::{MapperRecord, SamReadCluster};
 
@@ -44,13 +44,10 @@ impl SamClusterBuffer {
 
         let read_id = rec.clean_id();
 
-        let cluster = self
-            .active
-            .entry(read_id)
-            .or_insert_with(|| ActiveCluster {
-                records: Vec::new(),
-                last_seen_tick: self.tick,
-            });
+        let cluster = self.active.entry(read_id).or_insert_with(|| ActiveCluster {
+            records: Vec::new(),
+            last_seen_tick: self.tick,
+        });
 
         cluster.records.push(rec);
         cluster.last_seen_tick = self.tick;

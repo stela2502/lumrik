@@ -86,7 +86,6 @@ impl ReadTagTableCli {
         ReadTagTable::from_path_or_config(&config)
     }
 
-
     fn config_for_path(&self, path: PathBuf) -> ReadTagTableConfig {
         ReadTagTableConfig {
             path,
@@ -160,7 +159,7 @@ impl ReadTagRecord {
     }
 
     pub fn extend_fastq_qnames(&self, q1: &str, q2: &str) -> (String, String) {
-        ( self.extend_qname( q1 ), self.extend_qname( q2 ) )
+        (self.extend_qname(q1), self.extend_qname(q2))
     }
 
     /// Reconstructs a `ReadTagRecord` from a QNAME previously produced by
@@ -195,9 +194,7 @@ impl ReadTagRecord {
         // one empty field must remain.
         match (fields.next(), fields.next()) {
             (Some(""), None) => {}
-            _ => anyhow::bail!(
-                "QNAME contains malformed ReadTagRecord metadata: '{qname}'"
-            ),
+            _ => anyhow::bail!("QNAME contains malformed ReadTagRecord metadata: '{qname}'"),
         }
 
         Ok(Self {
@@ -311,10 +308,7 @@ impl ReadTagTable {
         }
     }
 
-    pub fn remove(
-        &mut self,
-        read_id: &str,
-    ) -> Option<ReadTagRecord> {
+    pub fn remove(&mut self, read_id: &str) -> Option<ReadTagRecord> {
         self.records.remove(read_id)
     }
 
@@ -1102,8 +1096,7 @@ mod tests {
         assert!(text.contains("read1\torig1\t\tCELL1\tIIII\tUMI1\tJJJJ\tok"));
     }
 
-
-        #[test]
+    #[test]
     fn qname_round_trip_preserves_read_tag_record() {
         let record = ReadTagRecord {
             read_id: "read123_mol0".to_string(),
@@ -1114,42 +1107,21 @@ mod tests {
             umi_qual: b"JJJJJJ".to_vec(),
         };
 
-        let qname =
-            record.extend_qname(&record.read_id);
+        let qname = record.extend_qname(&record.read_id);
 
-        let restored =
-            ReadTagRecord::from_qname(&qname)
-                .unwrap();
+        let restored = ReadTagRecord::from_qname(&qname).unwrap();
 
-        assert_eq!(
-            restored.read_id,
-            record.read_id
-        );
+        assert_eq!(restored.read_id, record.read_id);
 
-        assert_eq!(
-            restored.cell_seq,
-            record.cell_seq
-        );
+        assert_eq!(restored.cell_seq, record.cell_seq);
 
-        assert_eq!(
-            restored.cell_qual,
-            record.cell_qual
-        );
+        assert_eq!(restored.cell_qual, record.cell_qual);
 
-        assert_eq!(
-            restored.umi_seq,
-            record.umi_seq
-        );
+        assert_eq!(restored.umi_seq, record.umi_seq);
 
-        assert_eq!(
-            restored.umi_qual,
-            record.umi_qual
-        );
+        assert_eq!(restored.umi_qual, record.umi_qual);
 
-        assert_eq!(
-            restored.original_read_id,
-            None
-        );
+        assert_eq!(restored.original_read_id, None);
     }
 
     #[test]
@@ -1163,54 +1135,34 @@ mod tests {
             umi_qual: b"|JJ|".to_vec(),
         };
 
-        let qname =
-            record.extend_qname(&record.read_id);
+        let qname = record.extend_qname(&record.read_id);
 
-        assert!(
-            !qname.chars().any(char::is_whitespace)
-        );
+        assert!(!qname.chars().any(char::is_whitespace));
 
-        let restored =
-            ReadTagRecord::from_qname(&qname)
-                .unwrap();
+        let restored = ReadTagRecord::from_qname(&qname).unwrap();
 
-        assert_eq!(
-            restored.cell_qual,
-            record.cell_qual
-        );
+        assert_eq!(restored.cell_qual, record.cell_qual);
 
-        assert_eq!(
-            restored.umi_qual,
-            record.umi_qual
-        );
+        assert_eq!(restored.umi_qual, record.umi_qual);
     }
 
     #[test]
     fn from_qname_rejects_missing_metadata() {
-        let result =
-            ReadTagRecord::from_qname(
-                "read123"
-            );
+        let result = ReadTagRecord::from_qname("read123");
 
         assert!(result.is_err());
     }
 
     #[test]
     fn from_qname_rejects_truncated_metadata() {
-        let result =
-            ReadTagRecord::from_qname(
-                "read123|41434754|49494949|"
-            );
+        let result = ReadTagRecord::from_qname("read123|41434754|49494949|");
 
         assert!(result.is_err());
     }
 
     #[test]
     fn from_qname_rejects_invalid_hex() {
-        let result =
-            ReadTagRecord::from_qname(
-                "read123|XX|4949|5447|4a4a|"
-            );
+        let result = ReadTagRecord::from_qname("read123|XX|4949|5447|4a4a|");
 
         assert!(result.is_err());
     }

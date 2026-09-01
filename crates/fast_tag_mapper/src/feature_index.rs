@@ -36,7 +36,6 @@ impl<'a> FastTagFeatureIndex<'a> {
             .get(&feature_id)
             .and_then(|idx| self.mapper.feature(*idx))
     }
-    
 }
 
 impl FeatureIndex for FastTagFeatureIndex<'_> {
@@ -55,12 +54,10 @@ impl FeatureIndex for FastTagFeatureIndex<'_> {
     }
 
     fn to_10x_feature_line(&self, feature_id: u64) -> String {
-        let feature = self
-            .feature_by_id(feature_id)
-            .unwrap_or_else(|| panic!("Feature id {feature_id} was not found in the feature index!"));
+        let feature = self.feature_by_id(feature_id).unwrap_or_else(|| {
+            panic!("Feature id {feature_id} was not found in the feature index!")
+        });
 
         format!("{}	{}	{}", feature.name, feature.name, feature.feature_type)
     }
-
-
 }

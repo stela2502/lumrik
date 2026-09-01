@@ -4,18 +4,11 @@ use anyhow::Result;
 use mapping_info::MappingInfo;
 use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
 
-use crate::{
-    AmbientModel,
-    BackgroundConfig,
-    CallConfig,
-    CellGuideAssignments,
-    FitConfig,
-    GuideCalls,
-    GuideDataset,
-    MultiGuideGapStats,
-    BeaconResult,
-};
 use crate::model::fit_mixture;
+use crate::{
+    AmbientModel, BackgroundConfig, BeaconResult, CallConfig, CellGuideAssignments, FitConfig,
+    GuideCalls, GuideDataset, MultiGuideGapStats,
+};
 
 /// Run Beacon directly on lumrik-native sparse data.
 ///
@@ -39,11 +32,7 @@ pub fn run_from_scdata<I>(
 where
     I: FeatureIndex,
 {
-    let background = GuideDataset::from_scdata(
-        background,
-        feature_index,
-        cell_barcode_len,
-    )?;
+    let background = GuideDataset::from_scdata(background, feature_index, cell_barcode_len)?;
 
     let filtered = GuideDataset::from_scdata_with_cells(
         filtered,
@@ -56,20 +45,13 @@ where
     let fitted = fit_mixture(&filtered, &ambient, fit_config)?;
     let calls = GuideCalls::from_model(&fitted, call_config);
 
-    let assignments = CellGuideAssignments::new(
-        feature_index,
-        &filtered,
-        &calls,
-    );
+    let assignments = CellGuideAssignments::new(feature_index, &filtered, &calls);
 
     let multi_gap_stats = MultiGuideGapStats::collect(&assignments);
 
     // Native posterior matrix: same cell ids and real feature ids as the input
     // Scdata. Missing cell/feature combinations are implicit zeros.
-    let mut posteriors = Scdata::new(
-        rayon::current_num_threads().max(1),
-        MatrixValueType::Real,
-    );
+    let mut posteriors = Scdata::new(rayon::current_num_threads().max(1), MatrixValueType::Real);
     let mut report = MappingInfo::new(None, 0.0, 0);
 
     for call in &calls.flat {
@@ -86,11 +68,11 @@ where
     }
 
     Ok(BeaconResult {
-            ambient,
-            fitted,
-            calls,
-            assignments,
-            multi_gap_stats,
-            posteriors,
-        })
+        ambient,
+        fitted,
+        calls,
+        assignments,
+        multi_gap_stats,
+        posteriors,
+    })
 }

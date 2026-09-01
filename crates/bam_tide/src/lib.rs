@@ -27,5 +27,5 @@ pub mod primer_restore;
 pub mod multi_subset_bam;
 pub mod transcriptome_to_genome;
 
-pub use results::QuantData;
 pub use feature_tag_counts::{AdditionalFeatureSource, FeatureTagCounts};
+pub use results::QuantData;

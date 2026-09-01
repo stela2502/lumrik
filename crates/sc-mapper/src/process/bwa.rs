@@ -1,12 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::core::{MapperLaunch, StreamingMapper};
-use crate::process::{
-    check_binary,
-    has_option,
-    remove_option,
-    MapperProcess,
-};
+use crate::process::{MapperProcess, check_binary, remove_option};
 use crate::traits::ExternalMapper;
 
 #[derive(Debug, Clone)]
@@ -48,21 +43,13 @@ impl ExternalMapper for Bwa {
         ]);
 
         let process = if self.launch.paired {
-            MapperProcess::spawn_paired_fifo(
-                &self.launch.mapper_bin,
-                &args,
-                None,
-            )
-            .context("failed to spawn BWA with paired FIFO input")?
+            MapperProcess::spawn_paired_fifo(&self.launch.mapper_bin, &args, None)
+                .context("failed to spawn BWA with paired FIFO input")?
         } else {
             args.push("-".into());
 
-            MapperProcess::spawn_single_stdin(
-                &self.launch.mapper_bin,
-                &args,
-                None,
-            )
-            .context("failed to spawn BWA with single-end stdin input")?
+            MapperProcess::spawn_single_stdin(&self.launch.mapper_bin, &args, None)
+                .context("failed to spawn BWA with single-end stdin input")?
         };
 
         Ok(StreamingMapper::new(Box::new(process)))

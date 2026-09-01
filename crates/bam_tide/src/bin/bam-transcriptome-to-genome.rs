@@ -93,14 +93,13 @@ fn run(cli: Cli) -> Result<()> {
         .set_threads(cli.threads)
         .with_context(|| format!("setting {} reader threads", cli.threads))?;
 
-    let mut mapper = BamTranscriptomeMapper::new(&cli.gtf, &cli.genome)
-        .with_context(|| {
-            format!(
-                "building transcriptome-to-genome mapper from annotation {} and genome {}",
-                cli.gtf.display(),
-                cli.genome.display()
-            )
-        })?;
+    let mut mapper = BamTranscriptomeMapper::new(&cli.gtf, &cli.genome).with_context(|| {
+        format!(
+            "building transcriptome-to-genome mapper from annotation {} and genome {}",
+            cli.gtf.display(),
+            cli.genome.display()
+        )
+    })?;
 
     let out_header = mapper
         .make_header(reader.header())
@@ -119,9 +118,8 @@ fn run(cli: Cli) -> Result<()> {
     let old_header = reader.header().clone();
 
     for record in reader.records() {
-        let mut record = record.with_context(|| {
-            format!("reading record from input {}", cli.bam.display())
-        })?;
+        let mut record =
+            record.with_context(|| format!("reading record from input {}", cli.bam.display()))?;
 
         let write_record = mapper
             .map_record_in_place(&mut record, &old_header)

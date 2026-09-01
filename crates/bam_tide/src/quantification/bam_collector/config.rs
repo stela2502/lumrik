@@ -8,10 +8,7 @@ use crate::quantification::cli::QuantMode;
 
 #[derive(Debug, Clone, Args)]
 pub struct BamCollectorConfig {
-    #[arg(
-        long,
-        help = "Splice index used for gene/transcript assignment."
-    )]
+    #[arg(long, help = "Splice index used for gene/transcript assignment.")]
     pub index: PathBuf,
 
     #[arg(
@@ -20,10 +17,7 @@ pub struct BamCollectorConfig {
     )]
     pub genome: Option<PathBuf>,
 
-    #[arg(
-        long,
-        help = "Optional VCF used for SNP quantification."
-    )]
+    #[arg(long, help = "Optional VCF used for SNP quantification.")]
     pub vcf: Option<PathBuf>,
 
     #[arg(
@@ -41,10 +35,7 @@ pub struct BamCollectorConfig {
     )]
     pub min_mapq: u8,
 
-    #[arg(
-        long,
-        help = "Optional maximum number of accepted reads to process."
-    )]
+    #[arg(long, help = "Optional maximum number of accepted reads to process.")]
     pub max_reads: Option<usize>,
 
     #[arg(
@@ -89,11 +80,7 @@ pub struct BamCollectorConfig {
     )]
     pub max_3p_overhang_bp: u32,
 
-    #[arg(
-        long,
-        default_value_t = 0,
-        help = "Maximum allowed intronic gap size."
-    )]
+    #[arg(long, default_value_t = 0, help = "Maximum allowed intronic gap size.")]
     pub allowed_intronic_gap_size: u32,
 
     #[arg(
@@ -103,9 +90,6 @@ pub struct BamCollectorConfig {
     )]
     pub snp_min_anchor: u8,
 
-    #[arg(
-        long,
-        help = "Optional BAM output for a streamed mapper input."
-    )]
+    #[arg(long, help = "Optional BAM output for a streamed mapper input.")]
     pub bam_out: Option<PathBuf>,
 }

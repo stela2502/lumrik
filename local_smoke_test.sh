@@ -25,7 +25,7 @@ R2=(
 # ------------------------------------------------------------
 
 THREADS="${THREADS:-16}"
-MAX_READS="${MAX_READS:-100000}"
+MAX_READS="${MAX_READS:-5000000}"
 
 # Prefer the freshly built local binary.
 if [[ -x "./target/x86_64-unknown-linux-musl/release/nelrune" ]]; then
@@ -141,7 +141,7 @@ printf '  %s\n' "${R2[@]}"
 
 echo
 printf 'Input pairs: %d\n' "${#R1[@]}"
-#printf 'Raw-read limit per pair: %s\n' "$MAX_READS"
+printf 'Raw-read limit per pair: %s\n' "$MAX_READS"
 printf 'Maximum raw pairs total: %d\n' "$(( MAX_READS * ${#R1[@]} ))"
 printf 'Threads: %s\n' "$THREADS"
 printf 'Output: %s\n' "$OUT"
@@ -170,6 +170,23 @@ if (( ${#ADDITIONAL_FEATURES[@]} > 0 )); then
     )
 fi
 
+if (( ${#ADDITIONAL_FEATURES[@]} > 0 )); then
+    OPTIONAL_ARGS+=(
+        --additional-features
+        "${ADDITIONAL_FEATURES[@]}"
+    )
+fi
+
+if (( MAX_READS > 0 )); then
+    OPTIONAL_ARGS+=(
+        --max-reads "$MAX_READS"
+    )
+    OPTIONAL_ARGS+=(
+        --min-cell-counts 10
+    )
+
+fi
+
 NELRUNE_ARGS=(
     --r1 "${R1[@]}"
     --r2 "${R2[@]}"
@@ -179,14 +196,13 @@ NELRUNE_ARGS=(
     --mapper star
     --mapper-index "$STAR_INDEX"
     --mapper-threads "$THREADS"
-
     --threads "$THREADS"
 
     --index "$SPLICE_INDEX"
     --outpath "$OUT"
-)
 
-NELRUNE_ARGS+=("${OPTIONAL_ARGS[@]}")
+    "${OPTIONAL_ARGS[@]}"
+)
 
 mkdir -p "$OUT"
 

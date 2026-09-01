@@ -35,8 +35,7 @@ pub struct CellData {
 
 impl<'a> IntoIterator for &'a CellData {
     type Item = (&'a u64, &'a f32);
-    type IntoIter =
-        std::collections::hash_map::Iter<'a, u64, f32>;
+    type IntoIter = std::collections::hash_map::Iter<'a, u64, f32>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.total_reads.iter()

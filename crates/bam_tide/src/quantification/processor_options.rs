@@ -1,5 +1,5 @@
-use crate::quantification::cli::{QuantCli};
 use crate::quantification::QuantMode;
+use crate::quantification::cli::QuantCli;
 
 #[derive(Debug, Clone)]
 pub struct ProcessorOptions {

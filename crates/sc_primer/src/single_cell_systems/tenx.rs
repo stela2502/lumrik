@@ -8,26 +8,19 @@ use crate::error::{PrimerError, PrimerResult};
 use crate::single_cell_systems::models::Range;
 use crate::single_cell_systems::CellIdGenerator;
 
-static TENX_3M_FEBRUARY_2018: &[u8] =
-    include_bytes!("whitelists/3M-february-2018.txt.gz");
+static TENX_3M_FEBRUARY_2018: &[u8] = include_bytes!("whitelists/3M-february-2018.txt.gz");
 
 #[allow(unused)]
-static TENX_3M_FEBRUARY_2018_TRU: &[u8] =
-    include_bytes!("whitelists/3M-february-2018_TRU.txt.gz");
+static TENX_3M_FEBRUARY_2018_TRU: &[u8] = include_bytes!("whitelists/3M-february-2018_TRU.txt.gz");
 
 static TENX_3M_3PGEX_MAY_2023_TRU: &[u8] =
     include_bytes!("whitelists/3M-3pgex-may-2023_TRU.txt.gz");
 
-static TENX_3M_5PGEX_JAN_2023: &[u8] =
-    include_bytes!("whitelists/3M-5pgex-jan-2023.txt.gz");
+static TENX_3M_5PGEX_JAN_2023: &[u8] = include_bytes!("whitelists/3M-5pgex-jan-2023.txt.gz");
 
+static TENX_737K_APRIL_2014_RC: &[u8] = include_bytes!("whitelists/737k-april-2014_rc.txt.gz");
 
-static TENX_737K_APRIL_2014_RC: &[u8] =
-    include_bytes!("whitelists/737k-april-2014_rc.txt.gz");
-
-static TENX_737K_ARC_V1: &[u8] =
-    include_bytes!("whitelists/737K-arc-v1.txt.gz");
-
+static TENX_737K_ARC_V1: &[u8] = include_bytes!("whitelists/737K-arc-v1.txt.gz");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TenxVersion {
@@ -76,7 +69,7 @@ impl TenxVersion {
 
             "3pv4" | "3p-v4" | "chromium-single-cell-3-prime-v4" => Ok(Self::ThreePrimeV4),
 
-            "5p" |  "chromium-single-cell-5-prime" => Ok(Self::FivePrime),
+            "5p" | "chromium-single-cell-5-prime" => Ok(Self::FivePrime),
 
             "arc" | "arc-v1" | "chromium-single-cell-multiome-atac-gene-expression" => {
                 Ok(Self::MultiomeArcV1)
@@ -192,7 +185,11 @@ impl TenxWhitelist {
             .map(|(idx, seq)| (seq, idx as u64))
             .collect();
 
-        Self { version, cells, exact }
+        Self {
+            version,
+            cells,
+            exact,
+        }
     }
 
     #[inline]
@@ -333,8 +330,7 @@ impl CellIdGenerator for TenxWhitelist {
     }
 
     fn cell_index_for_seq(&self, cell_seq: &[u8]) -> Option<u64> {
-        Self::encode_cell(cell_seq)
-            .and_then(|encoded| self.exact.get(&encoded).copied())
+        Self::encode_cell(cell_seq).and_then(|encoded| self.exact.get(&encoded).copied())
     }
 }
 

@@ -1,21 +1,18 @@
 //cli.rs
 // src/quantification/cli.rs
 
-use std::str::FromStr;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::{Parser, ValueEnum};
 
 use read_tag_table::ReadTagTableCli;
-
-
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum QuantMode {
     Gene,
     Transcript,
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub struct BamAuxTag(pub [u8; 2]);
@@ -41,7 +38,6 @@ impl FromStr for BamAuxTag {
         Ok(Self([bytes[0], bytes[1]]))
     }
 }
-
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -156,5 +152,4 @@ pub struct QuantCli {
     ///   XM (custom)
     #[arg(long, default_value = "UB")]
     pub umi_tag: BamAuxTag,
-
 }

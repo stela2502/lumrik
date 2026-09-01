@@ -337,7 +337,6 @@ impl SpliceIndex {
                 .with_context(|| format!("load splice index {}", path.display()));
         }
 
-
         let is_gz = path
             .extension()
             .and_then(|s| s.to_str())
@@ -480,12 +479,10 @@ impl SpliceIndex {
             .get(transcript_name)
             .ok_or_else(|| format!("unknown transcript name {transcript_name:?}"))?;
 
-        self.transcripts
-            .get(*tx_id)
-            .ok_or_else(|| format!("transcript id {tx_id} for {transcript_name:?} is out of bounds"))
+        self.transcripts.get(*tx_id).ok_or_else(|| {
+            format!("transcript id {tx_id} for {transcript_name:?} is out of bounds")
+        })
     }
-
-
 
     pub fn transcript_name(&self, tx_id: TranscriptId) -> Option<&str> {
         self.transcripts.get(tx_id).and_then(|t| t.primary_name())
@@ -595,11 +592,12 @@ impl SpliceIndex {
             let (start, end) = tx.finalize();
             self.tx_span_start.push(start);
             self.tx_span_end.push(end);
-            transcript_by_name.insert( 
-                tx.primary_name()
-                .expect("Lib problems - transcript has no primary name!")
-                .to_string(), tx.id 
-            );
+            // Every transcript carries its primary display name plus stable-ID/alias
+            // names collected while parsing.  Index all of them: callers may have
+            // either the annotation's transcript_name or its transcript_id.
+            for name in &tx.names {
+                transcript_by_name.entry(name.clone()).or_insert(tx.id);
+            }
         }
 
         // Link transcripts into genes
@@ -615,7 +613,7 @@ impl SpliceIndex {
         self.transcript_by_name = transcript_by_name;
 
         self.chr_to_id = Self::build_chr_map(&self.chr_names);
-        
+
         Ok(self)
     }
 
@@ -661,10 +659,9 @@ impl SpliceIndex {
 
             // Binary search:
             // find first transcript where start >= end0
-            let cutoff = Self::partition_point(
-                transcripts_in_bin,
-                |&tx_id| self.tx_span_start[tx_id] < end0,
-            );
+            let cutoff = Self::partition_point(transcripts_in_bin, |&tx_id| {
+                self.tx_span_start[tx_id] < end0
+            });
 
             // Only transcripts with start < end0 can overlap
             for &tx_id in &transcripts_in_bin[..cutoff] {
@@ -1153,11 +1150,39 @@ mod tests {
 
     use crate::model::types::{GeneId, TranscriptId};
     use std::collections::{HashMap, HashSet};
+    use std::io::Cursor;
     use std::path::PathBuf;
 
     // If you already have a crate-local Result/Error type, keep using it.
     // Otherwise you can switch these tests to `anyhow::Result<()>` easily.
     type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+    #[test]
+    fn transcript_lookup_accepts_stable_id_and_display_name() {
+        let gtf = concat!(
+            "chr1\tsrc\texon\t101\t150\t.\t+\t.\t",
+            "gene_id \"ENSMUSG00000000001.1\"; ",
+            "gene_name \"Trav13-3\"; ",
+            "transcript_id \"ENSMUST00000117226.2\"; ",
+            "transcript_name \"Trav13-3-201\";\n",
+        );
+
+        let idx = SpliceIndex::new(100)
+            .from_reader(Cursor::new(gtf.as_bytes()), IdNameKeys::default())
+            .unwrap();
+
+        let by_name = idx.transcript_by_name("Trav13-3-201").unwrap();
+        let by_id = idx.transcript_by_name("ENSMUST00000117226.2").unwrap();
+
+        assert_eq!(by_name.id, by_id.id);
+        assert!(by_id.names.iter().any(|name| name == "Trav13-3-201"));
+        assert!(
+            by_id
+                .names
+                .iter()
+                .any(|name| name == "ENSMUST00000117226.2")
+        );
+    }
 
     // -----------------------------
     // Helpers: stable temp path

@@ -2,26 +2,26 @@
 [+     0.000s] stage: health server disabled
 [+     0.000s] stage: loading chemistry
 [+     0.000s] stage: starting mapper
-[+     0.014s] stage: normalizing reads
-[+     0.015s] stage: normalizing /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
+[+     0.014s] stage: waiting for mapper / first batch
 [+     0.015s] input: /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
-[+     0.015s]            2 reads |        130 reads/s | no cell/UMI          0 | duplicate          0 | genomic          2 | feature          0
+[+     0.015s] stage: normalizing /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
+[+     0.015s]            2 reads |        133 reads/s | no cell/UMI          0 | duplicate          0 | genomic          2 | feature          0
 [+     0.015s] Illumina normalization: /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
 -------------------------------------------------------------------------------------------------
 MappingInfo
-  started: 2026-08-27 10:06:21.021425384 UTC
+  started: 2026-09-01 09:39:06.024009884 UTC
 
-Read types (n=16)
+Read types (n=1)
   Type                             Count           Fraction total [%]
   -------------------------------------------------------------------
-  accepted_pairs:                  2               12.50
-  bd_fast_mapper_no_hit:           2               12.50
-  candidate_pairs:                 2               12.50
-  forward_molecules:               2               12.50
-  no_usable_paired_r1_insert:      2               12.50
-  reads_processed:                 2               12.50
-  total_pairs:                     2               12.50
-  unique_genomic:                  2               12.50
+  accepted_pairs:                  2               200.00
+  bd_fast_mapper_no_hit:           2               200.00
+  candidate_pairs:                 2               200.00
+  forward_molecules:               2               200.00
+  no_usable_paired_r1_insert:      2               200.00
+  reads_processed:                 2               200.00
+  total_pairs:                     2               200.00
+  unique_genomic:                  2               200.00
 
 Timings
   overall     : 0 h 0 min 0 sec 0 ms
@@ -33,37 +33,37 @@ Named timings
   bam_tide/multi_cpu/illumina_normalize_chunk: 0 h 0 min 0 sec 0 ms
 
 [+     0.016s] stage: finishing mapper
-[+     0.101s] stage: quantifying mapper BAM
-[+     0.102s] stage: writing quantification
-[+     0.103s] Nelrune timings
+[+     0.150s] stage: quantifying mapper BAM
+[+     0.150s] stage: writing quantification
+[+     0.152s] Nelrune timings
 ---------------
 MappingInfo
-  started: 2026-08-27 10:06:21.109034682 UTC
+  started: 2026-09-01 09:39:06.009506249 UTC
 
 Timings
-  overall     : 0 h 0 min 0 sec 103 ms
+  overall     : 0 h 0 min 0 sec 151 ms
   file I/O    : 0 h 0 min 0 sec 0 ms
   single-cpu  : 0 h 0 min 0 sec 0 ms
   multi-cpu   : 0 h 0 min 0 sec 0 ms
 
 Named timings
-  nelrune/mapper_finish:           0 h 0 min 0 sec 85 ms
-  nelrune/normalization:           0 h 0 min 0 sec 2 ms
+  nelrune/input_and_mapper:        0 h 0 min 0 sec 2 ms
+  nelrune/mapper_finish:           0 h 0 min 0 sec 133 ms
   nelrune/quantification:          0 h 0 min 0 sec 0 ms
-  nelrune/startup:                 0 h 0 min 0 sec 14 ms
+  nelrune/startup:                 0 h 0 min 0 sec 13 ms
   nelrune/writing:                 0 h 0 min 0 sec 1 ms
 
-[+     0.103s] Quantification report
+[+     0.152s] Quantification report
 ---------------------
 MappingInfo
-  started: 2026-08-27 10:06:21.109083405 UTC
+  started: 2026-09-01 09:39:06.159433856 UTC
 
-Read types (n=4)
+Read types (n=1)
   Type                             Count           Fraction total [%]
   -------------------------------------------------------------------
-  ExactJunctionChain:              1               25.00
-  Intronic:                        1               25.00
-  cell_umi from BAM tags:          2               50.00
+  ExactJunctionChain:              1               100.00
+  Intronic:                        1               100.00
+  cell_umi from BAM tags:          2               200.00
 
 Timings
   overall     : 0 h 0 min 0 sec 1 ms
@@ -74,10 +74,11 @@ Timings
 Named timings
   bam_tide/multi_cpu/quantify_chunk: 0 h 0 min 0 sec 0 ms
   bam_tide/single_cpu/merge_quantification: 0 h 0 min 0 sec 0 ms
-  nelrune/mapper_finish:           0 h 0 min 0 sec 85 ms
-  nelrune/normalization:           0 h 0 min 0 sec 2 ms
+  nelrune/input_and_mapper:        0 h 0 min 0 sec 2 ms
+  nelrune/mapper_finish:           0 h 0 min 0 sec 133 ms
   nelrune/quantification:          0 h 0 min 0 sec 0 ms
-  nelrune/startup:                 0 h 0 min 0 sec 14 ms
+  nelrune/startup:                 0 h 0 min 0 sec 13 ms
   nelrune/writing:                 0 h 0 min 0 sec 1 ms
 
-[+     0.103s] finished: 2 reads in 0.1s (19 reads/s average)
+[+     0.152s] stage: mapper BAM retained at /home/med-sal/git_Projects/lumrik/crates/nelrune/target/test-integration-tiny/nelrune.mapper.bam
+[+     0.152s] finished: 2 reads in 0.2s (13 reads/s average)

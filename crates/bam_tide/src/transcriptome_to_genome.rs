@@ -19,14 +19,14 @@
 //!
 //! If these names differ, only the tiny lookup/accessor calls below need adjustment.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use rust_htslib::bam;
 use rust_htslib::bam::header::{Header, HeaderRecord};
 use rust_htslib::bam::record::{Cigar, CigarString};
 use std::fmt;
 use std::path::Path;
 
-use gtf_splice_index::{RefBlock, SpliceIndex, Strand, Transcript, IdNameKeys};
+use gtf_splice_index::{IdNameKeys, RefBlock, SpliceIndex, Strand, Transcript};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MappedCigar {
@@ -53,7 +53,11 @@ impl fmt::Display for TranscriptomeToGenomeStats {
         writeln!(f, "  unmapped                : {}", self.unmapped)?;
         writeln!(f, "  unknown_transcript      : {}", self.unknown_transcript)?;
         writeln!(f, "  failed                  : {}", self.failed)?;
-        writeln!(f, "  reverse_complemented    : {}", self.reverse_complemented)?;
+        writeln!(
+            f,
+            "  reverse_complemented    : {}",
+            self.reverse_complemented
+        )?;
         Ok(())
     }
 }
@@ -68,25 +72,16 @@ pub struct BamTranscriptomeMapper {
 }
 
 impl BamTranscriptomeMapper {
-
     pub fn new<P: AsRef<Path>, Q: AsRef<Path>>(gtf: P, fasta: Q) -> Result<Self> {
         let gtf = gtf.as_ref();
         let fasta = fasta.as_ref();
 
         let index = match gtf.extension().and_then(|s| s.to_str()) {
-            Some("dat") => {
-                SpliceIndex::load(gtf)
-                    .with_context(|| {
-                        format!("loading binary SpliceIndex from {}", gtf.display())
-                    })?
-            }
+            Some("dat") => SpliceIndex::load(gtf)
+                .with_context(|| format!("loading binary SpliceIndex from {}", gtf.display()))?,
 
-            _ => {
-                SpliceIndex::from_path(gtf, 1_000_000, IdNameKeys::default() )
-                    .with_context(|| {
-                        format!("building SpliceIndex from {}", gtf.display())
-                    })?
-            }
+            _ => SpliceIndex::from_path(gtf, 1_000_000, IdNameKeys::default())
+                .with_context(|| format!("building SpliceIndex from {}", gtf.display()))?,
         };
 
         let genome = snp_index::Genome::from_fasta(fasta)
@@ -95,11 +90,7 @@ impl BamTranscriptomeMapper {
         Self::from_index_and_genome(index, genome)
     }
 
-    pub fn from_index_and_genome(
-        index: SpliceIndex,
-        genome: snp_index::Genome,
-    ) -> Result<Self> {
-
+    pub fn from_index_and_genome(index: SpliceIndex, genome: snp_index::Genome) -> Result<Self> {
         /*
         if genome.chr_names.len() != index.chr_names.len() {
             bail!(
@@ -112,23 +103,14 @@ impl BamTranscriptomeMapper {
         let mut genome_chr_ids = Vec::with_capacity(index.chr_names.len());
         let mut chr_lengths = Vec::with_capacity(index.chr_names.len());
 
-        
         for chr_name in &index.chr_names {
-            let genome_chr_id = genome
-                .chr_id(chr_name)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "chromosome {chr_name:?} from GTF not present in genome FASTA"
-                    )
-                })?;
+            let genome_chr_id = genome.chr_id(chr_name).ok_or_else(|| {
+                anyhow!("chromosome {chr_name:?} from GTF not present in genome FASTA")
+            })?;
 
             let len = genome
                 .chr_len(genome_chr_id)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "failed to get length for chromosome {chr_name:?}"
-                    )
-                })?;
+                .ok_or_else(|| anyhow!("failed to get length for chromosome {chr_name:?}"))?;
 
             genome_chr_ids.push(genome_chr_id);
             chr_lengths.push(len);
@@ -143,11 +125,7 @@ impl BamTranscriptomeMapper {
         })
     }
 
-
-    pub fn from_path_and_fasta<P: AsRef<Path>, Q: AsRef<Path>>(
-        gtf: P,
-        fasta: Q,
-    ) -> Result<Self> {
+    pub fn from_path_and_fasta<P: AsRef<Path>, Q: AsRef<Path>>(gtf: P, fasta: Q) -> Result<Self> {
         Self::new(gtf, fasta)
     }
 
@@ -251,8 +229,8 @@ impl BamTranscriptomeMapper {
         old_header: &bam::HeaderView,
         new_header: &mut Header,
     ) -> Result<()> {
-        let text = std::str::from_utf8(old_header.as_bytes())
-            .context("BAM header is not valid UTF-8")?;
+        let text =
+            std::str::from_utf8(old_header.as_bytes()).context("BAM header is not valid UTF-8")?;
 
         for line in text.lines() {
             if line.starts_with("@SQ") {
@@ -368,7 +346,6 @@ impl BamTranscriptomeMapper {
         tx_start0: u32,
         cigar: &[Cigar],
     ) -> Result<Strand> {
-
         let mut tx = tx.clone();
         tx.strand = Strand::Plus;
         let plus = self.map_cigar(&tx, tx_start0, cigar)?;
@@ -377,10 +354,8 @@ impl BamTranscriptomeMapper {
 
         let read_seq = record.seq().as_bytes();
 
-        
         let plus_score = self.score_read_against_genome(&read_seq, &plus, Strand::Plus)?;
         let minus_score = self.score_read_against_genome(&read_seq, &minus, Strand::Minus)?;
-    
 
         if plus_score > minus_score {
             Ok(Strand::Plus)
@@ -494,10 +469,8 @@ impl BamTranscriptomeMapper {
                             }
                         };
 
-                        let genome_chr_id = *self
-                            .genome_chr_ids
-                            .get(mapped.chr_id)
-                            .ok_or_else(|| {
+                        let genome_chr_id =
+                            *self.genome_chr_ids.get(mapped.chr_id).ok_or_else(|| {
                                 anyhow!(
                                     "missing genome chromosome id for mapped index chr {}",
                                     mapped.chr_id
@@ -545,21 +518,21 @@ impl BamTranscriptomeMapper {
         }
     }
 
-
-    fn map_cigar(
-        &self,
-        tx: &Transcript,
-        tx_start0: u32,
-        cigar: &[Cigar],
-    ) -> Result<MappedCigar> {
+    fn map_cigar(&self, tx: &Transcript, tx_start0: u32, cigar: &[Cigar]) -> Result<MappedCigar> {
         let exons = self.exons_in_transcript_order(tx);
 
         if exons.is_empty() {
             bail!("transcript {:?} has no exons", tx.names);
         }
 
-        let mut exon_idx = self.exon_index_for_tx_pos(&exons, tx_start0)
-            .with_context(|| format!("transcript start {tx_start0} outside transcript {:?}", tx.names))?;
+        let mut exon_idx = self
+            .exon_index_for_tx_pos(&exons, tx_start0)
+            .with_context(|| {
+                format!(
+                    "transcript start {tx_start0} outside transcript {:?}",
+                    tx.names
+                )
+            })?;
 
         let mut tx_pos0 = tx_start0;
         let mut genome_pos0 = self.tx_pos_to_genome_in_ordered_exons(tx, &exons, tx_start0)?;
@@ -688,12 +661,7 @@ impl BamTranscriptomeMapper {
             len -= take;
 
             if len > 0 {
-                let intron_len = self.move_to_next_exon(
-                    tx,
-                    exons,
-                    exon_idx,
-                    genome_pos0,
-                )?;
+                let intron_len = self.move_to_next_exon(tx, exons, exon_idx, genome_pos0)?;
                 out.push(Cigar::RefSkip(intron_len));
             }
         }
@@ -828,12 +796,7 @@ impl BamTranscriptomeMapper {
         *leftmost = Some(leftmost.map_or(candidate, |old| old.min(candidate)));
     }
 
-    fn advance_position(
-        &self,
-        strand: Strand,
-        genome_pos0: &mut u32,
-        len: u32,
-    ) -> Result<()> {
+    fn advance_position(&self, strand: Strand, genome_pos0: &mut u32, len: u32) -> Result<()> {
         match strand {
             Strand::Plus => {
                 *genome_pos0 = genome_pos0
@@ -877,7 +840,7 @@ impl BamTranscriptomeMapper {
                 .start
                 .checked_sub(next.end)
                 .ok_or_else(|| anyhow!("overlapping or unsorted minus-strand exons"))?,
-            gtf_splice_index::Strand::Unknown => bail!("cannot map unknown-strand transcript" ),
+            gtf_splice_index::Strand::Unknown => bail!("cannot map unknown-strand transcript"),
         };
 
         *genome_pos0 = match tx.strand {
@@ -898,6 +861,8 @@ impl BamTranscriptomeMapper {
     }
 
     fn reverse_complement_record(&self, record: &mut bam::Record) {
+        let was_reverse = record.is_reverse();
+
         let mut seq = record.seq().as_bytes();
         let mut qual = record.qual().to_vec();
         let qname = record.qname().to_vec();
@@ -910,9 +875,13 @@ impl BamTranscriptomeMapper {
         qual.reverse();
 
         record.set(&qname, Some(&cigar), &seq, &qual);
-        record.set_reverse();
-    }
 
+        if was_reverse {
+            record.unset_reverse();
+        } else {
+            record.set_reverse();
+        }
+    }
 
     fn complement_base(&self, base: u8) -> u8 {
         match base.to_ascii_uppercase() {
@@ -961,10 +930,10 @@ impl BamTranscriptomeMapper {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gtf_splice_index::IdNameKeys;
     use std::fs;
     use std::io::Write;
     use std::path::PathBuf;
-    use gtf_splice_index::IdNameKeys;
 
     fn cigar_string(cigar: &[Cigar]) -> String {
         CigarString(cigar.to_vec()).to_string()
@@ -1028,10 +997,10 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let gtf = write_test_gtf();
         let fasta = write_test_fasta();
 
-        let index = SpliceIndex::from_path(&gtf, 10_000, IdNameKeys::default() ).unwrap();
+        let index = SpliceIndex::from_path(&gtf, 10_000, IdNameKeys::default()).unwrap();
         let genome = snp_index::Genome::from_fasta(&fasta).unwrap();
 
-        let mapper = BamTranscriptomeMapper::from_index_and_genome(index, genome ).unwrap();
+        let mapper = BamTranscriptomeMapper::from_index_and_genome(index, genome).unwrap();
         let _ = fs::remove_file(gtf);
         let _ = fs::remove_file(fasta);
 
@@ -1047,9 +1016,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let mapper = dummy_mapper();
         let tx = tx(&mapper, "tx_plus_single");
 
-        let mapped = mapper
-            .map_cigar(tx, 10, &[Cigar::Match(20)])
-            .unwrap();
+        let mapped = mapper.map_cigar(tx, 10, &[Cigar::Match(20)]).unwrap();
 
         assert_eq!(mapped.start0, 110);
         assert_cigar_eq(&mapped.cigar, &[Cigar::Match(20)]);
@@ -1060,9 +1027,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let mapper = dummy_mapper();
         let tx = tx(&mapper, "tx_plus_two");
 
-        let mapped = mapper
-            .map_cigar(tx, 40, &[Cigar::Match(20)])
-            .unwrap();
+        let mapped = mapper.map_cigar(tx, 40, &[Cigar::Match(20)]).unwrap();
 
         assert_eq!(mapped.start0, 140);
         assert_cigar_eq(
@@ -1076,9 +1041,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let mapper = dummy_mapper();
         let tx = tx(&mapper, "tx_plus_two");
 
-        let mapped = mapper
-            .map_cigar(tx, 55, &[Cigar::Match(10)])
-            .unwrap();
+        let mapped = mapper.map_cigar(tx, 55, &[Cigar::Match(10)]).unwrap();
 
         assert_eq!(mapped.start0, 205);
         assert_cigar_eq(&mapped.cigar, &[Cigar::Match(10)]);
@@ -1090,11 +1053,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let tx = tx(&mapper, "tx_plus_two");
 
         let mapped = mapper
-            .map_cigar(
-                tx,
-                40,
-                &[Cigar::Match(5), Cigar::Ins(3), Cigar::Match(10)],
-            )
+            .map_cigar(tx, 40, &[Cigar::Match(5), Cigar::Ins(3), Cigar::Match(10)])
             .unwrap();
 
         assert_eq!(mapped.start0, 140);
@@ -1137,9 +1096,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let mapper = dummy_mapper();
         let tx = tx(&mapper, "tx_plus_three");
 
-        let mapped = mapper
-            .map_cigar(tx, 5, &[Cigar::Match(25)])
-            .unwrap();
+        let mapped = mapper.map_cigar(tx, 5, &[Cigar::Match(25)]).unwrap();
 
         assert_eq!(mapped.start0, 105);
         assert_cigar_eq(
@@ -1191,9 +1148,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let mapper = dummy_mapper();
         let tx = tx(&mapper, "tx_minus_two");
 
-        let mapped = mapper
-            .map_cigar(tx, 10, &[Cigar::Match(20)])
-            .unwrap();
+        let mapped = mapper.map_cigar(tx, 10, &[Cigar::Match(20)]).unwrap();
 
         assert_eq!(mapped.start0, 220);
         assert_cigar_eq(&mapped.cigar, &[Cigar::Match(20)]);
@@ -1204,9 +1159,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let mapper = dummy_mapper();
         let tx = tx(&mapper, "tx_minus_two");
 
-        let mapped = mapper
-            .map_cigar(tx, 40, &[Cigar::Match(20)])
-            .unwrap();
+        let mapped = mapper.map_cigar(tx, 40, &[Cigar::Match(20)]).unwrap();
 
         assert_eq!(mapped.start0, 140);
         assert_cigar_eq(
@@ -1221,11 +1174,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let tx = tx(&mapper, "tx_minus_two");
 
         let mapped = mapper
-            .map_cigar(
-                tx,
-                40,
-                &[Cigar::Match(5), Cigar::Ins(3), Cigar::Match(10)],
-            )
+            .map_cigar(tx, 40, &[Cigar::Match(5), Cigar::Ins(3), Cigar::Match(10)])
             .unwrap();
 
         assert_eq!(mapped.start0, 145);
@@ -1295,9 +1244,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let mapper = dummy_mapper();
         let tx = tx(&mapper, "tx_plus_single");
 
-        let err = mapper
-            .map_cigar(tx, 95, &[Cigar::Match(10)])
-            .unwrap_err();
+        let err = mapper.map_cigar(tx, 95, &[Cigar::Match(10)]).unwrap_err();
 
         assert!(
             err.to_string().contains("extends beyond transcript")
@@ -1311,9 +1258,7 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         let mapper = dummy_mapper();
         let tx = tx(&mapper, "tx_plus_single");
 
-        let err = mapper
-            .map_cigar(tx, 100, &[Cigar::Match(1)])
-            .unwrap_err();
+        let err = mapper.map_cigar(tx, 100, &[Cigar::Match(1)]).unwrap_err();
 
         assert!(
             err.to_string().contains("outside transcript"),
@@ -1360,7 +1305,6 @@ chrA\ttest\texon\t201\t210\t.\t.\t.\tgene_id \"gene_unknown_two\"; transcript_id
         assert_eq!(mapper.complement_base(b'N'), b'N');
         assert_eq!(mapper.complement_base(b'?'), b'N');
     }
-
 
     fn make_record(seq: &[u8], cigar: &[Cigar]) -> bam::Record {
         let mut rec = bam::Record::new();

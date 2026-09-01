@@ -7,7 +7,7 @@ use int_to_str::IntToStr;
 use sc_primer::{PrimerCli, PrimerDetector, PrimerMatch};
 use scdata::cell_data::GeneUmiHash;
 
-use bam_tide::fastq::record::{FastqRecord};
+use bam_tide::fastq::record::FastqRecord;
 use bam_tide::fastq::writer::FastqWriter;
 
 use std::collections::{HashMap, HashSet};
@@ -55,11 +55,9 @@ struct Cli {
     #[arg(long)]
     r2_out: Option<PathBuf>,
 
-
     /// Gzip level for written fastq files.
     #[arg(long, default_value_t = 1)]
     out_gzip_level: u32,
-
 
     /// Gzip written fastq files.
     #[arg(long, default_value_t = false)]
@@ -77,8 +75,6 @@ struct Stats {
     total: usize,
     matched: usize,
     failed: usize,
-    no_cell: usize,
-    no_umi: usize,
 }
 
 fn main() -> Result<()> {
@@ -115,8 +111,6 @@ fn main() -> Result<()> {
         )?),
         None => None,
     };
-
-
 
     let mut stats = Stats::default();
     let mut cells: HashMap<u64, CellHitSet> = HashMap::new();
@@ -167,7 +161,6 @@ fn main() -> Result<()> {
                     if let (Some(writer), Some(r2)) = (r2_writer.as_mut(), r2_record.as_ref()) {
                         writer.write(r2)?;
                     }
-
                 }
                 None => {
                     stats.failed += 1;
@@ -229,7 +222,9 @@ fn process_record(
     record: &FastqRecord,
     insert_id: u64,
 ) -> Result<Option<(u64, GeneUmiHash)>> {
-    let Some(hit) = detector.detect_first(&record.seq, &record.qual).map_err(anyhow::Error::msg)?
+    let Some(hit) = detector
+        .detect_first(&record.seq, &record.qual)
+        .map_err(anyhow::Error::msg)?
     else {
         return Ok(None);
     };

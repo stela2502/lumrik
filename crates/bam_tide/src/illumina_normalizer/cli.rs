@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
 use fast_tag_mapper::FastMapperCli;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PrimerRead {

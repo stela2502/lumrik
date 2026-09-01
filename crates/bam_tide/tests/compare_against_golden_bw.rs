@@ -15,7 +15,6 @@ fn exe_path(name: &str) -> PathBuf {
     }
 }
 
-
 fn run_ok(cmd: &mut Command) -> Result<(), String> {
     let out = cmd
         .output()

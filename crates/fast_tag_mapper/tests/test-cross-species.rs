@@ -1,5 +1,5 @@
-use mapping_info::MappingInfo;
 use fast_tag_mapper::{FastTagMapper, MapStatus, HUMAN_SAMPLE_TAGS, MOUSE_SAMPLE_TAGS};
+use mapping_info::MappingInfo;
 
 fn info() -> MappingInfo {
     MappingInfo::new(None, 0.0, 0)

@@ -251,11 +251,11 @@ impl RhapsodyWhitelist {
     /// Find the next outer grammar start that can possibly contain a BD v2
     /// cassette without changing the matching semantics.
     ///
-    /// `call_exact_shift()` accepts a cassette only when at least two of the
-    /// three barcode blocks are exact whitelist hits; the remaining block may
-    /// be corrected fuzzily.  Reuse exactly that necessary condition here.
-    /// This avoids the expensive fuzzy matcher at almost every base without
-    /// introducing any new sequence constraint (for example on the linkers).
+    /// `call_exact_shift()` accepts a v2 cassette only when both fixed linkers
+    /// are present and at least two of the three barcode blocks are exact
+    /// whitelist hits; the remaining block may be corrected fuzzily. Reuse
+    /// those necessary conditions here so the expensive fuzzy matcher is only
+    /// invoked at positions that can actually form a valid cassette.
     ///
     /// `shift_start..=shift_end` has the same meaning as in [`Self::call`].
     pub fn next_candidate_start(
@@ -275,7 +275,7 @@ impl RhapsodyWhitelist {
 
         let first_base = from.checked_add(shift_start)?;
         for base in first_base..seq.len() {
-            if !self.has_two_exact_v2_blocks(seq, base) {
+            if !self.has_valid_v2_linkers(seq, base) || !self.has_two_exact_v2_blocks(seq, base) {
                 continue;
             }
 
@@ -289,6 +289,98 @@ impl RhapsodyWhitelist {
         }
 
         None
+    }
+
+    pub fn explain_call_failure(
+        &self,
+        seq: &[u8],
+        offset: usize,
+        shift_start: usize,
+        shift_end: usize,
+    ) -> String {
+        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+            return "BD_CELL: no complete whitelist match".to_string();
+        }
+
+        let mut saw_full_length = false;
+        let mut saw_valid_linkers = false;
+        let mut whitelist_reason = None;
+
+        for shift in shift_start..=shift_end {
+            let Some(base) = offset.checked_add(shift) else {
+                continue;
+            };
+            let Some(coords) = self.coords(base) else {
+                continue;
+            };
+
+            if seq.len() < coords.umi.1 {
+                continue;
+            }
+
+            saw_full_length = true;
+
+            let found1 = &seq[coords.c1.1..coords.c2.0];
+            let found2 = &seq[coords.c2.1..coords.c3.0];
+
+            if found1 != BD_V2_LINKER_1 || found2 != BD_V2_LINKER_2 {
+                continue;
+            }
+            saw_valid_linkers = true;
+
+            let c1 = &seq[coords.c1.0..coords.c1.1];
+            let c2 = &seq[coords.c2.0..coords.c2.1];
+            let c3 = &seq[coords.c3.0..coords.c3.1];
+
+            let c1_exact = Self::index_block_fast(c1, &self.c1_exact).is_some();
+            let c2_exact = Self::index_block_fast(c2, &self.c2_exact).is_some();
+            let c3_exact = Self::index_block_fast(c3, &self.c3_exact).is_some();
+            let missing = (!c1_exact) as u8 + (!c2_exact) as u8 + (!c3_exact) as u8;
+
+            if missing > 1 {
+                whitelist_reason = Some(
+                    "BD_CELL: fewer than two barcode blocks are exact whitelist matches"
+                        .to_string(),
+                );
+                continue;
+            }
+
+            if !c1_exact && self.index_c1(c1).is_none() {
+                whitelist_reason = Some(
+                    "BD_CELL: C1 is not exact and one-mismatch whitelist correction failed or was ambiguous"
+                        .to_string(),
+                );
+                continue;
+            }
+            if !c2_exact && self.index_c2(c2).is_none() {
+                whitelist_reason = Some(
+                    "BD_CELL: C2 is not exact and one-mismatch whitelist correction failed or was ambiguous"
+                        .to_string(),
+                );
+                continue;
+            }
+            if !c3_exact && self.index_c3(c3).is_none() {
+                whitelist_reason = Some(
+                    "BD_CELL: C3 is not exact and one-mismatch whitelist correction failed or was ambiguous"
+                        .to_string(),
+                );
+                continue;
+            }
+
+            return "BD_CELL: cassette passed structural and whitelist checks but the full grammar failed later"
+                .to_string();
+        }
+
+        if !saw_full_length {
+            return "BD_CELL: sequence is too short for the cassette and UMI in the SEARCH window"
+                .to_string();
+        }
+
+        if !saw_valid_linkers {
+            return "BD_CELL: linker sequence failed: expected GTGA/GACA".to_string();
+        }
+
+        whitelist_reason.unwrap_or_else(|| "BD_CELL: barcode whitelist match failed".to_string())
     }
 
     pub fn cell_id_to_parts_ids(&self, cell_id: u64) -> Option<(usize, usize, usize)> {
@@ -352,57 +444,37 @@ impl RhapsodyWhitelist {
             return None;
         }
 
-        if &seq[coords.c1.1..coords.c2.0] != b"GTGA"
-            || &seq[coords.c2.1..coords.c3.0] != b"GACA"
+        if matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384)
+            && (&seq[coords.c1.1..coords.c2.0] != BD_V2_LINKER_1
+                || &seq[coords.c2.1..coords.c3.0] != BD_V2_LINKER_2)
         {
             return None;
         }
 
-        let c1_exact = Self::index_block_fast(
-            &seq[coords.c1.0..coords.c1.1],
-            &self.c1_exact,
-        );
+        let c1_exact = Self::index_block_fast(&seq[coords.c1.0..coords.c1.1], &self.c1_exact);
 
-        let c2_exact = Self::index_block_fast(
-            &seq[coords.c2.0..coords.c2.1],
-            &self.c2_exact,
-        );
+        let c2_exact = Self::index_block_fast(&seq[coords.c2.0..coords.c2.1], &self.c2_exact);
 
-        let c3_exact = Self::index_block_fast(
-            &seq[coords.c3.0..coords.c3.1],
-            &self.c3_exact,
-        );
+        let c3_exact = Self::index_block_fast(&seq[coords.c3.0..coords.c3.1], &self.c3_exact);
 
         let missing =
-            c1_exact.is_none() as u8
-            + c2_exact.is_none() as u8
-            + c3_exact.is_none() as u8;
+            c1_exact.is_none() as u8 + c2_exact.is_none() as u8 + c3_exact.is_none() as u8;
 
         let (c1_idx, c2_idx, c3_idx) = match missing {
-            0 => (
-                c1_exact.unwrap(),
-                c2_exact.unwrap(),
-                c3_exact.unwrap(),
-            ),
+            0 => (c1_exact.unwrap(), c2_exact.unwrap(), c3_exact.unwrap()),
 
             1 => (
                 match c1_exact {
                     Some(v) => v,
-                    None => self.index_c1(
-                        &seq[coords.c1.0..coords.c1.1],
-                    )?,
+                    None => self.index_c1(&seq[coords.c1.0..coords.c1.1])?,
                 },
                 match c2_exact {
                     Some(v) => v,
-                    None => self.index_c2(
-                        &seq[coords.c2.0..coords.c2.1],
-                    )?,
+                    None => self.index_c2(&seq[coords.c2.0..coords.c2.1])?,
                 },
                 match c3_exact {
                     Some(v) => v,
-                    None => self.index_c3(
-                        &seq[coords.c3.0..coords.c3.1],
-                    )?,
+                    None => self.index_c3(&seq[coords.c3.0..coords.c3.1])?,
                 },
             ),
 
@@ -410,10 +482,7 @@ impl RhapsodyWhitelist {
         };
 
         let cell_id =
-            c1_idx * self.block_size * self.block_size
-            + c2_idx * self.block_size
-            + c3_idx
-            + 1;
+            c1_idx * self.block_size * self.block_size + c2_idx * self.block_size + c3_idx + 1;
 
         let mut cell_seq = Vec::with_capacity(27);
         let mut cell_qual = Vec::with_capacity(27);
@@ -466,20 +535,36 @@ impl RhapsodyWhitelist {
     }
 
     #[inline]
-    fn has_two_exact_v2_blocks(&self, seq: &[u8], base: usize) -> bool {
+    fn exact_v2_block_count(&self, seq: &[u8], base: usize) -> Option<usize> {
+        let coords = self.coords(base)?;
+        if coords.umi.1 > seq.len() {
+            return None;
+        }
+
+        Some(
+            usize::from(self.c1_exact.contains_key(&seq[coords.c1.0..coords.c1.1]))
+                + usize::from(self.c2_exact.contains_key(&seq[coords.c2.0..coords.c2.1]))
+                + usize::from(self.c3_exact.contains_key(&seq[coords.c3.0..coords.c3.1])),
+        )
+    }
+
+    #[inline]
+    fn has_valid_v2_linkers(&self, seq: &[u8], base: usize) -> bool {
         let Some(coords) = self.coords(base) else {
             return false;
         };
-
         if coords.umi.1 > seq.len() {
             return false;
         }
 
-        let exact = usize::from(self.c1_exact.contains_key(&seq[coords.c1.0..coords.c1.1]))
-            + usize::from(self.c2_exact.contains_key(&seq[coords.c2.0..coords.c2.1]))
-            + usize::from(self.c3_exact.contains_key(&seq[coords.c3.0..coords.c3.1]));
+        &seq[coords.c1.1..coords.c2.0] == BD_V2_LINKER_1
+            && &seq[coords.c2.1..coords.c3.0] == BD_V2_LINKER_2
+    }
 
-        exact >= 2
+    #[inline]
+    fn has_two_exact_v2_blocks(&self, seq: &[u8], base: usize) -> bool {
+        self.exact_v2_block_count(seq, base)
+            .is_some_and(|exact| exact >= 2)
     }
 
     #[inline]
@@ -638,6 +723,24 @@ mod tests {
         assert!(
             wl.call(seq, &qual, 0, 0, 0).is_none(),
             "shift 0 should not match this read"
+        );
+    }
+
+    #[test]
+    fn bd_v2_384_rejects_wrong_linkers() {
+        let wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384);
+
+        let mut seq =
+            b"TNACGGAGAGATGTGAGCGCCATATGACAGCGGAGCATTGAACCTTTTTTTTTTTTTTTTTTTTTTTTTTT".to_vec();
+        let qual = qual(seq.len());
+
+        // The valid cassette starts at shift 3. Corrupt linker 1 while leaving
+        // all three whitelist barcode blocks untouched.
+        seq[12..16].copy_from_slice(b"AAAA");
+
+        assert!(
+            wl.call(&seq, &qual, 0, 0, 4).is_none(),
+            "BD v2 must reject whitelist-valid cassettes with invalid fixed linkers"
         );
     }
 

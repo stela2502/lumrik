@@ -1112,11 +1112,7 @@ impl Writer {
                 });
             }
 
-            let ret = htslib::sam_hdr_add_lines(
-                rec,
-                buf.as_ptr() as *const c_char,
-                buf.len(),
-            );
+            let ret = htslib::sam_hdr_add_lines(rec, buf.as_ptr() as *const c_char, buf.len());
             if ret != 0 {
                 htslib::sam_hdr_destroy(rec);
                 return Err(Error::BamOpen {
@@ -1462,12 +1458,16 @@ impl HeaderView {
 
         for tid in 0..n {
             let p = unsafe { hts_sys::sam_hdr_tid2name(self.inner(), tid as i32) };
-            assert!(!p.is_null(), "{}", "sam_hdr_tid2name() returned NULL for valid tid {tid}");
+            assert!(
+                !p.is_null(),
+                "{}",
+                "sam_hdr_tid2name() returned NULL for valid tid {tid}"
+            );
             names.push(unsafe { ffi::CStr::from_ptr(p) }.to_bytes());
         }
 
         names
-    }  
+    }
 
     #[inline]
     pub fn target_len(&self, tid: u32) -> Option<u64> {
@@ -3014,11 +3014,10 @@ CCCCCCCCCCCCCCCCCCC"[..],
         assert_ne!(&one_data, &two_data);
         assert_ne!(&one_aux_array, &two_aux_array);
 
-
         let one_aux = Aux::ArrayI8(one_aux_array);
         let two_aux = Aux::ArrayI8(two_aux_array);
         assert_ne!(&one_aux, &two_aux);
-    
+
         // Raw bytes
         let bam_header = Header::new();
         let mut test_record = Record::from_sam(
@@ -3026,8 +3025,6 @@ CCCCCCCCCCCCCCCCCCC"[..],
             "ali1\t4\t*\t0\t0\t*\t*\t0\t0\tACGT\tFFFF".as_bytes(),
         )
         .unwrap();
-
-
 
         test_record.push_aux(b"XA", one_aux).unwrap();
         test_record.push_aux(b"XB", two_aux).unwrap();

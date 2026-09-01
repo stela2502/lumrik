@@ -6,24 +6,7 @@ use std::process::Command;
 use flate2::read::MultiGzDecoder;
 use gtf_splice_index::{AnnotationBuilder, SpliceIndex};
 
-struct Cleanup(PathBuf);
-
-impl Drop for Cleanup {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
 const TEST_DATA: &str = "tests/data";
-
-const BD_MOUSE_SAMPLE_07_READ: &str =
-    "GTTGTCAAGATGCTACCGTTCAGAGACCGGAGGCGTGTGTACGTGCGTTTCGAATTCCTGTAAGCCCACC";
-
-const HTO_SEQUENCE: &str =
-    "CAGATTTTCATATTATGCAGAAAATCTACTTCGCCTGATA";
-
-const GENOMIC_READ: &str =
-    "ATCGATGCTAGCTACGATCGTACGCTAGCATGCTACGATCGTAGCTACGATGCTAGCATC";
 
 fn test_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,8 +32,7 @@ fn ensure_star_index(fasta: &Path, gtf: &Path, star_index: &Path) {
         "STAR is required for this integration test but was not found in PATH"
     );
 
-    fs::create_dir_all(star_index)
-        .expect("failed to create STAR index directory");
+    fs::create_dir_all(star_index).expect("failed to create STAR index directory");
 
     let status = Command::new("STAR")
         .args([
@@ -86,25 +68,7 @@ fn ensure_splice_index(gtf: &Path, index_path: &Path) {
         .save(index_path)
         .expect("failed to write tiny splice index");
 
-    SpliceIndex::load(index_path)
-        .expect("created splice index cannot be loaded");
-}
-
-fn write_fastq(path: &Path, reads: &[(&str, &str)]) {
-    let mut text = String::new();
-
-    for (name, seq) in reads {
-        text.push('@');
-        text.push_str(name);
-        text.push('\n');
-        text.push_str(seq);
-        text.push_str("\n+\n");
-        text.push_str(&"I".repeat(seq.len()));
-        text.push('\n');
-    }
-
-    fs::write(path, text)
-        .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+    SpliceIndex::load(index_path).expect("created splice index cannot be loaded");
 }
 
 fn read_gzip_text(path: &Path) -> String {
@@ -180,12 +144,10 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
     // Remove artifacts from the PREVIOUS test run.
     // Deliberately do not clean up at the end so failed runs can be inspected.
     if out.exists() {
-        fs::remove_dir_all(&out)
-            .expect("failed to remove previous integration-test directory");
+        fs::remove_dir_all(&out).expect("failed to remove previous integration-test directory");
     }
 
-    fs::create_dir_all(&out)
-        .expect("failed to create integration-test directory");
+    fs::create_dir_all(&out).expect("failed to create integration-test directory");
 
     let output = Command::new(env!("CARGO_BIN_EXE_nelrune"))
         .args([
@@ -238,17 +200,9 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
 
     // Built-in BD Rhapsody sample tags must retain both their real sample name
     // and the built-in data type used for the output folder.
-    assert_feature_output(
-        &out,
-        "bd_sample_mouse",
-        "SampleTag07_mm",
-    );
+    assert_feature_output(&out, "bd_sample_mouse", "SampleTag07_mm");
 
     // For user FASTA input, the filename defines the data type/output folder
     // while the FASTA header defines the individual feature name.
-    assert_feature_output(
-        &out,
-        "hto",
-        "Donor_A_HTO",
-    );
+    assert_feature_output(&out, "hto", "Donor_A_HTO");
 }

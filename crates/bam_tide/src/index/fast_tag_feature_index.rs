@@ -37,34 +37,16 @@ impl<'a> FastTagFeatureIndex<'a> {
             .and_then(|idx| self.mapper.feature(*idx))
     }
 
-        pub fn split_by_feature_type(
-        &self,
-    ) -> HashMap<String, FastTagFeatureIndex<'a>> {
-        let mut groups: HashMap<
-            String,
-            (
-                HashMap<String, u64>,
-                HashMap<u64, usize>,
-                Vec<u64>,
-            ),
-        > = HashMap::new();
+    pub fn split_by_feature_type(&self) -> HashMap<String, FastTagFeatureIndex<'a>> {
+        let mut groups: HashMap<String, (HashMap<String, u64>, HashMap<u64, usize>, Vec<u64>)> =
+            HashMap::new();
 
-        for (feature_index, feature) in
-            self.mapper.features().iter().enumerate()
-        {
-            let group = groups
-                .entry(feature.feature_type.clone())
-                .or_default();
+        for (feature_index, feature) in self.mapper.features().iter().enumerate() {
+            let group = groups.entry(feature.feature_type.clone()).or_default();
 
-            group.0.insert(
-                feature.name.clone(),
-                feature.id,
-            );
+            group.0.insert(feature.name.clone(), feature.id);
 
-            group.1.insert(
-                feature.id,
-                feature_index,
-            );
+            group.1.insert(feature.id, feature_index);
 
             group.2.push(feature.id);
         }
@@ -72,14 +54,7 @@ impl<'a> FastTagFeatureIndex<'a> {
         groups
             .into_iter()
             .map(
-                |(
-                    feature_type,
-                    (
-                        name_to_id,
-                        id_to_feature_index,
-                        ordered_ids,
-                    ),
-                )| {
+                |(feature_type, (name_to_id, id_to_feature_index, ordered_ids))| {
                     (
                         feature_type,
                         FastTagFeatureIndex {
@@ -92,7 +67,7 @@ impl<'a> FastTagFeatureIndex<'a> {
                 },
             )
             .collect()
-        }
+    }
 }
 
 impl FeatureIndex for FastTagFeatureIndex<'_> {
@@ -111,9 +86,9 @@ impl FeatureIndex for FastTagFeatureIndex<'_> {
     }
 
     fn to_10x_feature_line(&self, feature_id: u64) -> String {
-        let feature = self
-            .feature_by_id(feature_id)
-            .unwrap_or_else(|| panic!("Feature id {feature_id} was not found in the feature index!"));
+        let feature = self.feature_by_id(feature_id).unwrap_or_else(|| {
+            panic!("Feature id {feature_id} was not found in the feature index!")
+        });
 
         format!("{}	{}	{}", feature.name, feature.name, feature.feature_type)
     }

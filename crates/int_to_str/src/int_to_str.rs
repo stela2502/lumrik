@@ -92,7 +92,6 @@ impl fmt::Display for IntToStr {
         writeln!(f, "  current_position: {}", self.current_position)?;
         write!(f, "}}")
     }
-
 }
 
 // Implement the Index trait for MyClass
@@ -139,9 +138,9 @@ impl IntToStr {
         let seq = input.as_ref();
         // 4 of the array u8 fit into one result u8
         //eprintln!("Somtimes I die?! -> processed seq: {:?}", seq);
-        
-        let u8_encoded = Self::enc_bytes(seq)
-        .unwrap_or_else(|e| panic!("failed to encode sequence: {e}"));
+
+        let u8_encoded =
+            Self::enc_bytes(seq).unwrap_or_else(|e| panic!("failed to encode sequence: {e}"));
 
         Self {
             u8_encoded,
@@ -194,7 +193,6 @@ impl IntToStr {
 
         Ok(u8_encoded)
     }
-
 
     pub fn encode_binary(c: u8) -> Result<Base, String> {
         // might have to play some tricks for lookup in a const

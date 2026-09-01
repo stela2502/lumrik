@@ -225,7 +225,6 @@ impl Genome {
 
         Ok(name)
     }
-
 }
 
 #[cfg(test)]
@@ -234,7 +233,6 @@ mod tests {
     use crate::AlignedRead;
     use crate::ReadOpKind;
     use crate::Strand;
-
 
     #[test]
     fn new_builds_genome_and_uppercases_sequences() {
@@ -305,26 +303,13 @@ mod tests {
         assert!(Genome::record_name(b"   ").is_err());
     }
 
-    fn make_read(
-        seq: &[u8],
-        pairs: &[(ReadOpKind, u32)],
-    ) -> AlignedRead {
-        AlignedRead::new(
-            0,
-            Strand::Plus,
-            0,
-            seq,
-            Some(vec![30; seq.len()]),
-            pairs,
-        )
+    fn make_read(seq: &[u8], pairs: &[(ReadOpKind, u32)]) -> AlignedRead {
+        AlignedRead::new(0, Strand::Plus, 0, seq, Some(vec![30; seq.len()]), pairs)
     }
 
     #[test]
     fn base_at_ref_pos_simple() {
-        let read = make_read(
-            b"ACGT",
-            &[(ReadOpKind::Match, 4)],
-        );
+        let read = make_read(b"ACGT", &[(ReadOpKind::Match, 4)]);
 
         // Assuming default pos0 = 0
         assert_eq!(read.base_at_ref_pos(0).unwrap().base, b'A');
@@ -335,10 +320,7 @@ mod tests {
     fn base_at_ref_pos_softclip() {
         let read = make_read(
             b"NNNNACGT",
-            &[
-                (ReadOpKind::SoftClip, 4),
-                (ReadOpKind::Match, 4),
-            ],
+            &[(ReadOpKind::SoftClip, 4), (ReadOpKind::Match, 4)],
         );
 
         // first aligned base should be 'A'
@@ -364,8 +346,8 @@ mod tests {
 
         // second block starts at 104
         assert_eq!(read.base_at_ref_pos(104).unwrap().base, b'C');
-    } 
-    
+    }
+
     #[test]
     fn base_at_ref_pos_insertion() {
         let read = make_read(
@@ -380,5 +362,5 @@ mod tests {
         assert_eq!(read.base_at_ref_pos(0).unwrap().base, b'A');
         assert_eq!(read.base_at_ref_pos(1).unwrap().base, b'A');
         assert_eq!(read.base_at_ref_pos(2).unwrap().base, b'G');
-    }      
+    }
 }

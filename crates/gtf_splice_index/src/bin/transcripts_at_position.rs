@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use gtf_splice_index::SpliceIndex;
 use gtf_splice_index::IdNameKeys;
+use gtf_splice_index::SpliceIndex;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -10,13 +10,16 @@ use gtf_splice_index::IdNameKeys;
     about = "Report transcripts whose exons cover genomic positions"
 )]
 struct Cli {
-
     /// Build index from GTF/GFF annotation
     #[arg(long, conflicts_with = "index", required_unless_present = "index")]
     annotation: Option<std::path::PathBuf>,
 
     /// Load prebuilt binary splice index
-    #[arg(long, conflicts_with = "annotation", required_unless_present = "annotation")]
+    #[arg(
+        long,
+        conflicts_with = "annotation",
+        required_unless_present = "annotation"
+    )]
     index: Option<std::path::PathBuf>,
 
     /// Bin width used when building the index

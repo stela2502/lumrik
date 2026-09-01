@@ -1,21 +1,12 @@
-use anyhow::{Context, bail, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::core::{MapperLaunch, StreamingMapper};
-use crate::process::{
-    check_binary,
-    has_option,
-    remove_option,
-    MapperProcess,
-};
+use crate::process::{MapperProcess, check_binary, has_option, remove_option};
 use crate::traits::ExternalMapper;
 
-use std::path::Path;
+use rust_htslib::bam::{Header, header::HeaderRecord};
 use std::fs;
-use rust_htslib::bam::{
-    self,
-    Header,
-    header::HeaderRecord,
-};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct Star {
@@ -25,64 +16,40 @@ pub struct Star {
 
 impl Star {
     pub fn from_launch(launch: MapperLaunch) -> Result<Self> {
-        let header =
-            Self::header_from_star_index(
-                &launch.index,
-            )?;
+        let header = Self::header_from_star_index(&launch.index)?;
 
-
-        Ok(Self {
-            launch,
-            header,
-        })
+        Ok(Self { launch, header })
     }
 
-    fn header_from_star_index(
-        genome_dir: &Path,
-    ) -> Result<Header> {
-        let names_path =
-            genome_dir.join("chrName.txt");
+    fn header_from_star_index(genome_dir: &Path) -> Result<Header> {
+        let names_path = genome_dir.join("chrName.txt");
 
-        let lengths_path =
-            genome_dir.join("chrLength.txt");
+        let lengths_path = genome_dir.join("chrLength.txt");
 
-        let names =
-            fs::read_to_string(&names_path)
-                .with_context(|| {
-                    format!(
-                        "reading STAR chromosome names from {}",
-                        names_path.display()
-                    )
-                })?;
+        let names = fs::read_to_string(&names_path).with_context(|| {
+            format!(
+                "reading STAR chromosome names from {}",
+                names_path.display()
+            )
+        })?;
 
-        let lengths =
-            fs::read_to_string(&lengths_path)
-                .with_context(|| {
-                    format!(
-                        "reading STAR chromosome lengths from {}",
-                        lengths_path.display()
-                    )
-                })?;
+        let lengths = fs::read_to_string(&lengths_path).with_context(|| {
+            format!(
+                "reading STAR chromosome lengths from {}",
+                lengths_path.display()
+            )
+        })?;
 
-        let names: Vec<&str> =
-            names
-                .lines()
-                .filter(|line| !line.is_empty())
-                .collect();
+        let names: Vec<&str> = names.lines().filter(|line| !line.is_empty()).collect();
 
-        let lengths: Vec<u64> =
-            lengths
-                .lines()
-                .filter(|line| !line.is_empty())
-                .map(|line| {
-                    line.parse::<u64>()
-                        .with_context(|| {
-                            format!(
-                                "invalid STAR chromosome length `{line}`"
-                            )
-                        })
-                })
-                .collect::<Result<_>>()?;
+        let lengths: Vec<u64> = lengths
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                line.parse::<u64>()
+                    .with_context(|| format!("invalid STAR chromosome length `{line}`"))
+            })
+            .collect::<Result<_>>()?;
 
         if names.len() != lengths.len() {
             bail!(
@@ -92,30 +59,16 @@ impl Star {
             );
         }
 
-        let mut header =
-            Header::new();
+        let mut header = Header::new();
 
-        for (name, length) in
-            names.iter().zip(lengths.iter())
-        {
-            let mut sq =
-                HeaderRecord::new(
-                    b"SQ",
-                );
+        for (name, length) in names.iter().zip(lengths.iter()) {
+            let mut sq = HeaderRecord::new(b"SQ");
 
-            sq.push_tag(
-                b"SN",
-                name,
-            );
+            sq.push_tag(b"SN", name);
 
-            sq.push_tag(
-                b"LN",
-                length,
-            );
+            sq.push_tag(b"LN", length);
 
-            header.push_record(
-                &sq,
-            );
+            header.push_record(&sq);
         }
 
         Ok(header)
@@ -131,8 +84,6 @@ impl ExternalMapper for Star {
             )
         })
     }
-
-
 
     fn spawn(&self) -> Result<StreamingMapper> {
         /*
@@ -169,23 +120,17 @@ impl ExternalMapper for Star {
         args.extend([
             "--runThreadN".into(),
             self.launch.threads.min(4).to_string(),
-
             "--genomeDir".into(),
             self.launch.index.to_string_lossy().into_owned(),
-
             "--outSAMtype".into(),
             "BAM".into(),
             "Unsorted".into(),
-
             "--outStd".into(),
             "BAM_Unsorted".into(),
         ]);
 
         if !has_option(&args, "--outBAMcompression") {
-            args.extend([
-                "--outBAMcompression".into(),
-                "0".into(),
-            ]);
+            args.extend(["--outBAMcompression".into(), "0".into()]);
         }
 
         if !has_option(&args, "--outSAMattributes") {
@@ -199,10 +144,7 @@ impl ExternalMapper for Star {
         }
 
         if !has_option(&args, "--outReadsUnmapped") {
-            args.extend([
-                "--outReadsUnmapped".into(),
-                "None".into(),
-            ]);
+            args.extend(["--outReadsUnmapped".into(), "None".into()]);
         }
 
         args.push("--readFilesIn".into());

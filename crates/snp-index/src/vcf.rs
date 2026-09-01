@@ -25,16 +25,24 @@ pub struct RawSnpRecord {
     pub name: String,
 }
 
-impl RawSnpRecord{
-    pub fn new(chr_id: usize, pos0: u32, reference: u8, alternates: &[u8], name: &str, vcf_id: &str, ) -> Self {
-        Self{
+impl RawSnpRecord {
+    pub fn new(
+        chr_id: usize,
+        pos0: u32,
+        reference: u8,
+        alternates: &[u8],
+        name: &str,
+        vcf_id: &str,
+    ) -> Self {
+        Self {
             vcf_id: vcf_id.to_string(),
-            chr_id, pos0, reference, 
+            chr_id,
+            pos0,
+            reference,
             alternates: alternates.to_vec(),
             name: name.to_string(),
         }
-
-    } 
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,12 +161,12 @@ impl SnpVcfReader {
         let vcf_id = match std::str::from_utf8(&record.id()) {
             Ok(s) if !s.is_empty() && s != "." => s.to_owned(),
             _ => format!(
-                    "{}:{}:{}>{}",
-                    chr_name,
-                    pos0 + 1,
-                    reference as char,
-                    alternates.iter().map(|a| *a as char).collect::<String>()
-                 ),
+                "{}:{}:{}>{}",
+                chr_name,
+                pos0 + 1,
+                reference as char,
+                alternates.iter().map(|a| *a as char).collect::<String>()
+            ),
         };
 
         Ok(Some(RawSnpRecord {

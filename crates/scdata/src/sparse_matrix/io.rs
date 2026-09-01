@@ -81,6 +81,22 @@ impl Scdata {
         outdir: &PathBuf,
         index: &I,
     ) -> Result<String, String> {
+        self.write_sparse_with_cell_len(outdir, index, 32)
+    }
+
+    /// Write a sparse MatrixMarket matrix using the known biological barcode
+    /// length instead of rendering the complete 32-base `u64` capacity.
+    pub fn write_sparse_with_cell_len<I: FeatureIndex>(
+        &mut self,
+        outdir: &PathBuf,
+        index: &I,
+        cell_barcode_len: usize,
+    ) -> Result<String, String> {
+        if cell_barcode_len == 0 || cell_barcode_len > 32 {
+            return Err(format!(
+                "cell barcode length must be in 1..=32, got {cell_barcode_len}"
+            ));
+        }
         self.check_sparse_export_ready()?;
         if !outdir.exists() {
             fs::create_dir_all(outdir)
@@ -136,7 +152,7 @@ impl Scdata {
                 .get(cell_id)
                 .ok_or_else(|| format!("Export cell {cell_id} missing from Scdata"))?;
 
-            let cell_name = IntToStr::u8_array_to_str(&cell.name.to_le_bytes());
+            let cell_name = IntToStr::from_u64(cell.name).to_string(cell_barcode_len);
 
             writeln!(writer_b, "{cell_name}").map_err(|e| format!("Barcode write failed: {e}"))?;
 

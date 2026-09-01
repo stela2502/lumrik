@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use rayon::prelude::*;
 
 use crate::background::AmbientModel;
 use crate::dataset::{GuideDataset, GuideObservation};
-use crate::stats::{expected_ambient_given_true, PosteriorEvidence};
+use crate::stats::{PosteriorEvidence, expected_ambient_given_true};
 
 #[derive(Debug, Clone)]
 pub struct FitConfig {
@@ -149,19 +149,10 @@ pub fn fit_mixture(
         iterations = iter + 1;
 
         // E-step: each observation is independent for fixed model parameters.
-        update_observations(
-            &mut observations,
-            &guides,
-            &lambda_by_cell,
-            &ambient,
-        );
+        update_observations(&mut observations, &guides, &lambda_by_cell, &ambient);
 
         let (changed_calls, max_posterior_delta, mean_posterior_delta) =
-            posterior_change_stats(
-                &previous_posteriors,
-                &observations,
-                cfg.minimum_posterior,
-            );
+            posterior_change_stats(&previous_posteriors, &observations, cfg.minimum_posterior);
 
         if !previous_posteriors.is_empty() {
             if changed_calls == 0 {
@@ -178,11 +169,7 @@ pub fn fit_mixture(
         // Reuse the allocated buffer rather than clear + extend through a
         // second temporary collection.
         previous_posteriors.clear();
-        previous_posteriors.extend(
-            observations
-                .iter()
-                .map(|state| state.evidence.probability),
-        );
+        previous_posteriors.extend(observations.iter().map(|state| state.evidence.probability));
 
         let old_lambda = lambda_by_cell.clone();
         let old_guides = guides.clone();
@@ -204,18 +191,12 @@ pub fn fit_mixture(
         for guide_id in 0..guides.len() {
             let states = &observations[guide_ranges[guide_id].clone()];
 
-            let sum_z: f64 = states
-                .iter()
-                .map(|state| state.evidence.probability)
-                .sum();
+            let sum_z: f64 = states.iter().map(|state| state.evidence.probability).sum();
 
-            let sum_true: f64 = states
-                .iter()
-                .map(|state| state.expected_true)
-                .sum();
+            let sum_true: f64 = states.iter().map(|state| state.expected_true).sum();
 
-            let prior_real = (sum_z + cfg.prior_alpha)
-                / (n_cells + cfg.prior_alpha + cfg.prior_beta);
+            let prior_real =
+                (sum_z + cfg.prior_alpha) / (n_cells + cfg.prior_alpha + cfg.prior_beta);
 
             let true_mean = if sum_z > 1e-8 {
                 (sum_true / sum_z).max(cfg.minimum_true_mean)
@@ -234,16 +215,14 @@ pub fn fit_mixture(
                         0.0
                     };
 
-                    weighted_variance +=
-                        posterior * (inferred_true - true_mean).powi(2);
+                    weighted_variance += posterior * (inferred_true - true_mean).powi(2);
                 }
 
                 weighted_variance /= sum_z;
             }
 
             let theta = if weighted_variance > true_mean + 1e-8 {
-                (true_mean * true_mean / (weighted_variance - true_mean))
-                    .clamp(0.05, 1e6)
+                (true_mean * true_mean / (weighted_variance - true_mean)).clamp(0.05, 1e6)
             } else {
                 // Very high theta means the NB approaches a Poisson.
                 1e6
@@ -256,12 +235,8 @@ pub fn fit_mixture(
             };
         }
 
-        let max_parameter_delta = parameter_delta(
-            &old_lambda,
-            &lambda_by_cell,
-            &old_guides,
-            &guides,
-        );
+        let max_parameter_delta =
+            parameter_delta(&old_lambda, &lambda_by_cell, &old_guides, &guides);
 
         if max_parameter_delta < cfg.tolerance {
             mathematical_converged = true;
@@ -283,12 +258,7 @@ pub fn fit_mixture(
 
     // The loop ends after an M-step, therefore refresh evidence once using
     // the final parameters. This deliberately reuses the same E-step helper.
-    update_observations(
-        &mut observations,
-        &guides,
-        &lambda_by_cell,
-        &ambient,
-    );
+    update_observations(&mut observations, &guides, &lambda_by_cell, &ambient);
 
     Ok(FittedModel {
         ambient: ambient.clone(),
@@ -326,19 +296,13 @@ fn update_observations(
             guide.theta,
         );
 
-        let ambient_if_real = expected_ambient_given_true(
-            obs.count,
-            ambient_mean,
-            guide.mean,
-            guide.theta,
-        );
+        let ambient_if_real =
+            expected_ambient_given_true(obs.count, ambient_mean, guide.mean, guide.theta);
 
         state.evidence = evidence;
-        state.expected_ambient =
-            (1.0 - evidence.probability) * obs.count as f64
-                + evidence.probability * ambient_if_real;
-        state.expected_true =
-            evidence.probability * (obs.count as f64 - ambient_if_real).max(0.0);
+        state.expected_ambient = (1.0 - evidence.probability) * obs.count as f64
+            + evidence.probability * ambient_if_real;
+        state.expected_true = evidence.probability * (obs.count as f64 - ambient_if_real).max(0.0);
     });
 }
 
@@ -366,10 +330,8 @@ fn posterior_change_stats(
         .map(|(previous, state)| {
             let current = state.evidence.probability;
             let delta = (current - *previous).abs();
-            let changed = usize::from(
-                (*previous >= minimum_posterior)
-                    != (current >= minimum_posterior),
-            );
+            let changed =
+                usize::from((*previous >= minimum_posterior) != (current >= minimum_posterior));
             (changed, delta, delta)
         })
         .reduce(
@@ -377,11 +339,7 @@ fn posterior_change_stats(
             |a, b| (a.0 + b.0, a.1.max(b.1), a.2 + b.2),
         );
 
-    (
-        changed,
-        max_delta,
-        sum_delta / observations.len() as f64,
-    )
+    (changed, max_delta, sum_delta / observations.len() as f64)
 }
 
 fn parameter_delta(
@@ -393,10 +351,7 @@ fn parameter_delta(
     let lambda_delta = lambda_by_cell
         .iter()
         .map(|(&cell_id, &new_value)| {
-            let old_value = old_lambda
-                .get(&cell_id)
-                .copied()
-                .unwrap_or(new_value);
+            let old_value = old_lambda.get(&cell_id).copied().unwrap_or(new_value);
             relative_delta(old_value, new_value)
         })
         .fold(0.0_f64, f64::max);
@@ -427,8 +382,7 @@ fn initialize_guides(
             let mut excess: Vec<f64> = obs
                 .iter()
                 .map(|x| {
-                    let ambient_mean =
-                        lambda_by_cell[&x.cell_id] * ambient.p(guide_id as u32);
+                    let ambient_mean = lambda_by_cell[&x.cell_id] * ambient.p(guide_id as u32);
                     (x.count as f64 - ambient_mean).max(0.0)
                 })
                 .filter(|x| *x > 0.0)
@@ -442,8 +396,7 @@ fn initialize_guides(
                 // Upper-half mean is deliberately resistant to the sea of
                 // low-count ambient observations at initialization.
                 let start = excess.len() / 2;
-                (excess[start..].iter().sum::<f64>()
-                    / (excess.len() - start) as f64)
+                (excess[start..].iter().sum::<f64>() / (excess.len() - start) as f64)
                     .max(cfg.minimum_true_mean)
             };
 

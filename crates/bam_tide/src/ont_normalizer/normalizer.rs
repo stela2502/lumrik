@@ -1,6 +1,6 @@
 use crate::fastq::{record::FastqRecord, writer::FastqWriter};
 use crate::ngs_normalizer::{
-    NgsNormalizerSupport, NormalizedMolecule, NormalizerPartial, CHUNK_SIZE
+    CHUNK_SIZE, NgsNormalizerSupport, NormalizedMolecule, NormalizerPartial,
 };
 use crate::ont_normalizer::cli::Cli;
 use crate::{AdditionalFeatureSource, FeatureTagCounts};
@@ -9,12 +9,12 @@ use read_tag_table::ReadTagTable;
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 
 use anyhow::{Context, Result};
+use int_to_str::IntToStr;
 use mapping_info::MappingInfo;
 use rayon::prelude::*;
 use rust_htslib::bam::{Read, Reader};
 use sc_primer::{Orientation, PrimerDetector};
 use scdata::GeneUmiHash;
-use int_to_str::IntToStr;
 
 use std::path::PathBuf;
 
@@ -38,9 +38,11 @@ pub struct OntNormalizerConfig {
 }
 
 impl OntNormalizerConfig {
-
-
-    fn process_read(&self, read: &FastqRecord, feature_tag_mapper: &FastTagMapper) -> NormalizerPartial {
+    fn process_read(
+        &self,
+        read: &FastqRecord,
+        feature_tag_mapper: &FastTagMapper,
+    ) -> NormalizerPartial {
         let mut out = NormalizerPartial::new();
         out.stats.report("total_records");
         out.stats.report("reads_processed");
@@ -54,8 +56,6 @@ impl OntNormalizerConfig {
                 return out;
             }
         };
-
-
 
         match matches.len() {
             0 => {
@@ -109,12 +109,12 @@ impl OntNormalizerConfig {
             if primer_match.orientation == Orientation::ReverseComplement {
                 insert_record = insert_record.revcomp();
             }
-            
+
             let cell_id = IntToStr::new(&cell.seq).into_u64();
             let umi_id = IntToStr::new(&umi.seq).into_u64();
 
-
-            if let Some(id) = feature_tag_mapper.map_feature_id(&insert_record.seq, &mut out.stats) {
+            if let Some(id) = feature_tag_mapper.map_feature_id(&insert_record.seq, &mut out.stats)
+            {
                 if out.feature_tag_table.try_insert(
                     &cell_id,
                     GeneUmiHash(id, umi_id),
@@ -169,7 +169,6 @@ impl OntNormalizer {
         })
     }
 
-    
     pub fn take_feature_tag_counts(&mut self) -> FeatureTagCounts {
         std::mem::take(&mut self.feature_tag_counts)
     }
@@ -200,7 +199,7 @@ impl OntNormalizer {
             gzip: !cli.no_gzip,
         })
     }
-    
+
     /// Normalizes input reads and streams mapper-ready FASTQ records to `emit`.
     ///
     /// Reads are processed in chunks using the normalizer's existing parallel
@@ -222,49 +221,24 @@ impl OntNormalizer {
     ///
     /// Normalization statistics, read tags, and feature-tag data are updated in
     /// the same way as during the normal file-based normalization path.    
-    pub fn nelrune_run<F, P>(
-        &mut self,
-        mut emit: F,
-        mut report_progress: P,
-    ) -> Result<()>
+    pub fn nelrune_run<F, P>(&mut self, mut emit: F, mut report_progress: P) -> Result<()>
     where
-        F: FnMut(
-            &[(Option<FastqRecord>, FastqRecord)],
-        ) -> Result<bool>,
+        F: FnMut(&[(Option<FastqRecord>, FastqRecord)]) -> Result<bool>,
         P: FnMut(&MappingInfo),
     {
-        NgsNormalizerSupport::configure_rayon_threads(
-            self.config.threads,
-        );
+        NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
 
-        let mut bam =
-            Reader::from_path(&self.config.bam)
-                .with_context(|| {
-                    format!(
-                        "failed to open BAM: {}",
-                        self.config.bam.display()
-                    )
-                })?;
+        let mut bam = Reader::from_path(&self.config.bam)
+            .with_context(|| format!("failed to open BAM: {}", self.config.bam.display()))?;
 
         if self.config.threads > 1 {
-            bam.set_threads(
-                self.config
-                    .threads
-                    .saturating_sub(1)
-                    .max(1),
-            )
-            .context(
-                "failed to set BAM reader threads"
-            )?;
+            bam.set_threads(self.config.threads.saturating_sub(1).max(1))
+                .context("failed to set BAM reader threads")?;
         }
 
-        let mut chunk =
-            Vec::<FastqRecord>::with_capacity(
-                CHUNK_SIZE,
-            );
+        let mut chunk = Vec::<FastqRecord>::with_capacity(CHUNK_SIZE);
 
-        let mut output =
-            Vec::<(Option<FastqRecord>, FastqRecord)>::new();
+        let mut output = Vec::<(Option<FastqRecord>, FastqRecord)>::new();
 
         let mut records = bam.records();
         let mut processed_from_input = 0usize;
@@ -278,27 +252,17 @@ impl OntNormalizer {
                 break;
             };
 
-            let rec = rec_result.context(
-                "failed to read BAM record"
-            )?;
+            let rec = rec_result.context("failed to read BAM record")?;
 
             processed_from_input += 1;
-            chunk.push(
-                FastqRecord::from_bam_record(&rec)
-            );
+            chunk.push(FastqRecord::from_bam_record(&rec));
 
             if chunk.len() >= CHUNK_SIZE {
                 output.clear();
 
-                self.process_chunk(
-                    &chunk,
-                    &mut output,
-                )?;
+                self.process_chunk(&chunk, &mut output)?;
 
-                NgsNormalizerSupport::prepare_emit_batch(
-                    &mut output,
-                    &mut self.read_tags,
-                )?;
+                NgsNormalizerSupport::prepare_emit_batch(&mut output, &mut self.read_tags)?;
 
                 if !output.is_empty() && !emit(&output)? {
                     return Ok(());
@@ -312,15 +276,9 @@ impl OntNormalizer {
         if !chunk.is_empty() {
             output.clear();
 
-            self.process_chunk(
-                &chunk,
-                &mut output,
-            )?;
+            self.process_chunk(&chunk, &mut output)?;
 
-            NgsNormalizerSupport::prepare_emit_batch(
-                &mut output,
-                &mut self.read_tags,
-            )?;
+            NgsNormalizerSupport::prepare_emit_batch(&mut output, &mut self.read_tags)?;
 
             if !output.is_empty() && !emit(&output)? {
                 return Ok(());
@@ -340,31 +298,20 @@ impl OntNormalizer {
         &self.config
     }
 
-    pub fn collect_fastqs(
-        &mut self,
-    ) -> Result<Vec<(Option<FastqRecord>, FastqRecord)>> {
+    pub fn collect_fastqs(&mut self) -> Result<Vec<(Option<FastqRecord>, FastqRecord)>> {
         NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
 
         let mut bam = Reader::from_path(&self.config.bam)
-            .with_context(|| {
-                format!(
-                    "failed to open BAM: {}",
-                    self.config.bam.display()
-                )
-            })?;
+            .with_context(|| format!("failed to open BAM: {}", self.config.bam.display()))?;
 
         if self.config.threads > 1 {
-            bam.set_threads(
-                self.config.threads.saturating_sub(1).max(1)
-            )
-            .context("failed to set BAM reader threads")?;
+            bam.set_threads(self.config.threads.saturating_sub(1).max(1))
+                .context("failed to set BAM reader threads")?;
         }
 
-        let mut output:
-            Vec<(Option<FastqRecord>, FastqRecord)> = Vec::new();
+        let mut output: Vec<(Option<FastqRecord>, FastqRecord)> = Vec::new();
 
-        let mut chunk: Vec<FastqRecord> =
-            Vec::with_capacity(CHUNK_SIZE);
+        let mut chunk: Vec<FastqRecord> = Vec::with_capacity(CHUNK_SIZE);
 
         let mut records = bam.records();
         let mut processed_from_input = 0usize;
@@ -378,8 +325,7 @@ impl OntNormalizer {
                 break;
             };
 
-            let rec = rec_result
-                .context("failed to read BAM record")?;
+            let rec = rec_result.context("failed to read BAM record")?;
 
             processed_from_input += 1;
             chunk.push(FastqRecord::from_bam_record(&rec));
@@ -407,17 +353,11 @@ impl OntNormalizer {
     pub fn run(&mut self) -> Result<()> {
         let fastqs = self.collect_fastqs()?;
 
-        let mut fastq = FastqWriter::new(
-            &self.config.out,
-            self.config.gzip,
-            self.config.gzip_level,
-        )
-        .with_context(|| {
-            format!(
-                "failed to create FASTQ: {}",
-                self.config.out.display()
-            )
-        })?;
+        let mut fastq =
+            FastqWriter::new(&self.config.out, self.config.gzip, self.config.gzip_level)
+                .with_context(|| {
+                    format!("failed to create FASTQ: {}", self.config.out.display())
+                })?;
 
         for (_, read) in fastqs {
             fastq.write(&read)?;
@@ -435,11 +375,16 @@ impl OntNormalizer {
                 )
             })?;
 
-        let out_root = self.config.out.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let out_root = self
+            .config
+            .out
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
 
         let cell_barcode_len = self.config.primer.cell_len();
 
-        self.feature_tag_counts.finalize_and_write_all(cell_barcode_len, out_root)?;
+        self.feature_tag_counts
+            .finalize_and_write_all(cell_barcode_len, out_root)?;
 
         Ok(())
     }
@@ -452,14 +397,16 @@ impl OntNormalizer {
         let config = self.config.clone();
 
         self.stats.start_counter();
-        self.stats.start_timer("bam_tide/multi_cpu/ont_normalize_chunk");
+        self.stats
+            .start_timer("bam_tide/multi_cpu/ont_normalize_chunk");
 
         let partials: Vec<NormalizerPartial> = input
             .par_iter()
             .map(|read| config.process_read(read, self.feature_tag_counts.mapper()))
             .collect();
 
-        self.stats.stop_timer("bam_tide/multi_cpu/ont_normalize_chunk");
+        self.stats
+            .stop_timer("bam_tide/multi_cpu/ont_normalize_chunk");
         self.stats.stop_multi_processor_time();
 
         for partial in partials {
@@ -469,11 +416,7 @@ impl OntNormalizer {
                 self.feature_tag_counts.data_mut(),
             );
 
-            output.extend(
-                fastqs
-                    .into_iter()
-                    .map(|record| (None, record))
-            );
+            output.extend(fastqs.into_iter().map(|record| (None, record)));
         }
 
         Ok(())

@@ -4,28 +4,20 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use scdata::FeatureIndex;
 use int_to_str::IntToStr;
+use scdata::FeatureIndex;
 
 use crate::background::AmbientModel;
 use crate::caller::GuideCalls;
 use crate::model::FittedModel;
 
-
 impl AmbientModel {
-    fn write_tsv<W, I>(
-        &self,
-        writer: &mut W,
-        index: &I,
-    ) -> Result<()>
+    fn write_tsv<W, I>(&self, writer: &mut W, index: &I) -> Result<()>
     where
         W: Write,
         I: FeatureIndex,
     {
-        writeln!(
-            writer,
-            "guide_id\tguide_name\tambient_umis\tp_g"
-        )?;
+        writeln!(writer, "guide_id\tguide_name\tambient_umis\tp_g")?;
 
         for guide_id in 0..self.guide_umis.len() {
             let feature_id = self.feature_ids[guide_id];
@@ -43,87 +35,49 @@ impl AmbientModel {
         Ok(())
     }
 
-    pub fn print_table<I>(
-        &self,
-        index: &I,
-    ) -> Result<()>
+    pub fn print_table<I>(&self, index: &I) -> Result<()>
     where
         I: FeatureIndex,
     {
         let stdout = std::io::stdout();
         let mut writer = stdout.lock();
 
-        self.write_tsv(
-            &mut writer,
-            index,
-        )
+        self.write_tsv(&mut writer, index)
     }
 
-    pub fn write_table<P, I>(
-        &self,
-        out: P,
-        index: &I,
-    ) -> Result<()>
+    pub fn write_table<P, I>(&self, out: P, index: &I) -> Result<()>
     where
         P: AsRef<Path>,
         I: FeatureIndex,
     {
         let out = out.as_ref();
 
-        let path =
-            out.join("ambient_guides.tsv");
+        let path = out.join("ambient_guides.tsv");
 
-        let file =
-            File::create(&path)
-                .with_context(|| {
-                    format!(
-                        "creating {}",
-                        path.display()
-                    )
-                })?;
+        let file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
 
-        let mut writer =
-            BufWriter::new(file);
+        let mut writer = BufWriter::new(file);
 
-        self.write_tsv(
-            &mut writer,
-            index,
-        )?;
+        self.write_tsv(&mut writer, index)?;
 
         writer
             .flush()
-            .with_context(|| {
-                format!(
-                    "flushing {}",
-                    path.display()
-                )
-            })?;
+            .with_context(|| format!("flushing {}", path.display()))?;
 
         Ok(())
     }
 }
 
-
 impl FittedModel {
-    fn write_tsv<W, I>(
-        &self,
-        writer: &mut W,
-        index: &I,
-    ) -> Result<()>
+    fn write_tsv<W, I>(&self, writer: &mut W, index: &I) -> Result<()>
     where
         W: Write,
         I: FeatureIndex,
     {
-        writeln!(
-            writer,
-            "guide_id\tguide_name\tprior_real\ttrue_mean\ttheta"
-        )?;
+        writeln!(writer, "guide_id\tguide_name\tprior_real\ttrue_mean\ttheta")?;
 
-        for (guide_id, model) in
-            self.guides.iter().enumerate()
-        {
-            let feature_id =
-                self.ambient.feature_ids[guide_id];
+        for (guide_id, model) in self.guides.iter().enumerate() {
+            let feature_id = self.ambient.feature_ids[guide_id];
 
             writeln!(
                 writer,
@@ -139,78 +93,42 @@ impl FittedModel {
         Ok(())
     }
 
-    pub fn print_table<I>(
-        &self,
-        index: &I,
-    ) -> Result<()>
+    pub fn print_table<I>(&self, index: &I) -> Result<()>
     where
         I: FeatureIndex,
     {
-        let stdout =
-            std::io::stdout();
+        let stdout = std::io::stdout();
 
-        let mut writer =
-            stdout.lock();
+        let mut writer = stdout.lock();
 
-        self.write_tsv(
-            &mut writer,
-            index,
-        )
+        self.write_tsv(&mut writer, index)
     }
 
-    pub fn write_table<P, I>(
-        &self,
-        out: P,
-        index: &I,
-    ) -> Result<()>
+    pub fn write_table<P, I>(&self, out: P, index: &I) -> Result<()>
     where
         P: AsRef<Path>,
         I: FeatureIndex,
     {
-        let out =
-            out.as_ref();
+        let out = out.as_ref();
 
-        let path =
-            out.join("guide_models.tsv");
+        let path = out.join("guide_models.tsv");
 
-        let file =
-            File::create(&path)
-                .with_context(|| {
-                    format!(
-                        "creating {}",
-                        path.display()
-                    )
-                })?;
+        let file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
 
-        let mut writer =
-            BufWriter::new(file);
+        let mut writer = BufWriter::new(file);
 
-        self.write_tsv(
-            &mut writer,
-            index,
-        )?;
+        self.write_tsv(&mut writer, index)?;
 
         writer
             .flush()
-            .with_context(|| {
-                format!(
-                    "flushing {}",
-                    path.display()
-                )
-            })?;
+            .with_context(|| format!("flushing {}", path.display()))?;
 
         Ok(())
     }
 }
 
-
 impl GuideCalls {
-    fn write_tsv<W, I>(
-        &self,
-        writer: &mut W,
-        index: &I,
-        cell_len: usize,
-    ) -> Result<()>
+    fn write_tsv<W, I>(&self, writer: &mut W, index: &I, cell_len: usize) -> Result<()>
     where
         W: Write,
         I: FeatureIndex,
@@ -234,12 +152,9 @@ impl GuideCalls {
         )?;
 
         for call in &self.flat {
-            let feature_id =
-                call.feature_id;
+            let feature_id = call.feature_id;
 
-            let barcode =
-            IntToStr::from_u64(call.cell_id)
-                .to_string(cell_len);
+            let barcode = IntToStr::from_u64(call.cell_id).to_string(cell_len);
 
             writeln!(
                 writer,
@@ -262,69 +177,35 @@ impl GuideCalls {
         Ok(())
     }
 
-    pub fn print_table<I>(
-        &self,
-        index: &I,
-        data: usize,
-    ) -> Result<()>
+    pub fn print_table<I>(&self, index: &I, data: usize) -> Result<()>
     where
         I: FeatureIndex,
     {
-        let stdout =
-            std::io::stdout();
+        let stdout = std::io::stdout();
 
-        let mut writer =
-            stdout.lock();
+        let mut writer = stdout.lock();
 
-        self.write_tsv(
-            &mut writer,
-            index,
-            data,
-        )
+        self.write_tsv(&mut writer, index, data)
     }
 
-    pub fn write_table<P, I>(
-        &self,
-        out: P,
-        index: &I,
-        data: usize,
-    ) -> Result<()>
+    pub fn write_table<P, I>(&self, out: P, index: &I, data: usize) -> Result<()>
     where
         P: AsRef<Path>,
         I: FeatureIndex,
     {
-        let out =
-            out.as_ref();
+        let out = out.as_ref();
 
-        let path =
-            out.join("guide_calls.tsv");
+        let path = out.join("guide_calls.tsv");
 
-        let file =
-            File::create(&path)
-                .with_context(|| {
-                    format!(
-                        "creating {}",
-                        path.display()
-                    )
-                })?;
+        let file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
 
-        let mut writer =
-            BufWriter::new(file);
+        let mut writer = BufWriter::new(file);
 
-        self.write_tsv(
-            &mut writer,
-            index,
-            data,
-        )?;
+        self.write_tsv(&mut writer, index, data)?;
 
         writer
             .flush()
-            .with_context(|| {
-                format!(
-                    "flushing {}",
-                    path.display()
-                )
-            })?;
+            .with_context(|| format!("flushing {}", path.display()))?;
 
         Ok(())
     }

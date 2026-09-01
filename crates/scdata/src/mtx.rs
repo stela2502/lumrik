@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use int_to_str::IntToStr;
 use mapping_info::MappingInfo;
@@ -60,9 +60,7 @@ impl MexFeatureIndex {
 
             source_row_to_feature.insert(source_row, feature_id);
             name_to_id.insert(feature.id.clone(), feature_id);
-            name_to_id
-                .entry(feature.name.clone())
-                .or_insert(feature_id);
+            name_to_id.entry(feature.name.clone()).or_insert(feature_id);
             features.push(feature);
         }
 

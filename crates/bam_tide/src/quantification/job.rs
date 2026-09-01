@@ -88,8 +88,6 @@ impl<'a> JobBuilder<'a> {
         self
     }
 
-
-
     pub fn build(&self, rec: &Record, report: &mut MappingInfo) -> Result<Option<Job>> {
         if rec.is_unmapped() {
             report.report("unmapped");
@@ -112,8 +110,8 @@ impl<'a> JobBuilder<'a> {
         }
 
         let (cb_raw, ub) = if let Some(read_tag_table) = self.read_tag_table {
-            let read_id = std::str::from_utf8(rec.qname())
-                .context("Invalid BAM read name / qname")?;
+            let read_id =
+                std::str::from_utf8(rec.qname()).context("Invalid BAM read name / qname")?;
 
             match read_tag_table.cell_umi_for_read(read_id) {
                 Some((cell, umi)) => {
@@ -126,23 +124,24 @@ impl<'a> JobBuilder<'a> {
                 }
             }
         } else {
-            let cb_raw = match Self::aux_tag_str(rec, self.cell_tag ) {
+            let cb_raw = match Self::aux_tag_str(rec, self.cell_tag) {
                 Some(v) => v,
                 None => {
-                    report.report(
-                        &format!("no {} tag", String::from_utf8_lossy(&self.cell_tag))
-                    );
+                    report.report(&format!(
+                        "no {} tag",
+                        String::from_utf8_lossy(&self.cell_tag)
+                    ));
                     return Ok(None);
                 }
             };
 
-            let ub = match Self::aux_tag_str(rec, self.umi_tag ) {
+            let ub = match Self::aux_tag_str(rec, self.umi_tag) {
                 Some(v) => v,
                 None => {
-                    report.report(
-                        &format!("no {} tag",  
-                        String::from_utf8_lossy(&self.umi_tag))
-                    );
+                    report.report(&format!(
+                        "no {} tag",
+                        String::from_utf8_lossy(&self.umi_tag)
+                    ));
                     return Ok(None);
                 }
             };
@@ -182,7 +181,9 @@ impl<'a> JobBuilder<'a> {
         let chr_id = match self.fuzzy_chr_id(chr_name) {
             Some(id) => id,
             None => {
-                report.report(&format!("contig {chr_name} not in index - checked with and without chr"));
+                report.report(&format!(
+                    "contig {chr_name} not in index - checked with and without chr"
+                ));
                 return Ok(None);
             }
         };
@@ -293,8 +294,7 @@ impl<'a> JobBuilder<'a> {
     }
 
     fn dna_to_u64(seq: &str) -> Option<u64> {
-
-        let seq = Self::normalize_rock_roi( seq );
+        let seq = Self::normalize_rock_roi(seq);
 
         if !seq.bytes().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')) {
             return None;

@@ -26,13 +26,12 @@ use read_tag_table::ReadTagTable;
 use bam_tide::quantification::chunk_processor::ChunkProcessor;
 use bam_tide::quantification::cli::{QuantCli, QuantMode};
 use bam_tide::quantification::job::{Job, JobBuilder};
-use bam_tide::quantification::snp::SnpSideChannel;
 use bam_tide::quantification::processor_options::ProcessorOptions;
+use bam_tide::quantification::snp::SnpSideChannel;
 use bam_tide::results::QuantData;
 
 use gtf_splice_index::{MatchOptions, SpliceIndex};
 use snp_index::Genome;
-
 
 const CHUNK: usize = 2_000_000;
 
@@ -72,7 +71,9 @@ fn run(args: QuantCli) -> Result<()> {
         return Err(anyhow!("--vcf requires --genome"));
     }
 
-    if !args.read_tags.read_tag_table.is_empty() && args.read_tags.read_tag_table.len() != args.bam.len() {
+    if !args.read_tags.read_tag_table.is_empty()
+        && args.read_tags.read_tag_table.len() != args.bam.len()
+    {
         return Err(anyhow!(
             "Number of --read-tag-table files ({}) must match number of -b/--bam files ({})",
             args.read_tags.read_tag_table.len(),
@@ -100,7 +101,12 @@ fn run(args: QuantCli) -> Result<()> {
     };
     data.report.stop_file_io_time();
 
-    let processor = ChunkProcessor::new(&idx, snp.as_ref(), match_opts,  ProcessorOptions::from(&args) );
+    let processor = ChunkProcessor::new(
+        &idx,
+        snp.as_ref(),
+        match_opts,
+        ProcessorOptions::from(&args),
+    );
 
     let mut n_seen = 0usize;
 
@@ -118,14 +124,13 @@ fn run(args: QuantCli) -> Result<()> {
 
             let config = args.read_tags.to_config_for_id(id)?;
 
-            let tab = ReadTagTable::from_config(&config)
-                .with_context(|| {
-                    format!(
-                        "reading read tag table {} for BAM {}",
-                        tag_path.display(),
-                        bam_path.display()
-                    )
-                })?;
+            let tab = ReadTagTable::from_config(&config).with_context(|| {
+                format!(
+                    "reading read tag table {} for BAM {}",
+                    tag_path.display(),
+                    bam_path.display()
+                )
+            })?;
 
             println!("{tab}");
             Some(tab)
@@ -202,10 +207,10 @@ fn process_bam_file(
     validate_bam_header_compatible(expected_header, reader.header())
         .with_context(|| format!("BAM header mismatch for {}", bam_path.display()))?;
     let header = reader.header().clone();
-    let job_builder = JobBuilder::new(&header, chr_map, args.cell_tag.0, args.umi_tag.0 )
+    let job_builder = JobBuilder::new(&header, chr_map, args.cell_tag.0, args.umi_tag.0)
         .with_genome(genome, !args.no_genome_refine)
         .with_snp_index(snp.map(|s| &s.index))
-        .with_read_tag_table( read_tag_table )
+        .with_read_tag_table(read_tag_table)
         .with_min_mapq(args.min_mapq)
         .read1_only(args.read1_only);
 

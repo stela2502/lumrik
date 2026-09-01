@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use clap::{Args, Parser, Subcommand};
 
-use gtf_splice_index::{IdNameKeys, SpliceIndex}; // <-- adjust crate path/module as needed
 use bam_tide::core::fasta::FastaRecord;
+use gtf_splice_index::{IdNameKeys, SpliceIndex}; // <-- adjust crate path/module as needed
 use snp_index::Genome;
 
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 
 /// Build, inspect, or serialize a splice index.
 #[derive(Parser, Debug)]
@@ -28,16 +28,13 @@ enum Command {
     /// Load an index from disk and print summary stats
     Stats(StatsArgs),
 
-/*
-    /// Query transcripts covering a genomic position
-    Query(QueryArgs),
+    /*
+        /// Query transcripts covering a genomic position
+        Query(QueryArgs),
 
-*/
-
+    */
     /// Build transcriptome FASTA from genomic annotation + genome FASTA
     Transcriptome(TranscriptomeArgs),
-
-
 }
 
 #[derive(Args, Debug)]
@@ -46,7 +43,6 @@ struct StatsArgs {
     #[arg(long, short)]
     index: PathBuf,
 }
-
 
 #[derive(Args, Debug)]
 struct TranscriptomeArgs {
@@ -239,9 +235,7 @@ fn main() -> Result<()> {
             eprintln!("Index written to {}", args.index.display());
         }
 
-        Command::Transcriptome(args) => {
-            build_transcriptome(&args)?
-        }
+        Command::Transcriptome(args) => build_transcriptome(&args)?,
 
         Command::Stats(args) => {
             let idx = SpliceIndex::load(&args.index)
@@ -253,74 +247,40 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-
 fn build_transcriptome(args: &TranscriptomeArgs) -> Result<()> {
-    let index = if args
-        .index
-        .extension()
-        .map(|e| e == "dat")
-        .unwrap_or(false)
-    {
+    let index = if args.index.extension().map(|e| e == "dat").unwrap_or(false) {
         SpliceIndex::load(&args.index)
             .with_context(|| format!("reading splice index {}", args.index.display()))?
     } else {
-        SpliceIndex::from_path(
-            &args.index,
-            args.bin_width,
-            IdNameKeys::default(),
-        )
-        .with_context(|| format!("building index from {}", args.index.display()))?
+        SpliceIndex::from_path(&args.index, args.bin_width, IdNameKeys::default())
+            .with_context(|| format!("building index from {}", args.index.display()))?
     };
 
     let genome = Genome::from_fasta(&args.genome)
-        .with_context(|| {
-            format!(
-                "failed to load genome FASTA {}",
-                args.genome.display()
-            )
-        })?;
+        .with_context(|| format!("failed to load genome FASTA {}", args.genome.display()))?;
 
     let out = std::fs::File::create(&args.out)
-        .with_context(|| {
-            format!(
-                "failed to create output FASTA {}",
-                args.out.display()
-            )
-        })?;
+        .with_context(|| format!("failed to create output FASTA {}", args.out.display()))?;
 
-    let writer: Box<dyn std::io::Write> = if args
-        .out
-        .extension()
-        .map(|e| e == "gz")
-        .unwrap_or(false)
-    {
-        Box::new(GzEncoder::new(
-            out,
-            Compression::default(),
-        ))
-    } else {
-        Box::new(out)
-    };
+    let writer: Box<dyn std::io::Write> =
+        if args.out.extension().map(|e| e == "gz").unwrap_or(false) {
+            Box::new(GzEncoder::new(out, Compression::default()))
+        } else {
+            Box::new(out)
+        };
 
     let mut writer = std::io::BufWriter::new(writer);
 
     let mut n_written = 0usize;
 
-    let region: Option<(String, u32, u32)> = args
-        .region
-        .as_deref()
-        .map(parse_region)
-        .transpose()?;
-
+    let region: Option<(String, u32, u32)> =
+        args.region.as_deref().map(parse_region).transpose()?;
 
     for tx in &index.transcripts {
-        
         if let Some((region_chr, region_start0, region_end0)) = &region {
             let region_chr_id = index
                 .chr_id(region_chr)
-                .with_context(|| {
-                    format!("region chromosome not found in index: {region_chr}")
-                })?;
+                .with_context(|| format!("region chromosome not found in index: {region_chr}"))?;
 
             if tx.chr_id != region_chr_id {
                 continue;
@@ -349,11 +309,7 @@ fn build_transcriptome(args: &TranscriptomeArgs) -> Result<()> {
             })?;
         */
 
-        let record = FastaRecord::from_transcript(
-            &genome,
-            tx,
-            chr_name,
-        )?;
+        let record = FastaRecord::from_transcript(&genome, tx, chr_name)?;
 
         record.write(&mut writer, args.line_width)?;
 
@@ -368,7 +324,6 @@ fn build_transcriptome(args: &TranscriptomeArgs) -> Result<()> {
     Ok(())
 }
 
-
 fn parse_region(region: &str) -> Result<(String, u32, u32)> {
     let (chr, rest) = region
         .split_once(':')
@@ -378,10 +333,14 @@ fn parse_region(region: &str) -> Result<(String, u32, u32)> {
         .split_once('-')
         .ok_or_else(|| anyhow!("region must look like chr:start-end"))?;
 
-    let start1: u32 = start_s.replace(',', "").parse()
+    let start1: u32 = start_s
+        .replace(',', "")
+        .parse()
         .with_context(|| format!("invalid region start: {start_s}"))?;
 
-    let end1: u32 = end_s.replace(',', "").parse()
+    let end1: u32 = end_s
+        .replace(',', "")
+        .parse()
         .with_context(|| format!("invalid region end: {end_s}"))?;
 
     if start1 == 0 || end1 == 0 {
@@ -392,9 +351,5 @@ fn parse_region(region: &str) -> Result<(String, u32, u32)> {
         return Err(anyhow!("region end must be >= start"));
     }
 
-    Ok((
-        chr.to_string(),
-        start1 - 1,
-        end1,
-    ))
+    Ok((chr.to_string(), start1 - 1, end1))
 }

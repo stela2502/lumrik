@@ -1,0 +1,373 @@
+use crate::sequence::{normalize_reference_dna, reverse_complement};
+use crate::types::{Chain, SegmentKind, VdjSegment};
+use anyhow::{anyhow, bail, Context, Result};
+use gtf_splice_index::{IdNameKeys, SpliceIndex, Strand};
+use std::collections::{BTreeMap, HashMap};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
+#[derive(Debug, Clone, Default)]
+pub struct VdjReference {
+    pub segments: Vec<VdjSegment>,
+}
+
+impl VdjReference {
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+    pub fn counts(&self) -> BTreeMap<(Chain, SegmentKind), usize> {
+        let mut o = BTreeMap::new();
+        for s in &self.segments {
+            *o.entry((s.chain, s.kind)).or_insert(0) += 1;
+        }
+        o
+    }
+    pub fn segments_for(
+        &self,
+        chain: Chain,
+        kind: SegmentKind,
+    ) -> impl Iterator<Item = (usize, &VdjSegment)> {
+        self.segments
+            .iter()
+            .enumerate()
+            .filter(move |(_, s)| s.chain == chain && s.kind == kind)
+    }
+    pub fn locus_bounds(&self, chain: Chain) -> Option<(&str, u32, u32)> {
+        let mut it = self.segments.iter().filter(|s| s.chain == chain);
+        let first = it.next()?;
+        let chr = first.chr.as_str();
+        let mut lo = first.start;
+        let mut hi = first.end;
+        for s in it.filter(|s| s.chr == chr) {
+            lo = lo.min(s.start);
+            hi = hi.max(s.end);
+        }
+        Some((chr, lo, hi))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct VdjReferenceBuilder {
+    max_feature_span: u32,
+}
+impl Default for VdjReferenceBuilder {
+    fn default() -> Self {
+        Self {
+            max_feature_span: 1_000_000,
+        }
+    }
+}
+impl VdjReferenceBuilder {
+    pub fn new(max_feature_span: u32) -> Self {
+        Self { max_feature_span }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ImmuneTranscript {
+    transcript_id: String,
+    gene_id: String,
+    gene_name: String,
+    chain: Chain,
+    kind: SegmentKind,
+}
+
+impl VdjReferenceBuilder {
+    pub fn build<P: AsRef<Path>, Q: AsRef<Path>>(
+        &self,
+        gtf: P,
+        genome_fasta: Q,
+    ) -> Result<VdjReference> {
+        let gtf = gtf.as_ref();
+        let genome_fasta = genome_fasta.as_ref();
+        let index = SpliceIndex::from_path(gtf, self.max_feature_span, IdNameKeys::default())
+            .with_context(|| format!("building splice index from {}", gtf.display()))?;
+        let immune = discover_immune_transcripts(gtf)?;
+        let genome = read_fasta(genome_fasta)?;
+        let mut segments = Vec::with_capacity(immune.len());
+        for entry in immune.values() {
+            let tx = index
+                .transcript_by_name(&entry.transcript_id)
+                .map_err(|err| {
+                    anyhow!(
+                        "immune transcript {} ({}) missing from splice index: {}",
+                        entry.transcript_id,
+                        entry.gene_name,
+                        err
+                    )
+                })?;
+            let chr_name = index.chr_names.get(tx.chr_id).ok_or_else(|| {
+                anyhow!("invalid chr_id {} for {}", tx.chr_id, entry.transcript_id)
+            })?;
+            let chr = genome.get(chr_name).ok_or_else(|| {
+                anyhow!(
+                    "chromosome {:?} used by {} not found in genome FASTA",
+                    chr_name,
+                    entry.transcript_id
+                )
+            })?;
+            let mut sequence = Vec::new();
+            let mut start = u32::MAX;
+            let mut end = 0u32;
+            for exon in tx.exons() {
+                start = start.min(exon.start);
+                end = end.max(exon.end);
+                let a = exon.start as usize;
+                let b = exon.end as usize;
+                let slice = chr.get(a..b).ok_or_else(|| {
+                    anyhow!(
+                        "exon [{a},{b}) of {} outside {}",
+                        entry.transcript_id,
+                        chr_name
+                    )
+                })?;
+                sequence.extend_from_slice(slice);
+            }
+            if tx.strand == Strand::Minus {
+                sequence = reverse_complement(&sequence);
+            } else if tx.strand != Strand::Plus {
+                bail!(
+                    "immune transcript {} has unknown strand",
+                    entry.transcript_id
+                );
+            }
+            if sequence.is_empty() {
+                continue;
+            }
+            segments.push(VdjSegment {
+                name: entry.gene_name.clone(),
+                transcript_id: entry.transcript_id.clone(),
+                gene_id: entry.gene_id.clone(),
+                chain: entry.chain,
+                kind: entry.kind,
+                chr: chr_name.clone(),
+                start,
+                end,
+                strand_minus: tx.strand == Strand::Minus,
+                locus_rank: 0,
+                locus_fraction: 0.0,
+                distance_to_recombination_center: 0,
+                sequence,
+            });
+        }
+        segments.sort_by(|a, b| {
+            (a.chain, a.kind, &a.name, &a.transcript_id).cmp(&(
+                b.chain,
+                b.kind,
+                &b.name,
+                &b.transcript_id,
+            ))
+        });
+        segments.dedup_by(|a, b| {
+            a.chain == b.chain && a.kind == b.kind && a.name == b.name && a.sequence == b.sequence
+        });
+        if segments.is_empty() {
+            bail!("no IG/TR V(D)J segments recovered from {}", gtf.display())
+        }
+        annotate_geometry(&mut segments);
+        Ok(VdjReference { segments })
+    }
+}
+
+fn annotate_geometry(segments: &mut [VdjSegment]) {
+    for chain in Chain::ALL {
+        let centers: Vec<u64> = segments
+            .iter()
+            .filter(|s| s.chain == chain && s.kind == SegmentKind::J)
+            .map(|s| (s.start as u64 + s.end as u64) / 2)
+            .collect();
+        if centers.is_empty() {
+            continue;
+        }
+        let recomb_center = centers.iter().sum::<u64>() / centers.len() as u64;
+        for kind in [
+            SegmentKind::V,
+            SegmentKind::D,
+            SegmentKind::J,
+            SegmentKind::C,
+        ] {
+            let mut ids: Vec<usize> = segments
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.chain == chain && s.kind == kind)
+                .map(|(i, _)| i)
+                .collect();
+            ids.sort_by_key(|&i| {
+                let m = (segments[i].start as u64 + segments[i].end as u64) / 2;
+                m.abs_diff(recomb_center)
+            });
+            let denom = (ids.len().saturating_sub(1)).max(1) as f64;
+            for (rank, idx) in ids.into_iter().enumerate() {
+                let m = (segments[idx].start as u64 + segments[idx].end as u64) / 2;
+                segments[idx].locus_rank = rank;
+                segments[idx].locus_fraction = rank as f64 / denom;
+                segments[idx].distance_to_recombination_center = m.abs_diff(recomb_center);
+            }
+        }
+    }
+}
+
+fn discover_immune_transcripts(path: &Path) -> Result<HashMap<String, ImmuneTranscript>> {
+    let reader = BufReader::new(
+        File::open(path).with_context(|| format!("opening GTF {}", path.display()))?,
+    );
+    let mut found = HashMap::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 9 || f[2] != "exon" {
+            continue;
+        }
+        let attrs = f[8];
+        let transcript_id = attribute(attrs, "transcript_id");
+        let gene_id = attribute(attrs, "gene_id");
+        let gene_name = attribute(attrs, "gene_name").or_else(|| gene_id.clone());
+        let (Some(transcript_id), Some(gene_id), Some(gene_name)) =
+            (transcript_id, gene_id, gene_name)
+        else {
+            continue;
+        };
+        let Some((chain, kind)) = classify_gene(&gene_name) else {
+            continue;
+        };
+        found
+            .entry(transcript_id.clone())
+            .or_insert(ImmuneTranscript {
+                transcript_id,
+                gene_id,
+                gene_name,
+                chain,
+                kind,
+            });
+    }
+    Ok(found)
+}
+fn attribute(attrs: &str, key: &str) -> Option<String> {
+    attrs.split(';').find_map(|field| {
+        let field = field.trim();
+        let rest = field.strip_prefix(key)?.trim_start();
+        Some(rest.trim_matches('"').trim().to_string())
+    })
+}
+
+pub fn classify_gene(name: &str) -> Option<(Chain, SegmentKind)> {
+    let n = name.to_ascii_uppercase();
+    let chain = if n.starts_with("IGH") {
+        Chain::Igh
+    } else if n.starts_with("IGK") {
+        Chain::Igk
+    } else if n.starts_with("IGL") {
+        Chain::Igl
+    } else if n.starts_with("TRA") {
+        Chain::Tra
+    } else if n.starts_with("TRB") {
+        Chain::Trb
+    } else if n.starts_with("TRG") {
+        Chain::Trg
+    } else if n.starts_with("TRD") {
+        Chain::Trd
+    } else {
+        return None;
+    };
+    // Exact IGHD is the delta constant gene; IGHD<digit...> are diversity genes.
+    let kind = if n == "IGHD" {
+        SegmentKind::C
+    } else if variable_prefix(&n) {
+        SegmentKind::V
+    } else if diversity_prefix(&n) {
+        SegmentKind::D
+    } else if joining_prefix(&n) {
+        SegmentKind::J
+    } else if constant_prefix(&n) {
+        SegmentKind::C
+    } else {
+        return None;
+    };
+    Some((chain, kind))
+}
+fn variable_prefix(n: &str) -> bool {
+    ["IGHV", "IGKV", "IGLV", "TRAV", "TRBV", "TRGV", "TRDV"]
+        .iter()
+        .any(|p| n.starts_with(p))
+}
+fn diversity_prefix(n: &str) -> bool {
+    ["IGHD", "TRBD", "TRDD"].iter().any(|p| n.starts_with(p))
+}
+fn joining_prefix(n: &str) -> bool {
+    ["IGHJ", "IGKJ", "IGLJ", "TRAJ", "TRBJ", "TRGJ", "TRDJ"]
+        .iter()
+        .any(|p| n.starts_with(p))
+}
+fn constant_prefix(n: &str) -> bool {
+    [
+        "TRAC", "TRBC", "TRGC", "TRDC", "IGKC", "IGLC", "IGHM", "IGHG", "IGHA", "IGHE",
+    ]
+    .iter()
+    .any(|prefix| exact_or_numbered_family(n, prefix))
+}
+
+fn exact_or_numbered_family(n: &str, prefix: &str) -> bool {
+    let Some(rest) = n.strip_prefix(prefix) else {
+        return false;
+    };
+    rest.is_empty()
+        || (rest.as_bytes().first().is_some_and(|b| b.is_ascii_digit())
+            && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+}
+
+fn read_fasta(path: &Path) -> Result<HashMap<String, Vec<u8>>> {
+    let reader = BufReader::new(
+        File::open(path).with_context(|| format!("opening genome FASTA {}", path.display()))?,
+    );
+    let mut genome = HashMap::new();
+    let mut name: Option<String> = None;
+    let mut seq = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if let Some(header) = line.strip_prefix('>') {
+            if let Some(old) = name.take() {
+                genome.insert(old, normalize_reference_dna(&seq)?);
+                seq.clear();
+            }
+            name = Some(
+                header
+                    .split_whitespace()
+                    .next()
+                    .ok_or_else(|| anyhow!("empty FASTA header"))?
+                    .to_string(),
+            );
+        } else {
+            seq.extend_from_slice(line.as_bytes());
+        }
+    }
+    if let Some(old) = name {
+        genome.insert(old, normalize_reference_dna(&seq)?);
+    }
+    Ok(genome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classes() {
+        assert_eq!(classify_gene("Ighv1-2"), Some((Chain::Igh, SegmentKind::V)));
+        assert_eq!(classify_gene("Ighd5-6"), Some((Chain::Igh, SegmentKind::D)));
+        assert_eq!(classify_gene("Ighd"), Some((Chain::Igh, SegmentKind::C)));
+        assert_eq!(classify_gene("TRBC2"), Some((Chain::Trb, SegmentKind::C)));
+        assert_eq!(classify_gene("Ighg2b"), Some((Chain::Igh, SegmentKind::C)));
+    }
+
+    #[test]
+    fn non_receptor_igh_prefix_gene_is_not_a_constant_segment() {
+        assert_eq!(classify_gene("Ighmbp2"), None);
+    }
+}

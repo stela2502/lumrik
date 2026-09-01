@@ -372,9 +372,8 @@ impl AlignedRead {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gtf_splice_index::types::RefBlock;
     use crate::ReadOpKind;
-
+    use gtf_splice_index::types::RefBlock;
 
     impl AlignedRead {
         fn simple_read() -> Self {
@@ -640,7 +639,4 @@ mod tests {
         assert_eq!(read.base_at_ref_pos(103).unwrap().base, b'T');
         assert_eq!(read.base_at_ref_pos(104).unwrap().base, b'A');
     }
-
-
-        
 }

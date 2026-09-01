@@ -1,16 +1,8 @@
 use anyhow::{Context, Result};
-use bam_tide::fastq::{
-    FastqPairReader,
-    FastqRead,
-    SimpleFastqReader,
-};
+use bam_tide::fastq::{FastqPairReader, FastqRead, SimpleFastqReader};
 use clap::Parser;
 use rust_htslib::bam;
-use sc_mapper::{
-    MappingCall,
-    StreamingMapper,
-    StreamingMapperCli,
-};
+use sc_mapper::{MappingCall, StreamingMapper, StreamingMapperCli};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -42,12 +34,7 @@ fn main() -> Result<()> {
     let mut out_tsv = match &cli.out_tsv {
         Some(path) => {
             let mut out = std::fs::File::create(path)
-                .with_context(|| {
-                    format!(
-                        "failed to create {}",
-                        path.display()
-                    )
-                })?;
+                .with_context(|| format!("failed to create {}", path.display()))?;
 
             writeln!(out, "read_id\tn_records")?;
 
@@ -103,14 +90,8 @@ fn run_single(
     bam_writer: &mut Option<bam::Writer>,
     out_bam: &Path,
 ) -> Result<()> {
-    let mut reads =
-        SimpleFastqReader::new(&r1_path.to_path_buf())
-            .with_context(|| {
-                format!(
-                    "failed to open R1 FASTQ {}",
-                    r1_path.display()
-                )
-            })?;
+    let mut reads = SimpleFastqReader::new(&r1_path.to_path_buf())
+        .with_context(|| format!("failed to open R1 FASTQ {}", r1_path.display()))?;
 
     while let Some(r1) = reads.next_record()? {
         /*
@@ -122,13 +103,7 @@ fn run_single(
          */
         let call = mapper.process(&r1, None)?;
 
-        write_mapping_call(
-            call,
-            out_tsv.as_deref_mut(),
-            bam_writer,
-            out_bam,
-            mapper,
-        )?;
+        write_mapping_call(call, out_tsv.as_deref_mut(), bam_writer, out_bam, mapper)?;
     }
 
     Ok(())
@@ -142,31 +117,19 @@ fn run_paired(
     bam_writer: &mut Option<bam::Writer>,
     out_bam: &Path,
 ) -> Result<()> {
-    let mut reads = FastqPairReader::from_paths(
-        &r1_path.to_path_buf(),
-        &r2_path.to_path_buf(),
-    )
-    .with_context(|| {
-        format!(
-            "failed to open paired FASTQs R1={} R2={}",
-            r1_path.display(),
-            r2_path.display()
-        )
-    })?;
+    let mut reads = FastqPairReader::from_paths(&r1_path.to_path_buf(), &r2_path.to_path_buf())
+        .with_context(|| {
+            format!(
+                "failed to open paired FASTQs R1={} R2={}",
+                r1_path.display(),
+                r2_path.display()
+            )
+        })?;
 
     while let Some((r1, r2)) = reads.next_pair()? {
-        let call = mapper.process(
-            &r1,
-            Some(&r2),
-        )?;
+        let call = mapper.process(&r1, Some(&r2))?;
 
-        write_mapping_call(
-            call,
-            out_tsv.as_deref_mut(),
-            bam_writer,
-            out_bam,
-            mapper,
-        )?;
+        write_mapping_call(call, out_tsv.as_deref_mut(), bam_writer, out_bam, mapper)?;
     }
 
     Ok(())
@@ -184,12 +147,7 @@ fn write_mapping_call(
     };
 
     if let Some(out) = out_tsv.as_deref_mut() {
-        writeln!(
-            out,
-            "{}\t{}",
-            call.read_id,
-            call.records.records.len()
-        )?;
+        writeln!(out, "{}\t{}", call.read_id, call.records.records.len())?;
     }
 
     /*
@@ -201,23 +159,12 @@ fn write_mapping_call(
     if bam_writer.is_none() {
         let header = mapper
             .header()
-            .context(
-                "mapper produced records but no SAM/BAM header was available",
-            )?
+            .context("mapper produced records but no SAM/BAM header was available")?
             .clone();
 
         *bam_writer = Some(
-            bam::Writer::from_path(
-                out_bam,
-                &header,
-                bam::Format::Bam,
-            )
-            .with_context(|| {
-                format!(
-                    "failed to create BAM {}",
-                    out_bam.display()
-                )
-            })?,
+            bam::Writer::from_path(out_bam, &header, bam::Format::Bam)
+                .with_context(|| format!("failed to create BAM {}", out_bam.display()))?,
         );
     }
 

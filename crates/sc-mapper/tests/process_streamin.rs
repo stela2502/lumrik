@@ -4,9 +4,9 @@ use anyhow::Result;
 use bam_tide::fastq::FastqRecord;
 
 use sc_mapper::core::MapperLaunch;
+use sc_mapper::core::MapperProcessLike;
 use sc_mapper::process::{MapperProcess, Minimap2};
 use sc_mapper::traits::ExternalMapper;
-use sc_mapper::core::MapperProcessLike;
 
 fn fq(id: &str, seq: &str) -> FastqRecord {
     FastqRecord {
@@ -38,8 +38,7 @@ fn single_stdin_process_writes_fastq_and_drains_all_sam_records() -> Result<()> 
         .to_string(),
     ];
 
-    let mut process =
-        MapperProcess::spawn_single_stdin(Path::new("sh"), &args, None)?;
+    let mut process = MapperProcess::spawn_single_stdin(Path::new("sh"), &args, None)?;
 
     let r1 = fq("read1", "ACGT");
 
@@ -64,7 +63,6 @@ fn single_stdin_process_writes_fastq_and_drains_all_sam_records() -> Result<()> 
 
     Ok(())
 }
-
 
 fn minimap2() -> Minimap2 {
     Minimap2::from_launch(MapperLaunch {
@@ -117,10 +115,7 @@ fn minimap2_maps_a_real_fastq_record() -> Result<()> {
     // TTTTTTTTTTACGTTGCAACGTTGCAACGTTGCAACGTTGCAAAAAAAAAAA
     //
     // The read below then has one obvious alignment.
-    let read = fq(
-        "read_001",
-        "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA",
-    );
+    let read = fq("read_001", "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA");
 
     let mut calls = Vec::new();
 
@@ -167,18 +162,9 @@ fn minimap2_streaming_returns_every_submitted_read_exactly_once() -> Result<()> 
     let mut mapper = mapper.spawn()?;
 
     let reads = [
-        fq(
-            "read_001",
-            "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA",
-        ),
-        fq(
-            "read_002",
-            "CGTTGCAACGTTGCAACGTTGCAACGTTGCAA",
-        ),
-        fq(
-            "read_003",
-            "GTTGCAACGTTGCAACGTTGCAACGTTGCAAC",
-        ),
+        fq("read_001", "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA"),
+        fq("read_002", "CGTTGCAACGTTGCAACGTTGCAACGTTGCAA"),
+        fq("read_003", "GTTGCAACGTTGCAACGTTGCAACGTTGCAAC"),
     ];
 
     let mut calls = Vec::new();
@@ -202,13 +188,11 @@ fn minimap2_streaming_returns_every_submitted_read_exactly_once() -> Result<()> 
         "every submitted FASTQ record must yield exactly one MappingCall"
     );
 
-    let mut received_ids: Vec<_> =
-        calls.iter().map(|call| call.read_id.as_str()).collect();
+    let mut received_ids: Vec<_> = calls.iter().map(|call| call.read_id.as_str()).collect();
 
     received_ids.sort_unstable();
 
-    let mut expected_ids: Vec<_> =
-        reads.iter().map(|read| read.clean_id()).collect();
+    let mut expected_ids: Vec<_> = reads.iter().map(|read| read.clean_id()).collect();
 
     expected_ids.sort_unstable();
 

@@ -1,8 +1,7 @@
 use clap::Parser;
-use std::path::PathBuf;
-use sc_primer::PrimerCli;
 use fast_tag_mapper::FastMapperCli;
-
+use sc_primer::PrimerCli;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Parser)]
 #[command(

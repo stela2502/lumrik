@@ -21,10 +21,7 @@ impl FeatureEntry {
         }
     }
 
-    pub fn bd_mouse(
-        id: u64,
-        sample_number: usize,
-    ) -> Self {
+    pub fn bd_mouse(id: u64, sample_number: usize) -> Self {
         Self::new(
             id,
             format!("SampleTag{sample_number:02}_mm"),
@@ -32,10 +29,7 @@ impl FeatureEntry {
         )
     }
 
-    pub fn bd_human(
-        id: u64,
-        sample_number: usize,
-    ) -> Self {
+    pub fn bd_human(id: u64, sample_number: usize) -> Self {
         Self::new(
             id,
             format!("SampleTag{sample_number:02}_hs"),

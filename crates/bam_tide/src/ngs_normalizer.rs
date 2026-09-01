@@ -1,4 +1,4 @@
-use crate::fastq::{FastqRecord,};// FastqPairReader, SimpleFastqReader, FastqRead};
+use crate::fastq::FastqRecord; // FastqPairReader, SimpleFastqReader, FastqRead};
 use read_tag_table::{ReadTagRecord, ReadTagTable};
 
 use anyhow::{Context, Result};
@@ -6,9 +6,6 @@ use mapping_info::MappingInfo;
 use sc_primer::Orientation;
 //use scdata::cell_data::GeneUmiHash;
 use scdata::{MatrixValueType, Scdata};
-
-
-
 
 pub const CHUNK_SIZE: usize = 10_000;
 
@@ -163,18 +160,12 @@ impl NgsNormalizerSupport {
             // the normalizer chunk size instead of the total read count.
             let tag = read_tags
                 .remove(&r2.id)
-                .with_context(|| {
-                    format!("missing ReadTagRecord for '{}'", r2.id)
-                })?;
+                .with_context(|| format!("missing ReadTagRecord for '{}'", r2.id))?;
 
-            r2.id = tag.extend_qname(
-                r2.id.split_whitespace().next().unwrap_or(&r2.id)
-            );
+            r2.id = tag.extend_qname(r2.id.split_whitespace().next().unwrap_or(&r2.id));
 
             if let Some(r1) = r1 {
-                r1.id = tag.extend_qname(
-                    r1.id.split_whitespace().next().unwrap_or(&r1.id)
-                );
+                r1.id = tag.extend_qname(r1.id.split_whitespace().next().unwrap_or(&r1.id));
             }
         }
 

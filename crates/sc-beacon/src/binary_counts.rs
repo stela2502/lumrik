@@ -1,6 +1,6 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
-use crate::stats::{expected_ambient_given_true, PosteriorEvidence};
+use crate::stats::{PosteriorEvidence, expected_ambient_given_true};
 
 #[derive(Debug, Clone)]
 pub struct BinaryCountFitConfig {
@@ -88,43 +88,26 @@ pub fn fit_binary_counts_with_config(
         let mut inferred_signal = Vec::with_capacity(counts.len());
 
         for (&count, posterior) in counts.iter().zip(&mut posteriors) {
-            let evidence = PosteriorEvidence::new(
-                count,
-                background_mean,
-                signal_prior,
-                signal_mean,
-                theta,
-            );
+            let evidence =
+                PosteriorEvidence::new(count, background_mean, signal_prior, signal_mean, theta);
 
-            let ambient_if_signal = expected_ambient_given_true(
-                count,
-                background_mean,
-                signal_mean,
-                theta,
-            );
+            let ambient_if_signal =
+                expected_ambient_given_true(count, background_mean, signal_mean, theta);
 
             let p = evidence.probability;
-            let expected_ambient =
-                (1.0 - p) * count as f64 + p * ambient_if_signal;
-            let expected_signal =
-                p * (count as f64 - ambient_if_signal).max(0.0);
+            let expected_ambient = (1.0 - p) * count as f64 + p * ambient_if_signal;
+            let expected_signal = p * (count as f64 - ambient_if_signal).max(0.0);
 
             *posterior = p;
             sum_signal += p;
             sum_expected_ambient += expected_ambient;
             sum_expected_signal += expected_signal;
-            inferred_signal.push(if p > 1e-12 {
-                expected_signal / p
-            } else {
-                0.0
-            });
+            inferred_signal.push(if p > 1e-12 { expected_signal / p } else { 0.0 });
         }
 
-        background_mean =
-            (sum_expected_ambient / n).max(cfg.minimum_background_mean);
+        background_mean = (sum_expected_ambient / n).max(cfg.minimum_background_mean);
 
-        signal_prior = ((sum_signal + cfg.prior_alpha)
-            / (n + cfg.prior_alpha + cfg.prior_beta))
+        signal_prior = ((sum_signal + cfg.prior_alpha) / (n + cfg.prior_alpha + cfg.prior_beta))
             .clamp(1e-9, 1.0 - 1e-9);
 
         signal_mean = if sum_signal > 1e-8 {
@@ -142,8 +125,7 @@ pub fn fit_binary_counts_with_config(
                 / sum_signal;
 
             theta = if weighted_variance > signal_mean + 1e-8 {
-                (signal_mean * signal_mean / (weighted_variance - signal_mean))
-                    .clamp(0.05, 1e6)
+                (signal_mean * signal_mean / (weighted_variance - signal_mean)).clamp(0.05, 1e6)
             } else {
                 1e6
             };
@@ -163,14 +145,9 @@ pub fn fit_binary_counts_with_config(
     // Refresh posteriors once with the final parameters, since the loop ends
     // after the M-step.
     for (&count, posterior) in counts.iter().zip(&mut posteriors) {
-        *posterior = PosteriorEvidence::new(
-            count,
-            background_mean,
-            signal_prior,
-            signal_mean,
-            theta,
-        )
-        .probability;
+        *posterior =
+            PosteriorEvidence::new(count, background_mean, signal_prior, signal_mean, theta)
+                .probability;
     }
 
     Ok(BinaryCountFit {
@@ -192,8 +169,7 @@ fn initialize(counts: &[u32], cfg: &BinaryCountFitConfig) -> (f64, f64) {
     let lower = &sorted[..split];
     let upper = &sorted[split.min(sorted.len())..];
 
-    let background_mean = (lower.iter().map(|&x| x as f64).sum::<f64>()
-        / lower.len() as f64)
+    let background_mean = (lower.iter().map(|&x| x as f64).sum::<f64>() / lower.len() as f64)
         .max(cfg.minimum_background_mean);
 
     let upper_mean = if upper.is_empty() {
@@ -202,8 +178,7 @@ fn initialize(counts: &[u32], cfg: &BinaryCountFitConfig) -> (f64, f64) {
         upper.iter().map(|&x| x as f64).sum::<f64>() / upper.len() as f64
     };
 
-    let signal_mean =
-        (upper_mean - background_mean).max(cfg.minimum_signal_mean);
+    let signal_mean = (upper_mean - background_mean).max(cfg.minimum_signal_mean);
 
     (background_mean, signal_mean)
 }
@@ -219,8 +194,7 @@ mod tests {
     #[test]
     fn separates_low_background_from_high_signal() {
         let counts = [
-            0, 0, 1, 1, 1, 2, 2, 1, 0, 2,
-            35, 40, 45, 50, 55, 60, 42, 48, 52, 58,
+            0, 0, 1, 1, 1, 2, 2, 1, 0, 2, 35, 40, 45, 50, 55, 60, 42, 48, 52, 58,
         ];
 
         let fit = fit_binary_counts(&counts).unwrap();

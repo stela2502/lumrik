@@ -13,19 +13,12 @@ mod runner;
 mod utils;
 
 pub use background::{AmbientModel, BackgroundConfig};
-pub use binary_counts::{
-    fit_binary_counts,
-    fit_binary_counts_with_config,
-    BinaryCountFit,
-    BinaryCountFitConfig,
-};
 pub use beacon_result::BeaconResult;
-pub use caller::{CallConfig, GuideCall, GuideCalls};
-pub use cell_guide_assignments::{
-    CellGuideAssignment,
-    CellGuideAssignments,
-    GuideEvidence,
+pub use binary_counts::{
+    BinaryCountFit, BinaryCountFitConfig, fit_binary_counts, fit_binary_counts_with_config,
 };
+pub use caller::{CallConfig, GuideCall, GuideCalls};
+pub use cell_guide_assignments::{CellGuideAssignment, CellGuideAssignments, GuideEvidence};
 pub use dataset::{GuideDataset, GuideObservation};
 pub use guide_stats::{MultiGuideGapStats, MultiGuideGapStatsTable};
 pub use model::{FitConfig, FittedModel, GuideExpressionModel};

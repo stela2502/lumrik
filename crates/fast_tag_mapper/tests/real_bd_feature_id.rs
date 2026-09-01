@@ -1,6 +1,6 @@
 use fast_tag_mapper::{
     encode_seq_positions_with_int_to_str, FastTagFeatureIndex, FastTagMapper, FeatureEntry,
-    HUMAN_SAMPLE_TAGS, MOUSE_SAMPLE_TAGS, MapStatus, Slot,
+    MapStatus, Slot, HUMAN_SAMPLE_TAGS, MOUSE_SAMPLE_TAGS,
 };
 use mapping_info::MappingInfo;
 use scdata::FeatureIndex;
@@ -123,11 +123,17 @@ fn encoded_positions_use_physical_bp_positions_and_return_feature_id() {
 fn duplicate_8mers_are_invalidated_not_used() {
     let mut mapper = FastTagMapper::new().with_min_hits(1);
 
-    mapper.add_feature(b"AAAAAAAACCCCCCCC", FeatureEntry::new(10, "a", "Antibody Capture"));
-    mapper.add_feature(b"AAAAAAAAGGGGGGGG", FeatureEntry::new(20, "b", "Antibody Capture"));
+    mapper.add_feature(
+        b"AAAAAAAACCCCCCCC",
+        FeatureEntry::new(10, "a", "Antibody Capture"),
+    );
+    mapper.add_feature(
+        b"AAAAAAAAGGGGGGGG",
+        FeatureEntry::new(20, "b", "Antibody Capture"),
+    );
 
-    let encoded = fast_tag_mapper::fast_mapper::encode_8mer_with_int_to_str(b"AAAAAAAA")
-        .expect("valid kmer");
+    let encoded =
+        fast_tag_mapper::fast_mapper::encode_8mer_with_int_to_str(b"AAAAAAAA").expect("valid kmer");
 
     assert!(matches!(mapper.slot(encoded), Slot::Duplicate));
 
@@ -139,8 +145,14 @@ fn duplicate_8mers_are_invalidated_not_used() {
 fn tie_returns_none_for_hot_api() {
     let mut mapper = FastTagMapper::new().with_min_hits(1);
 
-    mapper.add_feature(b"ACGTACGT", FeatureEntry::new(101, "tag1", "Antibody Capture"));
-    mapper.add_feature(b"TGCATGCA", FeatureEntry::new(202, "tag2", "Antibody Capture"));
+    mapper.add_feature(
+        b"ACGTACGT",
+        FeatureEntry::new(101, "tag1", "Antibody Capture"),
+    );
+    mapper.add_feature(
+        b"TGCATGCA",
+        FeatureEntry::new(202, "tag2", "Antibody Capture"),
+    );
 
     let read = b"NNNNACGTACGTNNNNTGCATGCA";
 
@@ -164,7 +176,10 @@ fn feature_index_uses_feature_entries_not_table_entries() {
 
     assert_eq!(index.feature_id("SampleTag07_mm"), Some(7));
     assert_eq!(index.feature_name(7), "SampleTag07_mm");
-    assert_eq!(index.ordered_feature_ids(), (1_u64..=12).collect::<Vec<_>>());
+    assert_eq!(
+        index.ordered_feature_ids(),
+        (1_u64..=12).collect::<Vec<_>>()
+    );
     assert_eq!(
         index.to_10x_feature_line(7),
         "SampleTag07_mm\tSampleTag07_mm\tbd_sample_mouse"

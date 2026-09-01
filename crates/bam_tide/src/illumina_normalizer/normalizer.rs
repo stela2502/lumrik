@@ -1,21 +1,20 @@
-use crate::fastq::{FastqRecord, FastqWriter, FastqPairReader};
+use crate::fastq::{FastqPairReader, FastqRecord, FastqWriter};
 use crate::illumina_normalizer::cli::{Cli, InsertRead, PrimerRead};
-use crate::ngs_normalizer::{NgsNormalizerSupport, CHUNK_SIZE};
+use crate::ngs_normalizer::{CHUNK_SIZE, NgsNormalizerSupport};
 use crate::{AdditionalFeatureSource, FeatureTagCounts};
-use read_tag_table::{ReadTagTable,ReadTagRecord};
+use read_tag_table::{ReadTagRecord, ReadTagTable};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+use int_to_str::IntToStr;
 use mapping_info::MappingInfo;
 use rayon::prelude::*;
-use sc_primer::{ PrimerDetector};
-use scdata::{Scdata, GeneUmiHash};
-use int_to_str::IntToStr;
+use sc_primer::PrimerDetector;
+use scdata::{GeneUmiHash, Scdata};
 
+use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::collections::HashSet;
-use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
-
 
 #[derive(Debug, Clone)]
 pub struct IlluminaNormalizerConfig {
@@ -36,7 +35,6 @@ pub struct IlluminaNormalizerConfig {
     pub gzip: bool,
 }
 
-
 pub struct IlluminaPartial {
     pub candidates: Vec<IlluminaCandidate>,
     pub feature_tag_table: Scdata,
@@ -45,7 +43,7 @@ pub struct IlluminaPartial {
 
 pub struct IlluminaCandidate {
     pub dedup_key: DedupKey,
-    pub fastq_record: FastqRecord,              // exported R2 / insert
+    pub fastq_record: FastqRecord, // exported R2 / insert
     pub paired_r1_record: Option<FastqRecord>,
     pub read_tag: ReadTagRecord,
 }
@@ -64,7 +62,6 @@ impl IlluminaPartial {
             stats: NgsNormalizerSupport::new_stats(),
         }
     }
-
 
     pub fn normalize_pair(
         &mut self,
@@ -214,7 +211,6 @@ fn usable_insert(seq: &[u8], min_len: usize, max_single_base_fraction: f64) -> b
     (max_count as f64 / acgt as f64) <= max_single_base_fraction
 }
 
-
 pub struct IlluminaNormalizer {
     config: IlluminaNormalizerConfig,
     stats: MappingInfo,
@@ -270,7 +266,7 @@ impl IlluminaNormalizer {
             gzip: !cli.no_gzip,
         })
     }
-    
+
     /// Normalizes input reads and streams mapper-ready FASTQ records to `emit`.
     ///
     /// Reads are processed in chunks using the normalizer's existing parallel
@@ -300,33 +296,22 @@ impl IlluminaNormalizer {
         mut report_progress: P,
     ) -> Result<()>
     where
-        F: FnMut(
-            &[(Option<FastqRecord>, FastqRecord)],
-        ) -> Result<bool>,
+        F: FnMut(&[(Option<FastqRecord>, FastqRecord)]) -> Result<bool>,
         P: FnMut(&MappingInfo),
     {
-        NgsNormalizerSupport::configure_rayon_threads(
-            self.config.threads,
-        );
+        NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
 
+        let mut reader = FastqPairReader::from_paths(r1_path, r2_path).with_context(|| {
+            format!(
+                "failed to open FASTQ pair: {} and {}",
+                r1_path.display(),
+                r2_path.display(),
+            )
+        })?;
 
-        let mut reader =
-            FastqPairReader::from_paths(r1_path, r2_path)
-            .with_context(|| {
-                format!(
-                    "failed to open FASTQ pair: {} and {}",
-                    r1_path.display(),
-                    r2_path.display(),
-                )
-            })?;
+        let mut chunk = Vec::<(FastqRecord, FastqRecord)>::with_capacity(CHUNK_SIZE);
 
-        let mut chunk =
-            Vec::<(FastqRecord, FastqRecord)>::with_capacity(
-                CHUNK_SIZE,
-            );
-
-        let mut output =
-            Vec::<(Option<FastqRecord>, FastqRecord)>::new();
+        let mut output = Vec::<(Option<FastqRecord>, FastqRecord)>::new();
 
         let mut processed_from_input = 0usize;
 
@@ -345,15 +330,9 @@ impl IlluminaNormalizer {
             if chunk.len() >= CHUNK_SIZE {
                 output.clear();
 
-                self.process_chunk(
-                    &chunk,
-                    &mut output,
-                )?;
+                self.process_chunk(&chunk, &mut output)?;
 
-                NgsNormalizerSupport::prepare_emit_batch(
-                    &mut output,
-                    &mut self.read_tags,
-                )?;
+                NgsNormalizerSupport::prepare_emit_batch(&mut output, &mut self.read_tags)?;
 
                 if !output.is_empty() && !emit(&output)? {
                     return Ok(());
@@ -367,15 +346,9 @@ impl IlluminaNormalizer {
         if !chunk.is_empty() {
             output.clear();
 
-            self.process_chunk(
-                &chunk,
-                &mut output,
-            )?;
+            self.process_chunk(&chunk, &mut output)?;
 
-            NgsNormalizerSupport::prepare_emit_batch(
-                &mut output,
-                &mut self.read_tags,
-            )?;
+            NgsNormalizerSupport::prepare_emit_batch(&mut output, &mut self.read_tags)?;
 
             if !output.is_empty() && !emit(&output)? {
                 return Ok(());
@@ -417,22 +390,17 @@ impl IlluminaNormalizer {
     ) -> Result<Vec<(Option<FastqRecord>, FastqRecord)>> {
         NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
 
+        let mut reader = FastqPairReader::from_paths(r1_path, r2_path).with_context(|| {
+            format!(
+                "failed to open FASTQ pair: {} and {}",
+                r1_path.display(),
+                r2_path.display()
+            )
+        })?;
 
-        let mut reader =
-            FastqPairReader::from_paths(r1_path, r2_path)
-                .with_context(|| {
-                    format!(
-                        "failed to open FASTQ pair: {} and {}",
-                        r1_path.display(),
-                        r2_path.display()
-                    )
-                })?;
+        let mut output: Vec<(Option<FastqRecord>, FastqRecord)> = Vec::new();
 
-        let mut output:
-            Vec<(Option<FastqRecord>, FastqRecord)> = Vec::new();
-
-        let mut chunk: Vec<(FastqRecord, FastqRecord)> =
-            Vec::with_capacity(CHUNK_SIZE);
+        let mut chunk: Vec<(FastqRecord, FastqRecord)> = Vec::with_capacity(CHUNK_SIZE);
 
         let mut processed_from_input = 0usize;
 
@@ -449,18 +417,13 @@ impl IlluminaNormalizer {
             chunk.push(pair);
 
             if chunk.len() >= CHUNK_SIZE {
-                self.process_chunk(
-                    &chunk,
-                    &mut output,
-                )?;
+                self.process_chunk(&chunk, &mut output)?;
 
                 chunk.clear();
 
-                let total =
-                    self.stats.get_issue_count("total_pairs");
+                let total = self.stats.get_issue_count("total_pairs");
 
-                let accepted =
-                    self.stats.get_issue_count("accepted_pairs");
+                let accepted = self.stats.get_issue_count("accepted_pairs");
 
                 let pct = if total > 0 {
                     100.0 * accepted as f64 / total as f64
@@ -481,10 +444,7 @@ impl IlluminaNormalizer {
         }
 
         if !chunk.is_empty() {
-            self.process_chunk(
-                &chunk,
-                &mut output,
-            )?;
+            self.process_chunk(&chunk, &mut output)?;
         }
 
         Ok(output)
@@ -497,50 +457,33 @@ impl IlluminaNormalizer {
     pub fn run(&mut self, r1_path: &Path, r2_path: &Path) -> Result<()> {
         let fastqs = self.collect_fastqs(r1_path, r2_path)?;
 
-        let (paired_r1_path, paired_r2_path) =
-            self.paired_out_paths(&self.config.out);
+        let (paired_r1_path, paired_r2_path) = self.paired_out_paths(&self.config.out);
 
-        std::fs::create_dir_all(
-            paired_r1_path
-                .parent()
-                .unwrap_or_else(|| Path::new(".")),
-        )?;
+        std::fs::create_dir_all(paired_r1_path.parent().unwrap_or_else(|| Path::new(".")))?;
 
-        let mut fastq = FastqWriter::new(
-            &self.config.out,
-            self.config.gzip,
-            self.config.gzip_level,
-        )
-        .with_context(|| {
-            format!(
-                "failed to create FASTQ: {}",
-                self.config.out.display()
-            )
-        })?;
+        let mut fastq =
+            FastqWriter::new(&self.config.out, self.config.gzip, self.config.gzip_level)
+                .with_context(|| {
+                    format!("failed to create FASTQ: {}", self.config.out.display())
+                })?;
 
-        let mut paired_r1 = FastqWriter::new(
-            &paired_r1_path,
-            self.config.gzip,
-            self.config.gzip_level,
-        )
-        .with_context(|| {
-            format!(
-                "failed to create paired R1 FASTQ: {}",
-                paired_r1_path.display()
-            )
-        })?;
+        let mut paired_r1 =
+            FastqWriter::new(&paired_r1_path, self.config.gzip, self.config.gzip_level)
+                .with_context(|| {
+                    format!(
+                        "failed to create paired R1 FASTQ: {}",
+                        paired_r1_path.display()
+                    )
+                })?;
 
-        let mut paired_r2 = FastqWriter::new(
-            &paired_r2_path,
-            self.config.gzip,
-            self.config.gzip_level,
-        )
-        .with_context(|| {
-            format!(
-                "failed to create paired R2 FASTQ: {}",
-                paired_r2_path.display()
-            )
-        })?;
+        let mut paired_r2 =
+            FastqWriter::new(&paired_r2_path, self.config.gzip, self.config.gzip_level)
+                .with_context(|| {
+                    format!(
+                        "failed to create paired R2 FASTQ: {}",
+                        paired_r2_path.display()
+                    )
+                })?;
 
         for (r1, r2) in fastqs {
             if let Some(r1) = r1 {
@@ -570,16 +513,14 @@ impl IlluminaNormalizer {
         let out_root = self.config.out.parent().unwrap_or_else(|| Path::new("."));
 
         let cell_barcode_len = self.config.primer.cell_len();
-        
-        self.feature_tag_counts.finalize_and_write_all(cell_barcode_len, out_root)?;
+
+        self.feature_tag_counts
+            .finalize_and_write_all(cell_barcode_len, out_root)?;
 
         Ok(())
     }
 
-    fn paired_out_paths(
-        &self,
-        out: &Path,
-    ) -> (PathBuf, PathBuf) {
+    fn paired_out_paths(&self, out: &Path) -> (PathBuf, PathBuf) {
         let parent = out.parent().unwrap_or_else(|| Path::new("."));
         let stem = self.fastq_stem(out);
 
@@ -611,7 +552,8 @@ impl IlluminaNormalizer {
         output: &mut Vec<(Option<FastqRecord>, FastqRecord)>,
     ) -> Result<()> {
         self.stats.start_counter();
-        self.stats.start_timer("bam_tide/multi_cpu/illumina_normalize_chunk");
+        self.stats
+            .start_timer("bam_tide/multi_cpu/illumina_normalize_chunk");
 
         let partials: Vec<IlluminaPartial> = input
             .par_iter()
@@ -629,7 +571,8 @@ impl IlluminaNormalizer {
             })
             .collect();
 
-        self.stats.stop_timer("bam_tide/multi_cpu/illumina_normalize_chunk");
+        self.stats
+            .stop_timer("bam_tide/multi_cpu/illumina_normalize_chunk");
         self.stats.stop_multi_processor_time();
 
         for partial in partials {
@@ -641,10 +584,7 @@ impl IlluminaNormalizer {
                 if self.seen.insert(candidate.dedup_key) {
                     self.read_tags.insert(candidate.read_tag);
 
-                    output.push((
-                        candidate.paired_r1_record,
-                        candidate.fastq_record,
-                    ));
+                    output.push((candidate.paired_r1_record, candidate.fastq_record));
 
                     self.stats.report("accepted_pairs");
                     self.stats.report("unique_genomic");

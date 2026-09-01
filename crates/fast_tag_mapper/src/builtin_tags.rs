@@ -39,31 +39,24 @@ pub const MOUSE_SAMPLE_TAGS: [&[u8]; 12] = [
 ];
 
 impl FastTagMapper {
-
-    pub fn add_builtin( &mut self,  set: BuiltinTagSet ) -> usize{
+    pub fn add_builtin(&mut self, set: BuiltinTagSet) -> usize {
         let start_id = self.feature_count() as u64;
         match set {
             BuiltinTagSet::Human => {
                 for (i, seq) in HUMAN_SAMPLE_TAGS.iter().enumerate() {
-                    let sample_id = i +1;
+                    let sample_id = i + 1;
                     let ext_id = start_id + sample_id as u64;
 
-                    self.add_feature(
-                        seq,
-                        FeatureEntry::bd_human(ext_id, sample_id),
-                    );
+                    self.add_feature(seq, FeatureEntry::bd_human(ext_id, sample_id));
                 }
             }
 
             BuiltinTagSet::Mouse => {
                 for (i, seq) in MOUSE_SAMPLE_TAGS.iter().enumerate() {
-                    let sample_id = i+1;
+                    let sample_id = i + 1;
                     let ext_id = start_id + sample_id as u64;
 
-                    self.add_feature(
-                        seq,
-                        FeatureEntry::bd_mouse(ext_id, sample_id),
-                    );
+                    self.add_feature(seq, FeatureEntry::bd_mouse(ext_id, sample_id));
                 }
             }
         }

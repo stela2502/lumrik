@@ -1,10 +1,10 @@
+use crate::fastq::record::FastqRecord;
 use anyhow::Result;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
-use crate::fastq::record::FastqRecord;
 
 const BUFFER_SIZE: usize = 4 * 1024 * 1024;
 

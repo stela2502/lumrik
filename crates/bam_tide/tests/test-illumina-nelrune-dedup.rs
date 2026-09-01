@@ -3,33 +3,19 @@
 use anyhow::Result;
 use tempfile::tempdir;
 
-use bam_tide::illumina_normalizer::{
-    IlluminaNormalizer,
-    IlluminaNormalizerConfig,
-};
+use bam_tide::illumina_normalizer::{IlluminaNormalizer, IlluminaNormalizerConfig};
 
-use bam_tide::illumina_normalizer::cli::{
-    InsertRead,
-    PrimerRead,
-};
+use bam_tide::illumina_normalizer::cli::{InsertRead, PrimerRead};
 
-use sc_primer::{
-    Grammar,
-    PrimerDetector,
-};
-
+use sc_primer::{Grammar, PrimerDetector};
 
 #[test]
 fn nelrune_run_does_not_emit_pcr_duplicates() -> Result<()> {
-    let dir =
-        tempdir()?;
+    let dir = tempdir()?;
 
-    let r1_path =
-        dir.path().join("R1.fastq");
+    let r1_path = dir.path().join("R1.fastq");
 
-    let r2_path =
-        dir.path().join("R2.fastq");
-
+    let r2_path = dir.path().join("R2.fastq");
 
     // --------------------------------------------------------
     // Two reads:
@@ -72,7 +58,6 @@ IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
 ",
     )?;
 
-
     // --------------------------------------------------------
     // Minimal artificial primer grammar
     //
@@ -83,95 +68,62 @@ IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
     // cell UMI
     // --------------------------------------------------------
 
-    let grammar =
-        Grammar::parse(
-            "dedup-test",
-            "CELL:4+UMI:4",
-        )
-        .map_err(
-            anyhow::Error::msg
-        )?;
+    let grammar = Grammar::parse("dedup-test", "CELL:4+UMI:4").map_err(anyhow::Error::msg)?;
 
-    let primer =
-        PrimerDetector::from_grammar(
-            grammar
-        )
-        .map_err(
-            anyhow::Error::msg
-        )?;
+    let primer = PrimerDetector::from_grammar(grammar).map_err(anyhow::Error::msg)?;
 
+    let config = IlluminaNormalizerConfig {
+        /*
+         * nelrune_run() does not write these files.
+         */
+        out: dir.path().join("unused.fastq"),
 
-    let config =
-        IlluminaNormalizerConfig {
-            /*
-             * nelrune_run() does not write these files.
-             */
-            out:
-                dir.path()
-                    .join("unused.fastq"),
+        read_tags: dir.path().join("unused.tags"),
 
-            read_tags:
-                dir.path()
-                    .join("unused.tags"),
+        primer_read: PrimerRead::R1,
 
-            primer_read:
-                PrimerRead::R1,
+        insert_read: InsertRead::R2,
 
-            insert_read:
-                InsertRead::R2,
+        primer,
 
-            primer,
+        additional_features: Vec::new(),
 
-            additional_features:
-                Vec::new(),
+        additional_feature_min_hits: 4,
 
-            additional_feature_min_hits:
-                4,
+        min_insert_len: 20,
 
-            min_insert_len:
-                20,
+        threads: 1,
 
-            threads:
-                1,
+        gzip_level: 1,
 
-            gzip_level:
-                1,
+        max_reads: Some(10),
 
-            max_reads: Some(10),
+        gzip: false,
+    };
 
-            gzip:
-                false,
-        };
-
-
-    let mut normalizer =
-        IlluminaNormalizer::new(
-            config
-        )?;
-
+    let mut normalizer = IlluminaNormalizer::new(config)?;
 
     // --------------------------------------------------------
     // This Vec represents exactly what Nelrune would submit to
     // STAR.
     // --------------------------------------------------------
 
-    let mut emitted =
-        Vec::new();
+    let mut emitted = Vec::new();
 
     normalizer.nelrune_run(
         &r1_path,
         &r2_path,
         |batch| {
-            emitted.extend(batch.iter().map(|(r1, r2)| (
-                r1.as_ref().map(|read| read.id.clone()),
-                r2.id.clone(),
-            )));
+            emitted.extend(
+                batch
+                    .iter()
+                    .map(|(r1, r2)| (r1.as_ref().map(|read| read.id.clone()), r2.id.clone())),
+            );
 
             Ok(true)
         },
         |_| {},
     )?;
-
 
     // --------------------------------------------------------
     // The critical contract:
@@ -185,7 +137,6 @@ IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
         1,
         "PCR-equivalent reads must only be emitted once to Nelrune/STAR"
     );
-
 
     Ok(())
 }

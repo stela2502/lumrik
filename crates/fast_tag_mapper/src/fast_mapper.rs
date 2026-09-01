@@ -1,13 +1,13 @@
+use int_to_str::IntToStr;
+use mapping_info::MappingInfo;
 use std::{
-    fs::File,
     collections::HashMap,
+    fs::File,
     io::{BufRead, BufReader},
     path::Path,
 };
-use mapping_info::MappingInfo;
-use int_to_str::IntToStr;
 
-use crate::{FeatureEntry, TagEntry, };
+use crate::{FeatureEntry, TagEntry};
 
 const K: usize = 8;
 const TABLE_SIZE: usize = 1 << 16;
@@ -85,10 +85,7 @@ impl FastTagMapper {
         self.table[encoded_8mer as usize]
     }
 
-    pub fn load_fasta<P: AsRef<Path>>(
-        &mut self,
-        path: P,
-    ) -> std::io::Result<usize> {
+    pub fn load_fasta<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<usize> {
         self.load_fasta_as(path, "Antibody Capture")
     }
 
@@ -97,11 +94,7 @@ impl FastTagMapper {
     /// Nelrune uses this to keep short-feature classes separate: for example
     /// `hto.fa` is loaded with feature type `hto`, while the FASTA record names
     /// remain the actual feature names.
-    pub fn load_fasta_as<P, S>(
-        &mut self,
-        path: P,
-        feature_type: S,
-    ) -> std::io::Result<usize>
+    pub fn load_fasta_as<P, S>(&mut self, path: P, feature_type: S) -> std::io::Result<usize>
     where
         P: AsRef<Path>,
         S: AsRef<str>,
@@ -123,49 +116,33 @@ impl FastTagMapper {
 
             if let Some(header) = line.strip_prefix('>') {
                 if let Some(old_name) = name.take() {
-                    added += self.add_loaded_fasta_record(
-                        old_name,
-                        &seq,
-                        feature_type,
-                    );
+                    added += self.add_loaded_fasta_record(old_name, &seq, feature_type);
                     seq.clear();
                 }
 
-                name = Some(header.split_whitespace().next().unwrap_or(header).to_string());
+                name = Some(
+                    header
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(header)
+                        .to_string(),
+                );
             } else {
                 seq.extend_from_slice(line.as_bytes());
             }
         }
 
         if let Some(old_name) = name {
-            added += self.add_loaded_fasta_record(
-                old_name,
-                &seq,
-                feature_type,
-            );
+            added += self.add_loaded_fasta_record(old_name, &seq, feature_type);
         }
 
         Ok(added)
     }
 
-    fn add_loaded_fasta_record(
-        &mut self,
-        name: String,
-        seq: &[u8],
-        feature_type: &str,
-    ) -> usize {
-        let feature_id = self
-            .features()
-            .iter()
-            .map(|f| f.id)
-            .max()
-            .unwrap_or(0)
-            + 1;
+    fn add_loaded_fasta_record(&mut self, name: String, seq: &[u8], feature_type: &str) -> usize {
+        let feature_id = self.features().iter().map(|f| f.id).max().unwrap_or(0) + 1;
 
-        self.add_feature(
-            seq,
-            FeatureEntry::new(feature_id, name, feature_type),
-        );
+        self.add_feature(seq, FeatureEntry::new(feature_id, name, feature_type));
 
         1
     }
@@ -338,10 +315,12 @@ pub fn encode_8mer_with_int_to_str(seq: &[u8]) -> Option<u16> {
         return None;
     }
 
-    if !seq
-        .iter()
-        .all(|b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't' | b'N' | b'n'))
-    {
+    if !seq.iter().all(|b| {
+        matches!(
+            b,
+            b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't' | b'N' | b'n'
+        )
+    }) {
         return None;
     }
 

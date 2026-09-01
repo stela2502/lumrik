@@ -6,19 +6,19 @@
 //! - Chromosome names are resolved through a fuzzy lookup table.
 //! - Read/SNP overlap returns `ObservedSnp`, not pre-classified monster structs.
 
+use crate::RawSnpRecord;
 use crate::locus::SnpLocus;
 use crate::read::{AlignedRead, ObservedBase};
 use crate::vcf::{SnpVcfReader, VcfReadOptions};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use scdata::feature_index::FeatureIndex;
 use std::collections::HashMap;
 use std::path::Path;
-use crate::RawSnpRecord;
 //use crate::Strand;
 use std::fmt;
 //use crate::ReadOpKind::*;
 
-pub const DEFAULT_BIN_WIDTH: usize=10_000;
+pub const DEFAULT_BIN_WIDTH: usize = 10_000;
 
 /// Binned SNP index.
 ///
@@ -161,8 +161,12 @@ impl SnpIndex {
         Self::validate_and_canonicalize_raw_loci(&chr_info, &mut raw_loci)?;
 
         raw_loci.sort_by(|a, b| {
-            (a.chr_id, a.pos0, a.name.as_str(), a.vcf_id.as_str())
-                .cmp(&(b.chr_id, b.pos0, b.name.as_str(), b.vcf_id.as_str()))
+            (a.chr_id, a.pos0, a.name.as_str(), a.vcf_id.as_str()).cmp(&(
+                b.chr_id,
+                b.pos0,
+                b.name.as_str(),
+                b.vcf_id.as_str(),
+            ))
         });
 
         let loci: Vec<SnpLocus> = raw_loci
@@ -211,7 +215,7 @@ impl SnpIndex {
     ) -> Result<Self> {
         let chr_name_to_id = Self::build_chr_map(&chr_names);
 
-        let raw_loci =  SnpVcfReader::read_path(path, &chr_name_to_id, options)
+        let raw_loci = SnpVcfReader::read_path(path, &chr_name_to_id, options)
             .context("failed to read SNP loci from VCF")?;
 
         Self::new(&chr_names, &chr_lengths, raw_loci, bin_width)
@@ -276,11 +280,7 @@ impl SnpIndex {
         }
     }
 
-    pub fn snps_at_chr_name_pos(
-        &self,
-        chr_name: &str,
-        pos0: u32,
-    ) -> SnpPosIter<'_> {
+    pub fn snps_at_chr_name_pos(&self, chr_name: &str, pos0: u32) -> SnpPosIter<'_> {
         let Some(chr_id) = self.chr_id(chr_name) else {
             return SnpPosIter::empty(self);
         };
@@ -323,7 +323,6 @@ impl SnpIndex {
         }
     }
 
-
     /// Return SNP loci actually observed by a read.
     ///
     /// This does not classify ref/alt/other globally.
@@ -359,11 +358,15 @@ impl SnpIndex {
     /// Return a tupel of SNP_ids:
     ///
     /// ( ref, alt, other )
-    pub fn get_ref_alt_other_ids_for_read( &self, read: &AlignedRead, min_baseq: u8,) -> (Vec<u64>, Vec<u64>, Vec<u64>){
-        let obs = self.observed_snps( &read, min_baseq );
+    pub fn get_ref_alt_other_ids_for_read(
+        &self,
+        read: &AlignedRead,
+        min_baseq: u8,
+    ) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
+        let obs = self.observed_snps(&read, min_baseq);
         let mut reference = Vec::with_capacity(obs.len());
-        let mut alternate =  Vec::with_capacity(obs.len());
-        let mut other =     Vec::with_capacity(obs.len());
+        let mut alternate = Vec::with_capacity(obs.len());
+        let mut other = Vec::with_capacity(obs.len());
 
         for obs_snp in obs {
             let feature_id = obs_snp.feature_id();
@@ -497,11 +500,7 @@ impl SnpIndex {
         vec![SnpLocusBin::default(); total_bins]
     }
 
-    pub fn match_read<'a>(
-        &'a self,
-        read: &'a AlignedRead,
-        min_baseq: u8,
-    ) -> SnpReadMatch<'a> {
+    pub fn match_read<'a>(&'a self, read: &'a AlignedRead, min_baseq: u8) -> SnpReadMatch<'a> {
         let mut out = SnpReadMatch::default();
 
         for hit in self.observed_snps(read, min_baseq) {
@@ -516,8 +515,12 @@ impl SnpIndex {
         loci: &mut [RawSnpRecord],
     ) -> Result<()> {
         loci.sort_by(|a, b| {
-            (a.chr_id, a.pos0, a.name.as_str(), a.vcf_id.as_str())
-                .cmp(&(b.chr_id, b.pos0, b.name.as_str(), b.vcf_id.as_str()))
+            (a.chr_id, a.pos0, a.name.as_str(), a.vcf_id.as_str()).cmp(&(
+                b.chr_id,
+                b.pos0,
+                b.name.as_str(),
+                b.vcf_id.as_str(),
+            ))
         });
 
         for locus in loci.iter_mut() {
@@ -552,7 +555,6 @@ impl SnpIndex {
             if locus.name.is_empty() {
                 locus.name = Self::make_default_locus_name(chr, locus);
             }
-
         }
 
         Ok(())
@@ -652,8 +654,6 @@ impl FeatureIndex for SnpIndex {
     fn ordered_feature_ids(&self) -> Vec<u64> {
         self.loci.iter().map(|locus| locus.id as u64).collect()
     }
-
-
 }
 
 pub struct SnpPosIter<'a> {
@@ -736,9 +736,9 @@ impl<'a> Iterator for SnpRangeIter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read::{AlignedRead, ReadOpKind, Strand};
     use crate::Genome;
     use crate::ReadOpKind::*;
+    use crate::read::{AlignedRead, ReadOpKind, Strand};
 
     /*fn locus(
         chr_id: usize,
@@ -763,12 +763,12 @@ mod tests {
             &["chrA".to_string(), "chrB".to_string(), "MT".to_string()],
             &[1_000, 500, 100],
             vec![
-                RawSnpRecord::new( 0, 125, b'a', b"T", "rs_geneA_125", "rsA"),
-                RawSnpRecord::new( 0, 445, b'C', b"G", "rs_geneB_445", "rsB"),
-                RawSnpRecord::new( 0, 545, b'G', b"T", "rs_geneC_545", "rsC"),
-                RawSnpRecord::new( 0, 835, b'C', b"A", "rs_geneD_835", "rsD"),
-                RawSnpRecord::new( 1, 25, b'T', b"C", "rs_chrB_25", "rsE"),
-                RawSnpRecord::new( 2, 5, b'A', b"G", "rs_mt_5", "rsMT"),
+                RawSnpRecord::new(0, 125, b'a', b"T", "rs_geneA_125", "rsA"),
+                RawSnpRecord::new(0, 445, b'C', b"G", "rs_geneB_445", "rsB"),
+                RawSnpRecord::new(0, 545, b'G', b"T", "rs_geneC_545", "rsC"),
+                RawSnpRecord::new(0, 835, b'C', b"A", "rs_geneD_835", "rsD"),
+                RawSnpRecord::new(1, 25, b'T', b"C", "rs_chrB_25", "rsE"),
+                RawSnpRecord::new(2, 5, b'A', b"G", "rs_mt_5", "rsMT"),
             ],
             100,
         )
@@ -981,26 +981,22 @@ mod tests {
     fn constructor_rejects_bad_inputs() {
         assert!(SnpIndex::new(&[], &[], vec![], 100).is_err());
 
-        assert!(SnpIndex::new(
-            &["chrA".to_string()],
-            &[1_000],
-            vec![],
-            0,
-        )
-        .is_err());
+        assert!(SnpIndex::new(&["chrA".to_string()], &[1_000], vec![], 0,).is_err());
 
-        assert!(SnpIndex::new(
-            &["chrA".to_string()],
-            &[1_000],
-            vec![RawSnpRecord::new( 0, 1_000, b'A', b"T", "bad", "rsBad")],
-            100,
-        )
-        .is_err());
+        assert!(
+            SnpIndex::new(
+                &["chrA".to_string()],
+                &[1_000],
+                vec![RawSnpRecord::new(0, 1_000, b'A', b"T", "bad", "rsBad")],
+                100,
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn real_world_stress_test() {
-        let genome= Genome::from_fasta("tests/data/chr17_slice.fa.gz").unwrap();
+        let genome = Genome::from_fasta("tests/data/chr17_slice.fa.gz").unwrap();
         let mut read = AlignedRead::new(
             0,                  // e.g. 0 for chr17 slice
             Strand::Minus,         // flag 16
@@ -1128,32 +1124,50 @@ mod tests {
         );
         let slice_start_1based = 7_666_729u32;
         let snps = vec![
-            RawSnpRecord::new(0, 7_675_994 - slice_start_1based, b'G', b"C", "TP53_c375G>C", "TP53_c375G>C"),
-            RawSnpRecord::new(0, 7_674_894 - slice_start_1based, b'C', b"T", "TP53_c637C>T","TP53_c637C>T"),
-            RawSnpRecord::new(0, 7_674_953 - slice_start_1based, b'A', b"T", "TP53_c578A>T","TP53_c637C>T"),
+            RawSnpRecord::new(
+                0,
+                7_675_994 - slice_start_1based,
+                b'G',
+                b"C",
+                "TP53_c375G>C",
+                "TP53_c375G>C",
+            ),
+            RawSnpRecord::new(
+                0,
+                7_674_894 - slice_start_1based,
+                b'C',
+                b"T",
+                "TP53_c637C>T",
+                "TP53_c637C>T",
+            ),
+            RawSnpRecord::new(
+                0,
+                7_674_953 - slice_start_1based,
+                b'A',
+                b"T",
+                "TP53_c578A>T",
+                "TP53_c637C>T",
+            ),
         ];
 
-        let pos0 =  7_674_953 - slice_start_1based;
+        let pos0 = 7_674_953 - slice_start_1based;
         let obs = read.base_at_ref_pos(pos0).unwrap();
-        assert_eq!(obs.base, b'A', "base at {}='{}' could be 'A' (in the read))",
-            pos0,
-            obs.base as char
+        assert_eq!(
+            obs.base, b'A',
+            "base at {}='{}' could be 'A' (in the read))",
+            pos0, obs.base as char
         );
 
         read.seq[obs.read_pos as usize] = b'T';
 
         let obs = read.base_at_ref_pos(pos0).unwrap();
-        assert_eq!(obs.base, b'T', "base at {}='{}' not changed to 'T' (in the read))",
-            pos0,
-            obs.base as char
+        assert_eq!(
+            obs.base, b'T',
+            "base at {}='{}' not changed to 'T' (in the read))",
+            pos0, obs.base as char
         );
 
-        let index = SnpIndex::new(
-            &genome.chr_names(),
-            &genome.chr_lengths(),
-            snps,
-            1_000_000,
-        );
+        let index = SnpIndex::new(&genome.chr_names(), &genome.chr_lengths(), snps, 1_000_000);
 
         assert!(
             index.is_ok(),
@@ -1163,25 +1177,28 @@ mod tests {
 
         let index = index.unwrap();
 
-        assert!(read.base_at_ref_pos(7_675_994 - slice_start_1based).is_none());
+        assert!(
+            read.base_at_ref_pos(7_675_994 - slice_start_1based)
+                .is_none()
+        );
 
-        assert!(read
-            .base_at_ref_pos(7_674_894 - slice_start_1based)
-            .is_some());
+        assert!(
+            read.base_at_ref_pos(7_674_894 - slice_start_1based)
+                .is_some()
+        );
 
-        assert!(read
-            .base_at_ref_pos(7_674_953 - slice_start_1based)
-            .is_some());
+        assert!(
+            read.base_at_ref_pos(7_674_953 - slice_start_1based)
+                .is_some()
+        );
 
-        let (ref_ids, alt_ids, other_ids) =
-            index.get_ref_alt_other_ids_for_read(&read, 0);
+        let (ref_ids, alt_ids, other_ids) = index.get_ref_alt_other_ids_for_read(&read, 0);
 
         assert_eq!(ref_ids, vec![0u64]);
         assert_eq!(alt_ids, vec![1u64]);
         assert!(other_ids.is_empty());
     }
 }
-
 
 impl fmt::Display for SnpIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -13,18 +13,13 @@ pub fn negbin_log_pmf(k: u32, mean: f64, theta: f64) -> f64 {
     let theta = theta.max(1e-6);
     let k = k as f64;
 
-    ln_gamma(k + theta)
-        - ln_gamma(theta)
-        - ln_gamma(k + 1.0)
+    ln_gamma(k + theta) - ln_gamma(theta) - ln_gamma(k + 1.0)
         + theta * (theta / (theta + mean)).ln()
         + k * (mean / (theta + mean)).ln()
 }
 
 pub fn logsumexp(values: &[f64]) -> f64 {
-    let m = values
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let m = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if !m.is_finite() {
         return m;
     }
@@ -34,33 +29,21 @@ pub fn logsumexp(values: &[f64]) -> f64 {
 /// log P(X=x | X=A+T), where
 /// A ~ Poisson(ambient_mean)
 /// T ~ NegativeBinomial(true_mean, theta)
-pub fn true_convolution_log_pmf(
-    x: u32,
-    ambient_mean: f64,
-    true_mean: f64,
-    theta: f64,
-) -> f64 {
+pub fn true_convolution_log_pmf(x: u32, ambient_mean: f64, true_mean: f64, theta: f64) -> f64 {
     let terms: Vec<f64> = (0..=x)
         .map(|ambient| {
-            poisson_log_pmf(ambient, ambient_mean)
-                + negbin_log_pmf(x - ambient, true_mean, theta)
+            poisson_log_pmf(ambient, ambient_mean) + negbin_log_pmf(x - ambient, true_mean, theta)
         })
         .collect();
     logsumexp(&terms)
 }
 
 /// E[A | X=x, true-guide component].
-pub fn expected_ambient_given_true(
-    x: u32,
-    ambient_mean: f64,
-    true_mean: f64,
-    theta: f64,
-) -> f64 {
+pub fn expected_ambient_given_true(x: u32, ambient_mean: f64, true_mean: f64, theta: f64) -> f64 {
     let mut logs = Vec::with_capacity(x as usize + 1);
     for ambient in 0..=x {
         logs.push(
-            poisson_log_pmf(ambient, ambient_mean)
-                + negbin_log_pmf(x - ambient, true_mean, theta),
+            poisson_log_pmf(ambient, ambient_mean) + negbin_log_pmf(x - ambient, true_mean, theta),
         );
     }
 
@@ -91,42 +74,18 @@ impl Default for PosteriorEvidence {
 }
 
 impl PosteriorEvidence {
-    pub fn new(
-        x: u32,
-        ambient_mean: f64,
-        prior_real: f64,
-        true_mean: f64,
-        theta: f64,
-    ) -> Self {
-        let prior =
-            prior_real.clamp(1e-9, 1.0 - 1e-9);
+    pub fn new(x: u32, ambient_mean: f64, prior_real: f64, true_mean: f64, theta: f64) -> Self {
+        let prior = prior_real.clamp(1e-9, 1.0 - 1e-9);
 
-        let l0 =
-            (1.0 - prior).ln()
-            + poisson_log_pmf(
-                x,
-                ambient_mean,
-            );
+        let l0 = (1.0 - prior).ln() + poisson_log_pmf(x, ambient_mean);
 
-        let l1 =
-            prior.ln()
-            + true_convolution_log_pmf(
-                x,
-                ambient_mean,
-                true_mean,
-                theta,
-            );
+        let l1 = prior.ln() + true_convolution_log_pmf(x, ambient_mean, true_mean, theta);
 
-        let log_odds =
-            l1 - l0;
+        let log_odds = l1 - l0;
 
-        let denom =
-            logsumexp(&[l0, l1]);
+        let denom = logsumexp(&[l0, l1]);
 
-        let probability =
-            (l1 - denom)
-                .exp()
-                .clamp(0.0, 1.0);
+        let probability = (l1 - denom).exp().clamp(0.0, 1.0);
 
         Self {
             probability,

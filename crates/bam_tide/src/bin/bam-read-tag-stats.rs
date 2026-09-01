@@ -1,8 +1,6 @@
 use anyhow::Result;
-use read_tag_table::{
-    PairStats, ReadTagTable, ReadTagTableCli, Summary,
-};
 use clap::Parser;
+use read_tag_table::{PairStats, ReadTagTable, ReadTagTableCli, Summary};
 
 #[derive(Parser, Debug)]
 #[command(

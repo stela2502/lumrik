@@ -1,24 +1,19 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 
 use bam_tide::fastq::FastqRecord;
 
 use sc_mapper::core::MapperLaunch;
-use sc_mapper::process::{MapperProcess, Minimap2};
 use sc_mapper::traits::ExternalMapper;
-use sc_mapper::core::MapperProcessLike;
 
 use sc_mapper::Bwa;
 
 fn bwa_available() -> bool {
-    match Command::new("bwa")
-        .arg("2>&1")
-        .output()
-    {
+    match Command::new("bwa").arg("2>&1").output() {
         Ok(_) => true,
 
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -34,11 +29,9 @@ fn bwa_available() -> bool {
 }
 
 fn prepare_bwa_reference() -> Result<(TempDir, PathBuf)> {
-    let tmpdir = tempfile::tempdir()
-        .context("failed to create temporary BWA test directory")?;
+    let tmpdir = tempfile::tempdir().context("failed to create temporary BWA test directory")?;
 
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data/tiny.fa");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/tiny.fa");
 
     let reference = tmpdir.path().join("tiny.fa");
 
@@ -63,7 +56,6 @@ fn prepare_bwa_reference() -> Result<(TempDir, PathBuf)> {
     Ok((tmpdir, reference))
 }
 
-
 #[test]
 fn bwa_maps_a_real_fastq_record() -> Result<()> {
     if !bwa_available() {
@@ -71,15 +63,12 @@ fn bwa_maps_a_real_fastq_record() -> Result<()> {
         return Ok(());
     }
 
-    let (_tmpdir, reference) =
-        prepare_bwa_reference()?;
+    let (_tmpdir, reference) = prepare_bwa_reference()?;
 
     let launch = MapperLaunch {
         mapper_bin: "bwa".into(),
         index: reference,
-        options: vec![
-            "mem".into(),
-        ],
+        options: vec!["mem".into()],
         threads: 2,
         paired: false,
     };
@@ -88,16 +77,11 @@ fn bwa_maps_a_real_fastq_record() -> Result<()> {
 
     let mut mapper = mapper.spawn()?;
 
-    let read = fq(
-        "read_001",
-        "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA",
-    );
+    let read = fq("read_001", "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA");
 
     let mut calls = Vec::new();
 
-    if let Some(call) =
-        mapper.process(&read, None)?
-    {
+    if let Some(call) = mapper.process(&read, None)? {
         calls.push(call);
     }
 
@@ -111,10 +95,7 @@ fn bwa_maps_a_real_fastq_record() -> Result<()> {
 
     let call = &calls[0];
 
-    assert_eq!(
-        call.read_id,
-        "read_001"
-    );
+    assert_eq!(call.read_id, "read_001");
 
     assert!(
         !call.records.records.is_empty(),
@@ -131,7 +112,6 @@ fn bwa_maps_a_real_fastq_record() -> Result<()> {
 
     Ok(())
 }
-
 
 fn fq(id: &str, seq: &str) -> FastqRecord {
     FastqRecord {
