@@ -436,7 +436,14 @@ impl MappingInfo {
 
     // Unified reporting method that logs errors into the HashMap
     pub fn report(&mut self, info: impl Into<String>) {
-        *self.reads_log.entry(info.into()).or_insert(0) += 1;
+        self.report_n(info, 1);
+    }
+
+    /// Add `count` observations to a named report counter. This is useful for
+    /// batched/parallel code that already knows the multiplicity and should not
+    /// loop merely to update MappingInfo.
+    pub fn report_n(&mut self, info: impl Into<String>, count: usize) {
+        *self.reads_log.entry(info.into()).or_insert(0) += count;
     }
 
     // Optionally, add a method to retrieve counts for a specific issue

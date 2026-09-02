@@ -26,10 +26,10 @@ fn main() -> Result<()> {
     let out = out.context("missing --out <FILE.vdjidx>")?;
     eprintln!("building V(D)J germline reference...");
     let reference = VdjReferenceBuilder::default().build(&gtf, &genome)?;
-    eprintln!("building ambiguity-aware seed index for {} segments...", reference.len());
+    eprintln!("building ambiguity-aware coverage + identity seed indices for {} segments...", reference.len());
     let mapper = VdjMapper::new(reference, VdjMapperConfig::default());
     mapper.save_index(&out).with_context(|| format!("writing {}", out.display()))?;
-    println!("VDJ index written to {}", out.display());
+    println!("VDJ index v4 written to {}", out.display());
     Ok(())
 }
 

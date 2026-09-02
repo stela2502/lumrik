@@ -1748,6 +1748,7 @@ dependencies = [
  "anyhow",
  "flate2",
  "gtf_splice_index",
+ "mapping_info",
  "rayon",
  "rust-htslib",
  "tempfile",

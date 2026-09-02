@@ -1,8 +1,32 @@
+use crate::mapper::VdjMapper;
 use crate::posterior::BamReadEvidence;
+use crate::reference::VdjReference;
 use anyhow::{Context, Result};
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+
+#[derive(Debug, Clone, Default)]
+pub struct BamShardStats {
+    pub total_records: usize,
+    pub called_cell_records: usize,
+    pub retained_records: usize,
+    pub discarded_irrelevant_records: usize,
+    pub shard_records: Vec<usize>,
+}
+
+/// Stable inexpensive hash used to assign every cell to exactly one BAM shard.
+/// It is intentionally independent of Rust's randomized HashMap state.
+pub fn bam_shard_for_cell(cell: &str, shards: usize) -> usize {
+    assert!(shards > 0);
+    let mut hash = 0xcbf29ce484222325u64;
+    for &byte in cell.as_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    (hash as usize) % shards
+}
 
 pub trait BamIdentityResolver {
     fn resolve(&self, record: &bam::Record) -> Option<(String, String)>;
@@ -151,6 +175,105 @@ where
         });
     }
     Ok(out)
+}
+
+/// One-pass memory-bounded prefilter for whole-transcriptome BAMs. Records are
+/// retained only when they belong to a called cell and can influence either
+/// rearrangement scoring (a segment reaches the posterior seed threshold) or
+/// sterile/germline receptor-locus evidence (genomic overlap with an IG/TR
+/// locus). Secondary alignments are dropped here because PosteriorAnalyzer also
+/// ignores them.
+pub fn shard_bam_receptor_evidence<P, R, F>(
+    path: P,
+    resolver: &R,
+    keep_cell: F,
+    mapper: &VdjMapper,
+    reference: &VdjReference,
+    min_seed_hits: u32,
+    shard_paths: &[PathBuf],
+) -> Result<BamShardStats>
+where
+    P: AsRef<Path>,
+    R: BamIdentityResolver,
+    F: Fn(&str) -> bool,
+{
+    if shard_paths.is_empty() {
+        anyhow::bail!("at least one BAM shard is required");
+    }
+    let path = path.as_ref();
+    let mut reader =
+        bam::Reader::from_path(path).with_context(|| format!("opening BAM {}", path.display()))?;
+    let header_view = reader.header().to_owned();
+    let header = bam::Header::from_template(reader.header());
+    let mut writers = Vec::with_capacity(shard_paths.len());
+    for shard in shard_paths {
+        writers.push(
+            bam::Writer::from_path(shard, &header, bam::Format::Bam)
+                .with_context(|| format!("creating BAM shard {}", shard.display()))?,
+        );
+    }
+
+    let mut stats = BamShardStats {
+        shard_records: vec![0; shard_paths.len()],
+        ..BamShardStats::default()
+    };
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result?;
+        stats.total_records += 1;
+        if record.is_secondary() {
+            continue;
+        }
+        let Some((cell, _umi)) = resolver.resolve(&record) else {
+            continue;
+        };
+        if !keep_cell(&cell) {
+            continue;
+        }
+        stats.called_cell_records += 1;
+
+        let sequence = record.seq().as_bytes();
+        let receptor_seed = mapper.has_seed_candidate(&sequence, min_seed_hits);
+        let receptor_locus = if receptor_seed {
+            false
+        } else {
+            overlaps_receptor_locus(&record, &header_view, reference)
+        };
+        if !(receptor_seed || receptor_locus) {
+            stats.discarded_irrelevant_records += 1;
+            continue;
+        }
+
+        let shard = bam_shard_for_cell(&cell, shard_paths.len());
+        writers[shard]
+            .write(&record)
+            .with_context(|| format!("writing BAM shard {}", shard_paths[shard].display()))?;
+        stats.retained_records += 1;
+        stats.shard_records[shard] += 1;
+    }
+    drop(writers);
+    Ok(stats)
+}
+
+fn overlaps_receptor_locus(
+    record: &bam::Record,
+    header: &bam::HeaderView,
+    reference: &VdjReference,
+) -> bool {
+    let tid = record.tid();
+    if tid < 0 {
+        return false;
+    }
+    let chr = String::from_utf8_lossy(header.tid2name(tid as u32));
+    let blocks = aligned_blocks(record);
+    if blocks.is_empty() {
+        return false;
+    }
+    crate::types::Chain::ALL.into_iter().any(|chain| {
+        reference.locus_bounds(chain).is_some_and(|(lchr, ls, le)| {
+            chr.as_ref() == lchr && blocks.iter().any(|&(s, e)| e > ls && s < le)
+        })
+    })
 }
 
 fn aligned_blocks(record: &bam::Record) -> Vec<(u32, u32)> {

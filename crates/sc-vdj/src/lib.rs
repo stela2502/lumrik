@@ -15,8 +15,9 @@ pub mod sterile;
 pub mod types;
 
 pub use bam::{
-    read_bam, read_bam_filtered, AuxTagIdentityResolver, BamIdentityResolver,
-    NelruneIdentityResolver, QnameIdentityResolver,
+    bam_shard_for_cell, read_bam, read_bam_filtered, shard_bam_receptor_evidence,
+    AuxTagIdentityResolver, BamIdentityResolver, BamShardStats, NelruneIdentityResolver,
+    QnameIdentityResolver,
 };
 pub use gex::{ExpressionMatrix, LongTsvExpression};
 pub use mapper::{VdjMapper, VdjMapperConfig};

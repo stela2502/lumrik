@@ -30,60 +30,87 @@ struct CandidateSequence {
     reads_used: usize,
 }
 
+pub struct AuditFastaWriter<'a> {
+    reference: &'a VdjReference,
+    germline: BufWriter<File>,
+    supporting: BufWriter<File>,
+    candidates: BufWriter<File>,
+    proteins: BufWriter<File>,
+}
+
+impl<'a> AuditFastaWriter<'a> {
+    pub fn create<P: AsRef<Path>>(dir: P, reference: &'a VdjReference) -> Result<Self> {
+        let dir = dir.as_ref();
+        fs::create_dir_all(dir)?;
+        Ok(Self {
+            reference,
+            germline: BufWriter::new(
+                File::create(dir.join("vdj_germline_segments.fasta"))
+                    .context("creating vdj_germline_segments.fasta")?,
+            ),
+            supporting: BufWriter::new(
+                File::create(dir.join("vdj_supporting_reads.fasta"))
+                    .context("creating vdj_supporting_reads.fasta")?,
+            ),
+            candidates: BufWriter::new(
+                File::create(dir.join("vdj_rearrangement_candidates.fasta"))
+                    .context("creating vdj_rearrangement_candidates.fasta")?,
+            ),
+            proteins: BufWriter::new(
+                File::create(dir.join("vdj_rearrangement_candidate_proteins.fasta"))
+                    .context("creating vdj_rearrangement_candidate_proteins.fasta")?,
+            ),
+        })
+    }
+
+    pub fn write_cells(&mut self, cells: &[CellVdjSummary]) -> Result<()> {
+        for cell in cells {
+            for call in &cell.rearrangements {
+                write_germline_call(&mut self.germline, &cell.cell, call, self.reference)?;
+                write_supporting_call(&mut self.supporting, &cell.cell, call)?;
+                if let Some(candidate) = reconstruct_candidate(call, self.reference) {
+                    let v = support_name(call, SegmentKind::V);
+                    let d = support_name(call, SegmentKind::D);
+                    let j = support_name(call, SegmentKind::J);
+                    let c = support_name(call, SegmentKind::C);
+                    let header = format!(
+                        "cell={}|chain={}|V={}|D={}|J={}|C={}|support_umis={}|method={}|reads={}",
+                        header_value(&cell.cell),
+                        call.chain,
+                        header_value(v),
+                        header_value(d),
+                        header_value(j),
+                        header_value(c),
+                        call.total_supporting_umis,
+                        candidate.method,
+                        candidate.reads_used
+                    );
+                    writeln!(self.candidates, ">{header}")?;
+                    write_fasta_sequence(&mut self.candidates, &candidate.sequence)?;
+                    write_candidate_proteins(&mut self.proteins, &header, &candidate.sequence)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<()> {
+        self.germline.flush()?;
+        self.supporting.flush()?;
+        self.candidates.flush()?;
+        self.proteins.flush()?;
+        Ok(())
+    }
+}
+
 pub fn write_vdj_audit_fastas<P: AsRef<Path>>(
     dir: P,
     cells: &[CellVdjSummary],
     reference: &VdjReference,
 ) -> Result<()> {
-    let dir = dir.as_ref();
-    fs::create_dir_all(dir)?;
-
-    let mut germline = BufWriter::new(
-        File::create(dir.join("vdj_germline_segments.fasta"))
-            .context("creating vdj_germline_segments.fasta")?,
-    );
-    let mut supporting = BufWriter::new(
-        File::create(dir.join("vdj_supporting_reads.fasta"))
-            .context("creating vdj_supporting_reads.fasta")?,
-    );
-    let mut candidates = BufWriter::new(
-        File::create(dir.join("vdj_rearrangement_candidates.fasta"))
-            .context("creating vdj_rearrangement_candidates.fasta")?,
-    );
-    let mut proteins = BufWriter::new(
-        File::create(dir.join("vdj_rearrangement_candidate_proteins.fasta"))
-            .context("creating vdj_rearrangement_candidate_proteins.fasta")?,
-    );
-
-    for cell in cells {
-        for call in &cell.rearrangements {
-            write_germline_call(&mut germline, &cell.cell, call, reference)?;
-            write_supporting_call(&mut supporting, &cell.cell, call)?;
-            if let Some(candidate) = reconstruct_candidate(call, reference) {
-                let v = support_name(call, SegmentKind::V);
-                let d = support_name(call, SegmentKind::D);
-                let j = support_name(call, SegmentKind::J);
-                let c = support_name(call, SegmentKind::C);
-                let header = format!(
-                    "cell={}|chain={}|V={}|D={}|J={}|C={}|support_umis={}|method={}|reads={}",
-                    header_value(&cell.cell),
-                    call.chain,
-                    header_value(v),
-                    header_value(d),
-                    header_value(j),
-                    header_value(c),
-                    call.total_supporting_umis,
-                    candidate.method,
-                    candidate.reads_used
-                );
-                writeln!(candidates, ">{header}")?;
-                write_fasta_sequence(&mut candidates, &candidate.sequence)?;
-                write_candidate_proteins(&mut proteins, &header, &candidate.sequence)?;
-            }
-        }
-    }
-
-    Ok(())
+    let mut writer = AuditFastaWriter::create(dir, reference)?;
+    writer.write_cells(cells)?;
+    writer.finish()
 }
 
 fn write_germline_call<W: Write>(

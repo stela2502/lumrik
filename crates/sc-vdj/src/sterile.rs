@@ -60,6 +60,13 @@ impl SterileAccumulator {
     }
 
     pub fn observe(&mut self, chr: &str, start: u32, end: u32, umi: &str) {
+        self.observe_n(chr, start, end, umi, 1);
+    }
+
+    pub fn observe_n(&mut self, chr: &str, start: u32, end: u32, umi: &str, reads: usize) {
+        if reads == 0 {
+            return;
+        }
         if chr != self.chr
             || end <= self.locus_start
             || start >= self.locus_end
@@ -78,14 +85,14 @@ impl SterileAccumulator {
             .min(self.bins - 1);
         for b in b0.min(self.bins - 1)..=b1 {
             self.bin_umis[b].insert(umi.to_string());
-            self.bin_reads[b] += 1;
+            self.bin_reads[b] += reads;
         }
         let entry = self
             .intervals
             .entry((s, e))
             .or_insert_with(|| (HashSet::new(), 0));
         entry.0.insert(umi.to_string());
-        entry.1 += 1;
+        entry.1 += reads;
     }
 
     pub fn finish(self) -> SterileProfile {

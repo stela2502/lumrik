@@ -1,15 +1,17 @@
 use anyhow::{bail, Context, Result};
 use flate2::read::MultiGzDecoder;
-use sc_vdj::audit::write_vdj_audit_fastas;
-use sc_vdj::output::write_reports;
+use mapping_info::MappingInfo;
+use sc_vdj::audit::AuditFastaWriter;
+use sc_vdj::output::ReportWriter;
 use sc_vdj::{
-    read_bam_filtered, Chain, ExpressionMatrix, NelruneIdentityResolver, PosteriorAnalyzer,
-    PosteriorConfig, VdjMapper, VdjMapperConfig, VdjReferenceBuilder,
+    bam_shard_for_cell, read_bam_filtered, shard_bam_receptor_evidence, Chain, ExpressionMatrix,
+    NelruneIdentityResolver, PosteriorAnalyzer, PosteriorConfig, VdjMapper, VdjMapperConfig,
+    VdjReferenceBuilder,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read as IoRead};
 use std::path::{Path, PathBuf};
 
@@ -23,6 +25,8 @@ struct Cli {
     out: PathBuf,
     sterile_bins: usize,
     cell_barcode_len: Option<usize>,
+    bam_shards: Option<usize>,
+    print_cells: bool,
 }
 
 #[derive(Debug, Default)]
@@ -42,7 +46,9 @@ impl ExpressionMatrix for MexExpression {
 
 fn main() -> Result<()> {
     let cli = parse_cli(env::args_os().skip(1))?;
+    let mut mapping_info = MappingInfo::new(None, 0.0, 0);
 
+    mapping_info.start_timer("wall.reference_index");
     let mapper = if let Some(index) = &cli.index {
         VdjMapper::load_index(index).with_context(|| format!("loading V(D)J index {}", index.display()))?
     } else {
@@ -52,6 +58,7 @@ fn main() -> Result<()> {
             .with_context(|| "building V(D)J reference")?;
         VdjMapper::new(reference, VdjMapperConfig::default())
     };
+    mapping_info.stop_timer("wall.reference_index");
     let reference = mapper.reference();
 
     println!("Reference segments: {}", reference.len());
@@ -73,40 +80,191 @@ fn main() -> Result<()> {
         }
     }
 
+    mapping_info.start_timer("wall.expression_matrix");
     let gex = read_mex(&cli.exonic, cli.cell_barcode_len)?;
+    mapping_info.stop_timer("wall.expression_matrix");
     if gex.cells.is_empty() {
         bail!("MEX contains no cells");
     }
     println!("Expression matrix: {} cell(s)", gex.cells.len());
 
     let called_cells: HashSet<String> = gex.cells.iter().cloned().collect();
-    eprintln!(
-        "reading BAM evidence for {} called cell(s)...",
+    let shard_count = cli
+        .bam_shards
+        .unwrap_or_else(|| automatic_bam_shards(gex.cells.len()));
+    println!(
+        "BAM processing: {} shard(s) for {} called cell(s)",
+        shard_count,
         called_cells.len()
     );
-    let reads = read_bam_filtered(&cli.bam, &NelruneIdentityResolver, |cell| {
-        called_cells.contains(cell)
-    })?;
-    println!("BAM evidence: {} records for called MEX cells", reads.len());
-
-    let analyzer = PosteriorAnalyzer::new(
-        reference,
-        &mapper,
-        PosteriorConfig {
-            sterile_bins: cli.sterile_bins,
-            ..PosteriorConfig::default()
-        },
-    );
-    let summaries = analyzer.analyze(reads, &gex);
-    if summaries.is_empty() {
-        bail!("posterior analyzer produced no cell summaries");
+    let print_cells = cli.print_cells || gex.cells.len() <= 64;
+    if !print_cells {
+        println!(
+            "Per-cell stdout suppressed for scale; use --print-cells to show all {} cells",
+            gex.cells.len()
+        );
     }
 
-    write_reports(&cli.out, &summaries)?;
-    write_vdj_audit_fastas(&cli.out, &summaries, reference)?;
+    let posterior_config = PosteriorConfig {
+        sterile_bins: cli.sterile_bins,
+        ..PosteriorConfig::default()
+    };
+    let analyzer = PosteriorAnalyzer::new(reference, &mapper, posterior_config.clone());
+    let mut reports = ReportWriter::create(&cli.out)?;
+    let mut audit = AuditFastaWriter::create(&cli.out, reference)?;
+    let mut summary_count = 0usize;
 
+    if shard_count == 1 {
+        eprintln!(
+            "reading BAM evidence for {} called cell(s)...",
+            called_cells.len()
+        );
+        mapping_info.start_timer("wall.bam_input");
+        let reads = read_bam_filtered(&cli.bam, &NelruneIdentityResolver, |cell| {
+            called_cells.contains(cell)
+        })?;
+        mapping_info.stop_timer("wall.bam_input");
+        mapping_info.total = reads.len();
+        println!("BAM evidence: {} records for called MEX cells", reads.len());
+        mapping_info.start_timer("wall.posterior");
+        let summaries = analyzer.analyze_for_cells_with_mapping_info(
+            reads,
+            &gex,
+            gex.cells.iter().cloned(),
+            &mut mapping_info,
+        );
+        mapping_info.stop_timer("wall.posterior");
+        summary_count += summaries.len();
+        mapping_info.start_timer("wall.report_write");
+        reports.write_cells(&summaries)?;
+        audit.write_cells(&summaries)?;
+        mapping_info.stop_timer("wall.report_write");
+        if print_cells {
+            print_summaries(&summaries);
+        }
+    } else {
+        fs::create_dir_all(&cli.out)?;
+        let shard_dir = cli
+            .out
+            .join(format!(".vdj-bam-shards-{}", std::process::id()));
+        if shard_dir.exists() {
+            fs::remove_dir_all(&shard_dir)
+                .with_context(|| format!("removing stale shard directory {}", shard_dir.display()))?;
+        }
+        fs::create_dir_all(&shard_dir)
+            .with_context(|| format!("creating shard directory {}", shard_dir.display()))?;
+        let _shard_guard = ShardDirGuard(shard_dir.clone());
+        let shard_paths: Vec<_> = (0..shard_count)
+            .map(|i| shard_dir.join(format!("receptor-{i:03}.bam")))
+            .collect();
+
+        eprintln!(
+            "streaming BAM once and retaining only receptor-relevant evidence for {} called cell(s)...",
+            called_cells.len()
+        );
+        mapping_info.start_timer("wall.bam_prefilter_shard_write");
+        let stats = shard_bam_receptor_evidence(
+            &cli.bam,
+            &NelruneIdentityResolver,
+            |cell| called_cells.contains(cell),
+            &mapper,
+            reference,
+            posterior_config.min_seed_hits,
+            &shard_paths,
+        )?;
+        mapping_info.stop_timer("wall.bam_prefilter_shard_write");
+        mapping_info.total = stats.total_records;
+        mapping_info.report_n("vdj.called_cell_records", stats.called_cell_records);
+        mapping_info.report_n("vdj.receptor_records_retained", stats.retained_records);
+        mapping_info.report_n(
+            "vdj.irrelevant_records_discarded",
+            stats.discarded_irrelevant_records,
+        );
+        println!(
+            "BAM prefilter: total={} called={} retained={} discarded_irrelevant={}",
+            stats.total_records,
+            stats.called_cell_records,
+            stats.retained_records,
+            stats.discarded_irrelevant_records
+        );
+
+        let mut cells_by_shard = vec![Vec::<String>::new(); shard_count];
+        for cell in &gex.cells {
+            cells_by_shard[bam_shard_for_cell(cell, shard_count)].push(cell.clone());
+        }
+
+        for shard in 0..shard_count {
+            mapping_info.start_timer("wall.bam_shard_read");
+            let reads = if stats.shard_records[shard] == 0 {
+                Vec::new()
+            } else {
+                read_bam_filtered(
+                    &shard_paths[shard],
+                    &NelruneIdentityResolver,
+                    |_| true,
+                )?
+            };
+            mapping_info.stop_timer("wall.bam_shard_read");
+            eprintln!(
+                "VDJ shard {}/{}: {} cell(s), {} retained BAM record(s)",
+                shard + 1,
+                shard_count,
+                cells_by_shard[shard].len(),
+                reads.len()
+            );
+            mapping_info.start_timer("wall.posterior");
+            let summaries = analyzer.analyze_for_cells_with_mapping_info(
+                reads,
+                &gex,
+                cells_by_shard[shard].iter().cloned(),
+                &mut mapping_info,
+            );
+            mapping_info.stop_timer("wall.posterior");
+            summary_count += summaries.len();
+            mapping_info.start_timer("wall.report_write");
+            reports.write_cells(&summaries)?;
+            audit.write_cells(&summaries)?;
+            mapping_info.stop_timer("wall.report_write");
+            if print_cells {
+                print_summaries(&summaries);
+            }
+            // `summaries` (including all supporting read sequences and sterile
+            // interval state) is dropped here before the next shard is loaded.
+        }
+    }
+
+    if summary_count == 0 {
+        bail!("posterior analyzer produced no cell summaries");
+    }
+    mapping_info.start_timer("wall.report_finish");
+    reports.finish()?;
+    audit.finish()?;
+    mapping_info.stop_timer("wall.report_finish");
+
+    let performance_path = cli.out.join("vdj-mapping-info.txt");
+    fs::write(&performance_path, mapping_info.to_string())
+        .with_context(|| format!("writing {}", performance_path.display()))?;
+    println!("\n{}", mapping_info);
+    println!("VDJ performance report written to {}", performance_path.display());
+    println!("Reports written to {}", cli.out.display());
+    Ok(())
+}
+
+struct ShardDirGuard(PathBuf);
+
+impl Drop for ShardDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn automatic_bam_shards(cells: usize) -> usize {
+    ((cells + 127) / 128).clamp(1, 64)
+}
+
+fn print_summaries(summaries: &[sc_vdj::CellVdjSummary]) {
     println!("\nPosterior V(D)J summaries");
-    for cell in &summaries {
+    for cell in summaries {
         println!("\nCELL {}", cell.cell);
         println!(
             "  development: {:?} score={:.4} RAG={:.4} evidence_code={}",
@@ -115,7 +273,6 @@ fn main() -> Result<()> {
             cell.development.rag_activity,
             cell.development.evidence_code
         );
-
         if cell.rearrangements.is_empty() {
             println!("  rearrangements: none called");
         } else {
@@ -131,7 +288,6 @@ fn main() -> Result<()> {
                 print_segment("C", r.c.as_ref());
             }
         }
-
         println!("  sterile/germline locus evidence:");
         for p in &cell.sterile {
             if p.total_unique_umis == 0 {
@@ -148,7 +304,6 @@ fn main() -> Result<()> {
                 p.distal_fraction
             );
         }
-
         if cell.development.contributions.is_empty() {
             println!("  GEX rationale: no configured developmental markers expressed");
         } else {
@@ -163,9 +318,6 @@ fn main() -> Result<()> {
             }
         }
     }
-
-    println!("\nReports written to {}", cli.out.display());
-    Ok(())
 }
 
 fn print_segment(label: &str, x: Option<&sc_vdj::GermlineSegmentSupport>) {
@@ -191,6 +343,8 @@ fn parse_cli<I: IntoIterator<Item = OsString>>(args: I) -> Result<Cli> {
     let mut out = None;
     let mut sterile_bins = 64usize;
     let mut cell_barcode_len = None;
+    let mut bam_shards = None;
+    let mut print_cells = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_string_lossy().as_ref() {
@@ -220,6 +374,17 @@ fn parse_cli<I: IntoIterator<Item = OsString>>(args: I) -> Result<Cli> {
                 }
                 cell_barcode_len = Some(len);
             }
+            "--bam-shards" => {
+                let n: usize = next_value(&mut args, "--bam-shards")?
+                    .to_string_lossy()
+                    .parse()
+                    .context("invalid --bam-shards")?;
+                if n == 0 || n > 256 {
+                    bail!("--bam-shards must be between 1 and 256");
+                }
+                bam_shards = Some(n);
+            }
+            "--print-cells" => print_cells = true,
             other => bail!("unknown argument {other}\n\nRun vdj-summary --help for usage."),
         }
     }
@@ -238,6 +403,8 @@ fn parse_cli<I: IntoIterator<Item = OsString>>(args: I) -> Result<Cli> {
         out: out.context("missing --out <DIR>")?,
         sterile_bins: sterile_bins.max(8),
         cell_barcode_len,
+        bam_shards,
+        print_cells,
     })
 }
 
@@ -247,7 +414,7 @@ fn next_value<I: Iterator<Item = OsString>>(args: &mut I, flag: &str) -> Result<
 }
 
 fn print_help() {
-    println!("vdj-summary - run posterior sc-vdj analysis on Nelrune BAM + exonic MEX\n\nUsage:\n  vdj-summary --exonic <MEX_DIR> --bam <BAM> --index <VDJIDX> --out <DIR> [options]\n  vdj-summary --exonic <MEX_DIR> --bam <BAM> --gtf <GTF> --genome <FASTA> --out <DIR> [options]\n\nRequired:\n  --exonic <DIR>     Nelrune exonic MEX (one or more cells)\n  --bam <FILE>       retained/extracted Nelrune BAM (CB/UB tags or mapper QNAME metadata)\n  --index <FILE>     compiled vdj-index (preferred; replaces --gtf/--genome)\n  --gtf <FILE>       matching genome annotation (fallback with --genome)\n  --genome <FASTA>   matching genome FASTA (fallback with --gtf)\n  --out <DIR>        report directory\n\nOptions:\n  --sterile-bins <N>      spatial bins per receptor locus [64]\n  --cell-barcode-len <N>   normalize MEX barcodes to first N bases (legacy BD: 27)\n  -h, --help");
+    println!("vdj-summary - run posterior sc-vdj analysis on Nelrune BAM + exonic MEX\n\nUsage:\n  vdj-summary --exonic <MEX_DIR> --bam <BAM> --index <VDJIDX> --out <DIR> [options]\n  vdj-summary --exonic <MEX_DIR> --bam <BAM> --gtf <GTF> --genome <FASTA> --out <DIR> [options]\n\nRequired:\n  --exonic <DIR>     Nelrune exonic MEX (one or more cells)\n  --bam <FILE>       retained/extracted Nelrune BAM (CB/UB tags or mapper QNAME metadata)\n  --index <FILE>     compiled vdj-index (preferred; replaces --gtf/--genome)\n  --gtf <FILE>       matching genome annotation (fallback with --genome)\n  --genome <FASTA>   matching genome FASTA (fallback with --gtf)\n  --out <DIR>        report directory\n\nOptions:\n  --sterile-bins <N>      spatial bins per receptor locus [64]\n  --cell-barcode-len <N>  normalize MEX barcodes to first N bases (legacy BD: 27)\n  --bam-shards <N>        bound whole-BAM memory with N receptor shards [auto]\n                         auto targets about 128 called cells/shard, max 64\n  --print-cells           print every per-cell posterior summary to stdout\n  -h, --help");
 }
 
 fn find_file(dir: &Path, names: &[&str]) -> Result<PathBuf> {
