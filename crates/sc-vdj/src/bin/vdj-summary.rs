@@ -1,32 +1,87 @@
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use flate2::read::MultiGzDecoder;
 use mapping_info::MappingInfo;
 use sc_vdj::audit::AuditFastaWriter;
 use sc_vdj::output::ReportWriter;
 use sc_vdj::{
-    bam_shard_for_cell, read_bam_filtered, shard_bam_receptor_evidence, Chain, ExpressionMatrix,
-    NelruneIdentityResolver, PosteriorAnalyzer, PosteriorConfig, VdjMapper, VdjMapperConfig,
-    VdjReferenceBuilder,
+    read_bam_receptor_evidence, Chain, ExpressionMatrix, NelruneIdentityResolver,
+    PosteriorAnalyzer, PosteriorConfig, VdjMapper, VdjMapperConfig, VdjReferenceBuilder,
 };
 use std::collections::{HashMap, HashSet};
-use std::env;
-use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read as IoRead};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug)]
+#[derive(Debug, Parser)]
+#[command(
+    author,
+    version,
+    name = "vdj-summary",
+    about = "Run detailed posterior single-cell V(D)J analysis on a Nelrune BAM + exonic MEX",
+    override_usage = "vdj-summary --exonic <MEX_DIR> --bam <BAM> (--index <VDJIDX> | --gtf <GTF> --genome <FASTA>) --out <DIR> [OPTIONS]",
+    after_help = "REFERENCE
+  --index is the preferred production path. --gtf + --genome rebuild the
+  reference in-memory and are mainly useful for development/debugging.
+
+LEGACY BD
+  Older BD MEX barcodes may contain u64 A-padding. Use
+  --cell-barcode-len 27 to match the original 27-base BAM cell barcode."
+)]
 struct Cli {
+    /// Nelrune exonic MEX directory.
+    #[arg(long, value_name = "MEX_DIR")]
     exonic: PathBuf,
+
+    /// Retained/extracted Nelrune BAM with cell/UMI identity.
+    #[arg(long, value_name = "BAM")]
     bam: PathBuf,
+
+    /// Compiled V(D)J index (preferred reference input).
+    #[arg(long, value_name = "VDJIDX")]
     index: Option<PathBuf>,
+
+    /// Matching genome annotation; requires --genome when --index is absent.
+    #[arg(long, value_name = "GTF")]
     gtf: Option<PathBuf>,
+
+    /// Matching genome FASTA; requires --gtf when --index is absent.
+    #[arg(long, value_name = "FASTA")]
     genome: Option<PathBuf>,
+
+    /// Report directory.
+    #[arg(long, value_name = "DIR")]
     out: PathBuf,
+
+    /// Spatial bins per receptor locus.
+    #[arg(long, default_value_t = 64, value_name = "N")]
     sterile_bins: usize,
+
+    /// Normalize MEX barcodes to the first N bases (legacy BD: 27).
+    #[arg(long, value_name = "N")]
     cell_barcode_len: Option<usize>,
-    bam_shards: Option<usize>,
+
+    /// Print every per-cell posterior summary to stdout.
+    #[arg(long)]
     print_cells: bool,
+}
+
+impl Cli {
+    fn validate(mut self) -> Result<Self> {
+        if self.index.is_some() && (self.gtf.is_some() || self.genome.is_some()) {
+            bail!("use either --index <VDJIDX> or --gtf <GTF> --genome <FASTA>, not both");
+        }
+        if self.index.is_none() && (self.gtf.is_none() || self.genome.is_none()) {
+            bail!("missing reference: provide --index <VDJIDX> or both --gtf <GTF> and --genome <FASTA>");
+        }
+        if let Some(len) = self.cell_barcode_len {
+            if !(1..=32).contains(&len) {
+                bail!("--cell-barcode-len must be between 1 and 32");
+            }
+        }
+        self.sterile_bins = self.sterile_bins.max(8);
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -45,7 +100,7 @@ impl ExpressionMatrix for MexExpression {
 }
 
 fn main() -> Result<()> {
-    let cli = parse_cli(env::args_os().skip(1))?;
+    let cli = Cli::parse().validate()?;
     let mut mapping_info = MappingInfo::new(None, 0.0, 0);
 
     mapping_info.start_timer("wall.reference_index");
@@ -89,12 +144,8 @@ fn main() -> Result<()> {
     println!("Expression matrix: {} cell(s)", gex.cells.len());
 
     let called_cells: HashSet<String> = gex.cells.iter().cloned().collect();
-    let shard_count = cli
-        .bam_shards
-        .unwrap_or_else(|| automatic_bam_shards(gex.cells.len()));
     println!(
-        "BAM processing: {} shard(s) for {} called cell(s)",
-        shard_count,
+        "BAM processing: one-pass in-memory routing for {} called cell(s)",
         called_cells.len()
     );
     let print_cells = cli.print_cells || gex.cells.len() <= 64;
@@ -109,128 +160,54 @@ fn main() -> Result<()> {
         sterile_bins: cli.sterile_bins,
         ..PosteriorConfig::default()
     };
-    let analyzer = PosteriorAnalyzer::new(reference, &mapper, posterior_config.clone());
+    let analyzer = PosteriorAnalyzer::new(reference, &mapper, posterior_config);
     let mut reports = ReportWriter::create(&cli.out)?;
     let mut audit = AuditFastaWriter::create(&cli.out, reference)?;
-    let mut summary_count = 0usize;
 
-    if shard_count == 1 {
-        eprintln!(
-            "reading BAM evidence for {} called cell(s)...",
-            called_cells.len()
-        );
-        mapping_info.start_timer("wall.bam_input");
-        let reads = read_bam_filtered(&cli.bam, &NelruneIdentityResolver, |cell| {
-            called_cells.contains(cell)
-        })?;
-        mapping_info.stop_timer("wall.bam_input");
-        mapping_info.total = reads.len();
-        println!("BAM evidence: {} records for called MEX cells", reads.len());
-        mapping_info.start_timer("wall.posterior");
-        let summaries = analyzer.analyze_for_cells_with_mapping_info(
-            reads,
-            &gex,
-            gex.cells.iter().cloned(),
-            &mut mapping_info,
-        );
-        mapping_info.stop_timer("wall.posterior");
-        summary_count += summaries.len();
-        mapping_info.start_timer("wall.report_write");
-        reports.write_cells(&summaries)?;
-        audit.write_cells(&summaries)?;
-        mapping_info.stop_timer("wall.report_write");
-        if print_cells {
-            print_summaries(&summaries);
-        }
-    } else {
-        fs::create_dir_all(&cli.out)?;
-        let shard_dir = cli
-            .out
-            .join(format!(".vdj-bam-shards-{}", std::process::id()));
-        if shard_dir.exists() {
-            fs::remove_dir_all(&shard_dir)
-                .with_context(|| format!("removing stale shard directory {}", shard_dir.display()))?;
-        }
-        fs::create_dir_all(&shard_dir)
-            .with_context(|| format!("creating shard directory {}", shard_dir.display()))?;
-        let _shard_guard = ShardDirGuard(shard_dir.clone());
-        let shard_paths: Vec<_> = (0..shard_count)
-            .map(|i| shard_dir.join(format!("receptor-{i:03}.bam")))
-            .collect();
+    eprintln!(
+        "streaming BAM once and routing indexed receptor-segment evidence for {} called cell(s)...",
+        called_cells.len()
+    );
+    mapping_info.start_timer("wall.bam_route_in_memory");
+    let (routed, stats) = read_bam_receptor_evidence(
+        &cli.bam,
+        &NelruneIdentityResolver,
+        |cell| called_cells.contains(cell),
+        reference,
+    )?;
+    mapping_info.stop_timer("wall.bam_route_in_memory");
+    mapping_info.total = stats.total_records;
+    mapping_info.report_n("vdj.receptor_chromosome_records", stats.receptor_chromosome_records);
+    mapping_info.report_n("vdj.segment_overlap_records", stats.segment_overlap_records);
+    mapping_info.report_n("vdj.called_cell_vdj_records", stats.called_cell_records);
+    mapping_info.report_n("vdj.routed_locus_observations", stats.routed_evidence_records);
+    for (chain, count) in Chain::ALL.into_iter().zip(stats.locus_records) {
+        mapping_info.report_n(&format!("vdj.routed.{}", chain.as_str().to_ascii_lowercase()), count);
+    }
+    println!(
+        "BAM routing: total={} receptor_chr={} segment_overlap={} called_cell={} routed={}",
+        stats.total_records,
+        stats.receptor_chromosome_records,
+        stats.segment_overlap_records,
+        stats.called_cell_records,
+        stats.routed_evidence_records
+    );
 
-        eprintln!(
-            "streaming BAM once and retaining only receptor-relevant evidence for {} called cell(s)...",
-            called_cells.len()
-        );
-        mapping_info.start_timer("wall.bam_prefilter_shard_write");
-        let stats = shard_bam_receptor_evidence(
-            &cli.bam,
-            &NelruneIdentityResolver,
-            |cell| called_cells.contains(cell),
-            &mapper,
-            reference,
-            posterior_config.min_seed_hits,
-            &shard_paths,
-        )?;
-        mapping_info.stop_timer("wall.bam_prefilter_shard_write");
-        mapping_info.total = stats.total_records;
-        mapping_info.report_n("vdj.called_cell_records", stats.called_cell_records);
-        mapping_info.report_n("vdj.receptor_records_retained", stats.retained_records);
-        mapping_info.report_n(
-            "vdj.irrelevant_records_discarded",
-            stats.discarded_irrelevant_records,
-        );
-        println!(
-            "BAM prefilter: total={} called={} retained={} discarded_irrelevant={}",
-            stats.total_records,
-            stats.called_cell_records,
-            stats.retained_records,
-            stats.discarded_irrelevant_records
-        );
-
-        let mut cells_by_shard = vec![Vec::<String>::new(); shard_count];
-        for cell in &gex.cells {
-            cells_by_shard[bam_shard_for_cell(cell, shard_count)].push(cell.clone());
-        }
-
-        for shard in 0..shard_count {
-            mapping_info.start_timer("wall.bam_shard_read");
-            let reads = if stats.shard_records[shard] == 0 {
-                Vec::new()
-            } else {
-                read_bam_filtered(
-                    &shard_paths[shard],
-                    &NelruneIdentityResolver,
-                    |_| true,
-                )?
-            };
-            mapping_info.stop_timer("wall.bam_shard_read");
-            eprintln!(
-                "VDJ shard {}/{}: {} cell(s), {} retained BAM record(s)",
-                shard + 1,
-                shard_count,
-                cells_by_shard[shard].len(),
-                reads.len()
-            );
-            mapping_info.start_timer("wall.posterior");
-            let summaries = analyzer.analyze_for_cells_with_mapping_info(
-                reads,
-                &gex,
-                cells_by_shard[shard].iter().cloned(),
-                &mut mapping_info,
-            );
-            mapping_info.stop_timer("wall.posterior");
-            summary_count += summaries.len();
-            mapping_info.start_timer("wall.report_write");
-            reports.write_cells(&summaries)?;
-            audit.write_cells(&summaries)?;
-            mapping_info.stop_timer("wall.report_write");
-            if print_cells {
-                print_summaries(&summaries);
-            }
-            // `summaries` (including all supporting read sequences and sterile
-            // interval state) is dropped here before the next shard is loaded.
-        }
+    mapping_info.start_timer("wall.posterior");
+    let summaries = analyzer.analyze_routed_for_cells_with_mapping_info(
+        routed,
+        &gex,
+        gex.cells.iter().cloned(),
+        &mut mapping_info,
+    );
+    mapping_info.stop_timer("wall.posterior");
+    let summary_count = summaries.len();
+    mapping_info.start_timer("wall.report_write");
+    reports.write_cells(&summaries)?;
+    audit.write_cells(&summaries)?;
+    mapping_info.stop_timer("wall.report_write");
+    if print_cells {
+        print_summaries(&summaries);
     }
 
     if summary_count == 0 {
@@ -250,28 +227,18 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-struct ShardDirGuard(PathBuf);
-
-impl Drop for ShardDirGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn automatic_bam_shards(cells: usize) -> usize {
-    ((cells + 127) / 128).clamp(1, 64)
-}
-
 fn print_summaries(summaries: &[sc_vdj::CellVdjSummary]) {
     println!("\nPosterior V(D)J summaries");
     for cell in summaries {
         println!("\nCELL {}", cell.cell);
         println!(
-            "  development: {:?} score={:.4} RAG={:.4} evidence_code={}",
-            cell.development.program,
-            cell.development.probability_like_score,
-            cell.development.rag_activity,
-            cell.development.evidence_code
+            "  recombination activity: RAG={:.4} RAG1={:.3} RAG2={:.3} DNTT={:.3} paired_RAG={} light_chain={}",
+            cell.recombination_activity.rag_activity,
+            cell.recombination_activity.rag1_expression,
+            cell.recombination_activity.rag2_expression,
+            cell.recombination_activity.dntt_expression,
+            cell.recombination_activity.rag_pair_detected,
+            cell.light_chain_status(),
         );
         if cell.rearrangements.is_empty() {
             println!("  rearrangements: none called");
@@ -286,7 +253,59 @@ fn print_summaries(summaries: &[sc_vdj::CellVdjSummary]) {
                 print_segment("D", r.d.as_ref());
                 print_segment("J", r.j.as_ref());
                 print_segment("C", r.c.as_ref());
+                if let Some(junction) = &r.junction {
+                    if r.chain.has_d() {
+                        println!(
+                            "      junction: V3del={} PV3={} N1={} PD5={} D5del={} Dlen={} D3del={} PD3={} N2={} PJ5={} J5del={} alternative_pn={}",
+                            junction.v_del_3,
+                            junction.p_v3_len(),
+                            junction.n1_len(),
+                            junction.p_d5_len(),
+                            junction.d_del_5.unwrap_or(0),
+                            junction.d_retained_len.unwrap_or(0),
+                            junction.d_del_3.unwrap_or(0),
+                            junction.p_d3_len(),
+                            junction.n2_len(),
+                            junction.p_j5_len(),
+                            junction.j_del_5,
+                            junction.pn_alternative,
+                        );
+                    } else {
+                        println!(
+                            "      junction: V3del={} PV3={} N={} PJ5={} J5del={} alternative_pn={}",
+                            junction.v_del_3,
+                            junction.p_v3_len(),
+                            junction.n1_len(),
+                            junction.p_j5_len(),
+                            junction.j_del_5,
+                            junction.pn_alternative,
+                        );
+                    }
+                    println!(
+                        "      junction_sequence: PV3={} N1={} PD5={} PD3={} N2={} PJ5={}",
+                        String::from_utf8_lossy(&junction.p_v3),
+                        String::from_utf8_lossy(&junction.n1),
+                        String::from_utf8_lossy(&junction.p_d5),
+                        String::from_utf8_lossy(&junction.p_d3),
+                        String::from_utf8_lossy(&junction.n2),
+                        String::from_utf8_lossy(&junction.p_j5),
+                    );
+                    println!(
+                        "      naive_recombination: {}",
+                        String::from_utf8_lossy(&junction.inferred_naive_sequence)
+                    );
+                }
+                if let Some(id) = sc_vdj::PackedRecombinationId::from_call(r) {
+                    println!("      recombination_id: {id}");
+                }
+
             }
+        }
+        if let Some(id) = cell.strongest_heavy_id() {
+            println!("  heavy_recombination_id: {id}");
+        }
+        if let Some(id) = cell.strongest_light_id() {
+            println!("  light_recombination_id: {id}");
         }
         println!("  sterile/germline locus evidence:");
         for p in &cell.sterile {
@@ -304,17 +323,13 @@ fn print_summaries(summaries: &[sc_vdj::CellVdjSummary]) {
                 p.distal_fraction
             );
         }
-        if cell.development.contributions.is_empty() {
-            println!("  GEX rationale: no configured developmental markers expressed");
-        } else {
-            println!("  GEX rationale:");
-            for x in &cell.development.contributions {
-                if x.expression > 0.0 {
-                    println!(
-                        "    {} expression={:.3} weight={:.2} contribution={:.4}",
-                        x.gene, x.expression, x.weight, x.contribution
-                    );
-                }
+        println!("  recombination GEX evidence:");
+        for x in &cell.recombination_activity.contributions {
+            if x.expression > 0.0 {
+                println!(
+                    "    {} expression={:.3} activity={:.4}",
+                    x.gene, x.expression, x.activity
+                );
             }
         }
     }
@@ -332,89 +347,6 @@ fn print_segment(label: &str, x: Option<&sc_vdj::GermlineSegmentSupport>) {
             x.distance_to_recombination_center
         );
     }
-}
-
-fn parse_cli<I: IntoIterator<Item = OsString>>(args: I) -> Result<Cli> {
-    let mut exonic = None;
-    let mut bam = None;
-    let mut index = None;
-    let mut gtf = None;
-    let mut genome = None;
-    let mut out = None;
-    let mut sterile_bins = 64usize;
-    let mut cell_barcode_len = None;
-    let mut bam_shards = None;
-    let mut print_cells = false;
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.to_string_lossy().as_ref() {
-            "-h" | "--help" => {
-                print_help();
-                std::process::exit(0);
-            }
-            "--exonic" => exonic = Some(PathBuf::from(next_value(&mut args, "--exonic")?)),
-            "--bam" => bam = Some(PathBuf::from(next_value(&mut args, "--bam")?)),
-            "--index" => index = Some(PathBuf::from(next_value(&mut args, "--index")?)),
-            "--gtf" => gtf = Some(PathBuf::from(next_value(&mut args, "--gtf")?)),
-            "--genome" => genome = Some(PathBuf::from(next_value(&mut args, "--genome")?)),
-            "--out" => out = Some(PathBuf::from(next_value(&mut args, "--out")?)),
-            "--sterile-bins" => {
-                sterile_bins = next_value(&mut args, "--sterile-bins")?
-                    .to_string_lossy()
-                    .parse()
-                    .context("invalid --sterile-bins")?
-            }
-            "--cell-barcode-len" => {
-                let len: usize = next_value(&mut args, "--cell-barcode-len")?
-                    .to_string_lossy()
-                    .parse()
-                    .context("invalid --cell-barcode-len")?;
-                if len == 0 || len > 32 {
-                    bail!("--cell-barcode-len must be between 1 and 32");
-                }
-                cell_barcode_len = Some(len);
-            }
-            "--bam-shards" => {
-                let n: usize = next_value(&mut args, "--bam-shards")?
-                    .to_string_lossy()
-                    .parse()
-                    .context("invalid --bam-shards")?;
-                if n == 0 || n > 256 {
-                    bail!("--bam-shards must be between 1 and 256");
-                }
-                bam_shards = Some(n);
-            }
-            "--print-cells" => print_cells = true,
-            other => bail!("unknown argument {other}\n\nRun vdj-summary --help for usage."),
-        }
-    }
-    if index.is_some() && (gtf.is_some() || genome.is_some()) {
-        bail!("use either --index <VDJIDX> or --gtf <GTF> --genome <FASTA>, not both");
-    }
-    if index.is_none() && (gtf.is_none() || genome.is_none()) {
-        bail!("missing reference: provide --index <VDJIDX> or both --gtf <GTF> and --genome <FASTA>");
-    }
-    Ok(Cli {
-        exonic: exonic.context("missing --exonic <MEX_DIR>")?,
-        bam: bam.context("missing --bam <BAM>")?,
-        index,
-        gtf,
-        genome,
-        out: out.context("missing --out <DIR>")?,
-        sterile_bins: sterile_bins.max(8),
-        cell_barcode_len,
-        bam_shards,
-        print_cells,
-    })
-}
-
-fn next_value<I: Iterator<Item = OsString>>(args: &mut I, flag: &str) -> Result<OsString> {
-    args.next()
-        .with_context(|| format!("{flag} requires a value"))
-}
-
-fn print_help() {
-    println!("vdj-summary - run posterior sc-vdj analysis on Nelrune BAM + exonic MEX\n\nUsage:\n  vdj-summary --exonic <MEX_DIR> --bam <BAM> --index <VDJIDX> --out <DIR> [options]\n  vdj-summary --exonic <MEX_DIR> --bam <BAM> --gtf <GTF> --genome <FASTA> --out <DIR> [options]\n\nRequired:\n  --exonic <DIR>     Nelrune exonic MEX (one or more cells)\n  --bam <FILE>       retained/extracted Nelrune BAM (CB/UB tags or mapper QNAME metadata)\n  --index <FILE>     compiled vdj-index (preferred; replaces --gtf/--genome)\n  --gtf <FILE>       matching genome annotation (fallback with --genome)\n  --genome <FASTA>   matching genome FASTA (fallback with --gtf)\n  --out <DIR>        report directory\n\nOptions:\n  --sterile-bins <N>      spatial bins per receptor locus [64]\n  --cell-barcode-len <N>  normalize MEX barcodes to first N bases (legacy BD: 27)\n  --bam-shards <N>        bound whole-BAM memory with N receptor shards [auto]\n                         auto targets about 128 called cells/shard, max 64\n  --print-cells           print every per-cell posterior summary to stdout\n  -h, --help");
 }
 
 fn find_file(dir: &Path, names: &[&str]) -> Result<PathBuf> {

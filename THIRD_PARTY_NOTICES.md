@@ -62,3 +62,11 @@ If you believe a required attribution, copyright notice, or third-party license 
 
 This file is intended as an overview. The license files and notices distributed with individual third-party components remain authoritative.
 
+
+## Lumrik + STAR runtime container
+
+The optional Norn runtime container published from this repository includes
+STAR in addition to the Lumrik executables. STAR is redistributed through the
+pinned BioContainers base image under STAR's MIT license and remains subject to
+its upstream copyright and notice terms. The container image does not relicense STAR under the Lumrik
+license.

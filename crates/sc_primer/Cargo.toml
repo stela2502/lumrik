@@ -15,7 +15,7 @@ categories = ["science", "parser-implementations"]
 exclude = ["target/", ".github/", "*.tmp"]
 
 [dependencies]
-clap = { version = "4.5.56", features = ["derive"] }
+clap = { workspace = true }
 flate2 = "1"
 
 onehot_dna =  { path = "../onehot_dna" }

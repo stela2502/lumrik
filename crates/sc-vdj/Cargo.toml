@@ -7,9 +7,11 @@ description = "Posterior single-cell V(D)J reconstruction and antigen-receptor l
 
 [dependencies]
 anyhow = "1"
+clap = { workspace = true }
 flate2 = "1"
 gtf_splice_index = { path = "../gtf_splice_index" }
 mapping_info = { path = "../mapping_info" }
+lumrik-status = { path = "../lumrik-status" }
 rust-htslib = { path="../rust-htslib" }
 rayon = "1"
 

@@ -1200,7 +1200,9 @@ mod tests {
         );
 
         assert!(mapper.has_seed_candidate(b"AACCGGTT", 2));
-        assert!(!mapper.has_seed_candidate(b"AACCG", 2));
+        // Forward AACCG and its reverse-complement CGGTT are two distinct
+        // observations of the same biological segment in the orientation-aware index.
+        assert!(mapper.has_seed_candidate(b"AACCG", 2));
     }
 
     #[test]

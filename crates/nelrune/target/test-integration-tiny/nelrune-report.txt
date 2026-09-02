@@ -1,5 +1,5 @@
 MappingInfo
-  started: 2026-09-01 09:39:06.159433856 UTC
+  started: 2026-09-02 08:45:52.049755598 UTC
 
 Read types (n=1)
   Type                             Count           Fraction total [%]
@@ -21,4 +21,4 @@ Named timings
   nelrune/mapper_finish:           0 h 0 min 0 sec 133 ms
   nelrune/quantification:          0 h 0 min 0 sec 0 ms
   nelrune/startup:                 0 h 0 min 0 sec 13 ms
-  nelrune/writing:                 0 h 0 min 0 sec 1 ms
+  nelrune/writing:                 0 h 0 min 0 sec 0 ms

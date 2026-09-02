@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use lumrik_status::{memory_status, ServerContent, ServerSnapshot, StatusMetric, StatusSection};
 use mapping_info::MappingInfo;
 
 #[derive(Debug)]
@@ -137,8 +138,10 @@ impl RunProgress {
         };
         let duplicate_pct = pct(duplicates);
         let unique_yield_pct = pct(unique_genomic.saturating_add(unique_feature));
-        let (process_rss_mib, process_peak_rss_mib) = process_memory_mib();
-        let system_available_mib = system_available_memory_mib();
+        let memory = memory_status();
+        let process_rss_mib = memory.process_rss_mib;
+        let process_peak_rss_mib = memory.process_peak_rss_mib;
+        let system_available_mib = memory.system_available_mib;
 
         self.reads_seen = reads;
 
@@ -337,37 +340,65 @@ impl RunProgress {
     }
 }
 
-fn process_memory_mib() -> (f64, f64) {
-    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
-        return (0.0, 0.0);
-    };
-    let mut rss_kib = 0u64;
-    let mut peak_kib = 0u64;
-    for line in status.lines() {
-        if let Some(value) = parse_proc_kib(line, "VmRSS:") {
-            rss_kib = value;
-        } else if let Some(value) = parse_proc_kib(line, "VmHWM:") {
-            peak_kib = value;
+
+impl ServerContent for RunStatus {
+    fn server_snapshot(&self) -> ServerSnapshot {
+        ServerSnapshot {
+            title: "Nelrune".to_string(),
+            subtitle: "Live single-cell processing status".to_string(),
+            started_unix_ms: self.started_unix_ms,
+            finished_unix_ms: self.finished_unix_ms,
+            stage: self.stage.clone(),
+            public_url: self.public_url.clone(),
+            sections: vec![
+                StatusSection::new(
+                    "Processing",
+                    vec![
+                        StatusMetric::new("Reads processed", self.reads_processed.to_string()),
+                        StatusMetric::new(
+                            "Reads / second",
+                            format!("{:.0}", self.reads_per_second),
+                        ),
+                        StatusMetric::new(
+                            "Current FASTQ",
+                            self.input_file.clone().unwrap_or_else(|| "-".to_string()),
+                        ),
+                    ],
+                ),
+                StatusSection::new(
+                    "Molecules",
+                    vec![
+                        StatusMetric::new("Cell / UMI not detected", self.no_cell_umi.to_string()),
+                        StatusMetric::new("Duplicates", self.duplicates.to_string()),
+                        StatusMetric::new("Unique genomic", self.unique_genomic.to_string()),
+                        StatusMetric::new("Unique feature", self.unique_feature.to_string()),
+                        StatusMetric::new(
+                            "Duplicate fraction",
+                            format!("{:.2}%", self.duplicate_pct),
+                        ),
+                        StatusMetric::new(
+                            "Unique molecule yield",
+                            format!("{:.2}%", self.unique_yield_pct),
+                        ),
+                    ],
+                ),
+                StatusSection::new(
+                    "Memory",
+                    vec![
+                        StatusMetric::new(
+                            "Process RSS / peak",
+                            format!(
+                                "{:.0} / {:.0} MiB",
+                                self.process_rss_mib, self.process_peak_rss_mib
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "System memory available",
+                            format!("{:.0} MiB", self.system_available_mib),
+                        ),
+                    ],
+                ),
+            ],
         }
     }
-    (rss_kib as f64 / 1024.0, peak_kib as f64 / 1024.0)
-}
-
-fn system_available_memory_mib() -> f64 {
-    let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") else {
-        return 0.0;
-    };
-    meminfo
-        .lines()
-        .find_map(|line| parse_proc_kib(line, "MemAvailable:"))
-        .map(|kib| kib as f64 / 1024.0)
-        .unwrap_or(0.0)
-}
-
-fn parse_proc_kib(line: &str, key: &str) -> Option<u64> {
-    line.strip_prefix(key)?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()
 }

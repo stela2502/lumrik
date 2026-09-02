@@ -12,6 +12,8 @@ use sc_beacon::run_from_scdata;
 
 #[derive(Debug, Parser)]
 #[command(
+    author,
+    version,
     name = "lumrik-guides",
     about = "Ambient-aware multi-guide caller for 10x CRISPR feature-barcode matrices"
 )]

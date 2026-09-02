@@ -9,12 +9,13 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 rayon = "1"
 
 bam_tide = { path = "../bam_tide" }
 gtf_splice_index = { path = "../gtf_splice_index" }
 mapping_info = { path = "../mapping_info" }
+lumrik-status = { path = "../lumrik-status" }
 sc-mapper = { path = "../sc-mapper" }
 sc_primer = { path = "../sc_primer" }
 scdata = { path="../scdata" }

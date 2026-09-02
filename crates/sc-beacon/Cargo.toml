@@ -8,7 +8,7 @@ repository = "https://github.com/stela2502/lumrik"
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 statrs = "0.18"
 rayon = "1.12.0"
 

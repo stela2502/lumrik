@@ -1,7 +1,6 @@
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, FromArgMatches};
@@ -21,7 +20,7 @@ use sc_mapper::{MappingCall, StreamingMapper};
 
 use nelrune::cli::Cli;
 use nelrune::progress::RunProgress;
-use nelrune::server::spawn_health_server;
+use lumrik_status::{public_hostname, spawn_status_server};
 
 fn main() -> Result<()> {
     let command = Cli::command();
@@ -52,8 +51,8 @@ fn run(args: Cli) -> Result<()> {
     } else {
         let health_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), args.health_port);
 
-        let server = spawn_health_server(progress.state_handle(), health_addr)?;
-        let hostname = external_hostname(args.health_hostname.as_deref());
+        let server = spawn_status_server(progress.state_handle(), health_addr)?;
+        let hostname = public_hostname(args.health_hostname.as_deref());
         let url = format!("http://{}:{}", hostname, server.addr().port());
         progress.set_public_url(url.clone());
         eprintln!("[nelrune] health server: {url}");
@@ -425,37 +424,6 @@ impl MapperBamSink {
         self.writer.take();
         Ok(())
     }
-}
-
-fn external_hostname(override_hostname: Option<&str>) -> String {
-    if let Some(hostname) = override_hostname {
-        if !hostname.trim().is_empty() {
-            return hostname.trim().to_string();
-        }
-    }
-
-    if let Ok(hostname) = std::env::var("SLURMD_NODENAME") {
-        if !hostname.trim().is_empty() {
-            return hostname;
-        }
-    }
-
-    if let Ok(output) = Command::new("hostname").arg("-f").output() {
-        if output.status.success() {
-            let hostname = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !hostname.is_empty() {
-                return hostname;
-            }
-        }
-    }
-
-    if let Ok(hostname) = std::env::var("HOSTNAME") {
-        if !hostname.trim().is_empty() {
-            return hostname;
-        }
-    }
-
-    "localhost".to_string()
 }
 
 fn configure_rayon(threads: usize) {

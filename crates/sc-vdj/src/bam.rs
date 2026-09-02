@@ -1,31 +1,131 @@
-use crate::mapper::VdjMapper;
 use crate::posterior::BamReadEvidence;
 use crate::reference::VdjReference;
 use anyhow::{Context, Result};
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 
 
 #[derive(Debug, Clone, Default)]
-pub struct BamShardStats {
+pub struct BamEvidenceStats {
+    pub receptor_chromosomes: usize,
+    pub indexed_segment_intervals: usize,
     pub total_records: usize,
+    pub receptor_chromosome_records: usize,
+    pub segment_overlap_records: usize,
     pub called_cell_records: usize,
-    pub retained_records: usize,
-    pub discarded_irrelevant_records: usize,
-    pub shard_records: Vec<usize>,
+    pub routed_evidence_records: usize,
+    pub non_receptor_chromosome_records: usize,
+    pub non_segment_overlap_records: usize,
+    pub locus_records: [usize; 7],
 }
 
-/// Stable inexpensive hash used to assign every cell to exactly one BAM shard.
-/// It is intentionally independent of Rust's randomized HashMap state.
-pub fn bam_shard_for_cell(cell: &str, shards: usize) -> usize {
-    assert!(shards > 0);
-    let mut hash = 0xcbf29ce484222325u64;
-    for &byte in cell.as_bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+/// Receptor evidence is physically separated by cell and receptor locus as it is
+/// collected. This prevents abundant IGK/IGL observations from entering the IGH
+/// reconstruction pool (and likewise keeps all TCR loci independent).
+pub type RoutedBamEvidence = HashMap<String, HashMap<crate::types::Chain, Vec<BamReadEvidence>>>;
+
+#[derive(Debug, Clone, Copy)]
+struct SegmentInterval {
+    start: u32,
+    end: u32,
+    chain: crate::types::Chain,
+}
+
+/// Small BAM-TID routing table derived directly from the serialized VDJ index.
+/// Chromosomes without indexed V/D/J/C segments have an empty interval vector
+/// and are rejected before cell/UMI parsing or sequence extraction.
+struct BamLocusRouter {
+    by_tid: Vec<Vec<SegmentInterval>>,
+}
+
+impl BamLocusRouter {
+    fn new(header: &bam::HeaderView, reference: &VdjReference) -> Self {
+        let mut tid_by_name = HashMap::<String, usize>::new();
+        for tid in 0..header.target_count() {
+            tid_by_name.insert(
+                String::from_utf8_lossy(header.tid2name(tid)).into_owned(),
+                tid as usize,
+            );
+        }
+        let mut by_tid = vec![Vec::new(); header.target_count() as usize];
+        for segment in &reference.segments {
+            let Some(&tid) = tid_by_name.get(&segment.chr) else {
+                continue;
+            };
+            if segment.end <= segment.start {
+                continue;
+            }
+            by_tid[tid].push(SegmentInterval {
+                start: segment.start,
+                end: segment.end,
+                chain: segment.chain,
+            });
+        }
+        for intervals in &mut by_tid {
+            intervals.sort_by_key(|interval| (interval.start, interval.end, chain_index(interval.chain)));
+        }
+        Self { by_tid }
     }
-    (hash as usize) % shards
+
+    fn has_receptor_chromosome(&self, tid: i32) -> bool {
+        tid >= 0
+            && self
+                .by_tid
+                .get(tid as usize)
+                .is_some_and(|intervals| !intervals.is_empty())
+    }
+
+    fn matching_chains(&self, record: &bam::Record) -> Vec<crate::types::Chain> {
+        self.matching_chains_for_blocks(record.tid(), &aligned_blocks(record))
+    }
+
+    fn matching_chains_for_blocks(
+        &self,
+        tid: i32,
+        blocks: &[(u32, u32)],
+    ) -> Vec<crate::types::Chain> {
+        if tid < 0 || blocks.is_empty() {
+            return Vec::new();
+        }
+        let Some(intervals) = self.by_tid.get(tid as usize) else {
+            return Vec::new();
+        };
+        if intervals.is_empty() {
+            return Vec::new();
+        }
+
+        let mut seen = [false; 7];
+        for &(block_start, block_end) in blocks {
+            // Intervals are sorted by start. Once an interval starts beyond the
+            // aligned block, no later segment can overlap this block.
+            for interval in intervals {
+                if interval.start >= block_end {
+                    break;
+                }
+                if interval.end > block_start {
+                    seen[chain_index(interval.chain)] = true;
+                }
+            }
+        }
+        crate::types::Chain::ALL
+            .into_iter()
+            .filter(|chain| seen[chain_index(*chain)])
+            .collect()
+    }
+}
+
+fn chain_index(chain: crate::types::Chain) -> usize {
+    match chain {
+        crate::types::Chain::Igh => 0,
+        crate::types::Chain::Igk => 1,
+        crate::types::Chain::Igl => 2,
+        crate::types::Chain::Tra => 3,
+        crate::types::Chain::Trb => 4,
+        crate::types::Chain::Trg => 5,
+        crate::types::Chain::Trd => 6,
+    }
 }
 
 pub trait BamIdentityResolver {
@@ -148,6 +248,7 @@ where
             continue;
         }
         let seq = record.seq().as_bytes();
+        let qualities = record.qual().to_vec();
         let read_name = String::from_utf8_lossy(record.qname()).to_string();
         let tid = record.tid();
         let (chr, start, end, ref_blocks) = if tid >= 0 {
@@ -164,6 +265,7 @@ where
             umi,
             read_name,
             sequence: seq,
+            qualities,
             chr,
             ref_start: start,
             ref_end: end,
@@ -177,54 +279,76 @@ where
     Ok(out)
 }
 
-/// One-pass memory-bounded prefilter for whole-transcriptome BAMs. Records are
-/// retained only when they belong to a called cell and can influence either
-/// rearrangement scoring (a segment reaches the posterior seed threshold) or
-/// sterile/germline receptor-locus evidence (genomic overlap with an IG/TR
-/// locus). Secondary alignments are dropped here because PosteriorAnalyzer also
-/// ignores them.
-pub fn shard_bam_receptor_evidence<P, R, F>(
+/// Stream a whole-transcriptome BAM exactly once and retain only called-cell
+/// alignments whose reference blocks overlap an actual indexed V/D/J/C segment.
+/// Evidence is routed immediately into independent cell/locus buckets. No
+/// temporary BAMs or shard files are created.
+pub fn read_bam_receptor_evidence<P, R, F>(
     path: P,
     resolver: &R,
     keep_cell: F,
-    mapper: &VdjMapper,
     reference: &VdjReference,
-    min_seed_hits: u32,
-    shard_paths: &[PathBuf],
-) -> Result<BamShardStats>
+) -> Result<(RoutedBamEvidence, BamEvidenceStats)>
 where
     P: AsRef<Path>,
     R: BamIdentityResolver,
     F: Fn(&str) -> bool,
 {
-    if shard_paths.is_empty() {
-        anyhow::bail!("at least one BAM shard is required");
-    }
+    read_bam_receptor_evidence_with_progress(path, resolver, keep_cell, reference, |_| {})
+}
+
+/// Progress-enabled form of [`read_bam_receptor_evidence`]. The callback is
+/// invoked every 50,000 BAM records and once at EOF.
+pub fn read_bam_receptor_evidence_with_progress<P, R, F, G>(
+    path: P,
+    resolver: &R,
+    keep_cell: F,
+    reference: &VdjReference,
+    mut progress: G,
+) -> Result<(RoutedBamEvidence, BamEvidenceStats)>
+where
+    P: AsRef<Path>,
+    R: BamIdentityResolver,
+    F: Fn(&str) -> bool,
+    G: FnMut(&BamEvidenceStats),
+{
     let path = path.as_ref();
     let mut reader =
         bam::Reader::from_path(path).with_context(|| format!("opening BAM {}", path.display()))?;
-    let header_view = reader.header().to_owned();
-    let header = bam::Header::from_template(reader.header());
-    let mut writers = Vec::with_capacity(shard_paths.len());
-    for shard in shard_paths {
-        writers.push(
-            bam::Writer::from_path(shard, &header, bam::Format::Bam)
-                .with_context(|| format!("creating BAM shard {}", shard.display()))?,
-        );
-    }
-
-    let mut stats = BamShardStats {
-        shard_records: vec![0; shard_paths.len()],
-        ..BamShardStats::default()
+    let header = reader.header().to_owned();
+    let router = BamLocusRouter::new(&header, reference);
+    let mut stats = BamEvidenceStats {
+        receptor_chromosomes: router.by_tid.iter().filter(|intervals| !intervals.is_empty()).count(),
+        indexed_segment_intervals: router.by_tid.iter().map(|intervals| intervals.len()).sum(),
+        ..BamEvidenceStats::default()
     };
+    let mut evidence = RoutedBamEvidence::new();
     let mut record = bam::Record::new();
+
     while let Some(result) = reader.read(&mut record) {
         result?;
         stats.total_records += 1;
+        if stats.total_records % 50_000 == 0 {
+            progress(&stats);
+        }
         if record.is_secondary() {
             continue;
         }
-        let Some((cell, _umi)) = resolver.resolve(&record) else {
+
+        if !router.has_receptor_chromosome(record.tid()) {
+            stats.non_receptor_chromosome_records += 1;
+            continue;
+        }
+        stats.receptor_chromosome_records += 1;
+
+        let chains = router.matching_chains(&record);
+        if chains.is_empty() {
+            stats.non_segment_overlap_records += 1;
+            continue;
+        }
+        stats.segment_overlap_records += 1;
+
+        let Some((cell, umi)) = resolver.resolve(&record) else {
             continue;
         };
         if !keep_cell(&cell) {
@@ -232,48 +356,39 @@ where
         }
         stats.called_cell_records += 1;
 
-        let sequence = record.seq().as_bytes();
-        let receptor_seed = mapper.has_seed_candidate(&sequence, min_seed_hits);
-        let receptor_locus = if receptor_seed {
-            false
-        } else {
-            overlaps_receptor_locus(&record, &header_view, reference)
+        let seq = record.seq().as_bytes();
+        let qualities = record.qual().to_vec();
+        let read_name = String::from_utf8_lossy(record.qname()).to_string();
+        let tid = record.tid();
+        let chr = String::from_utf8_lossy(header.tid2name(tid as u32)).to_string();
+        let ref_blocks = aligned_blocks(&record);
+        let ref_start = ref_blocks.first().map(|x| x.0);
+        let ref_end = ref_blocks.last().map(|x| x.1);
+        let base = BamReadEvidence {
+            cell: cell.clone(),
+            umi,
+            read_name,
+            sequence: seq,
+            qualities,
+            chr: Some(chr),
+            ref_start,
+            ref_end,
+            ref_blocks,
+            mapq: record.mapq(),
+            is_reverse: record.is_reverse(),
+            is_secondary: false,
+            is_supplementary: record.is_supplementary(),
         };
-        if !(receptor_seed || receptor_locus) {
-            stats.discarded_irrelevant_records += 1;
-            continue;
+
+        let cell_entry = evidence.entry(cell).or_default();
+        for chain in chains {
+            cell_entry.entry(chain).or_default().push(base.clone());
+            stats.locus_records[chain_index(chain)] += 1;
+            stats.routed_evidence_records += 1;
         }
-
-        let shard = bam_shard_for_cell(&cell, shard_paths.len());
-        writers[shard]
-            .write(&record)
-            .with_context(|| format!("writing BAM shard {}", shard_paths[shard].display()))?;
-        stats.retained_records += 1;
-        stats.shard_records[shard] += 1;
     }
-    drop(writers);
-    Ok(stats)
-}
-
-fn overlaps_receptor_locus(
-    record: &bam::Record,
-    header: &bam::HeaderView,
-    reference: &VdjReference,
-) -> bool {
-    let tid = record.tid();
-    if tid < 0 {
-        return false;
-    }
-    let chr = String::from_utf8_lossy(header.tid2name(tid as u32));
-    let blocks = aligned_blocks(record);
-    if blocks.is_empty() {
-        return false;
-    }
-    crate::types::Chain::ALL.into_iter().any(|chain| {
-        reference.locus_bounds(chain).is_some_and(|(lchr, ls, le)| {
-            chr.as_ref() == lchr && blocks.iter().any(|&(s, e)| e > ls && s < le)
-        })
-    })
+    progress(&stats);
+    Ok((evidence, stats))
 }
 
 fn aligned_blocks(record: &bam::Record) -> Vec<(u32, u32)> {
@@ -316,6 +431,33 @@ fn aligned_blocks(record: &bam::Record) -> Vec<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routes_only_actual_segment_overlaps() {
+        let router = BamLocusRouter {
+            by_tid: vec![vec![
+                SegmentInterval { start: 100, end: 150, chain: crate::types::Chain::Igh },
+                SegmentInterval { start: 300, end: 350, chain: crate::types::Chain::Igk },
+            ]],
+        };
+        assert_eq!(router.matching_chains_for_blocks(0, &[(120, 130)]), vec![crate::types::Chain::Igh]);
+        assert!(router.matching_chains_for_blocks(0, &[(200, 250)]).is_empty());
+        assert_eq!(router.matching_chains_for_blocks(0, &[(320, 330)]), vec![crate::types::Chain::Igk]);
+    }
+
+    #[test]
+    fn nested_tra_trd_segments_can_route_to_both_loci() {
+        let router = BamLocusRouter {
+            by_tid: vec![vec![
+                SegmentInterval { start: 100, end: 160, chain: crate::types::Chain::Tra },
+                SegmentInterval { start: 130, end: 180, chain: crate::types::Chain::Trd },
+            ]],
+        };
+        assert_eq!(
+            router.matching_chains_for_blocks(0, &[(140, 150)]),
+            vec![crate::types::Chain::Tra, crate::types::Chain::Trd]
+        );
+    }
 
     #[test]
     fn decodes_nelrune_mapper_qname_hex_fields() {

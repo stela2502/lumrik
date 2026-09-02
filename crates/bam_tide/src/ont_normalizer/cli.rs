@@ -7,6 +7,7 @@ use std::path::PathBuf;
 #[command(
     author,
     version,
+    name = "bam-ont-normalizer",
     about = "Normalize messy ONT/Dorado BAM reads into one 10x-style molecule per FASTQ read",
     long_about = "\
 Normalize messy ONT/Dorado BAM reads into clean FASTQ records.
@@ -105,8 +106,3 @@ pub struct Cli {
     pub min_transcript_len: usize,
 }
 
-impl Cli {
-    pub fn parse_args() -> Self {
-        Self::parse()
-    }
-}

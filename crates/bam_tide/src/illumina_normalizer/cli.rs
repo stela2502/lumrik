@@ -55,6 +55,7 @@ impl InsertRead {
 #[command(
     author,
     version,
+    name = "illumina_normalizer",
     about = "Normalize Illumina FASTQ pairs into mapper FASTQ plus read-tag metadata",
     long_about = "\
 Normalize Illumina paired FASTQ reads into one mapper-facing FASTQ record per
@@ -173,8 +174,3 @@ pub struct Cli {
     pub no_gzip: bool,
 }
 
-impl Cli {
-    pub fn parse_args() -> Self {
-        Self::parse()
-    }
-}

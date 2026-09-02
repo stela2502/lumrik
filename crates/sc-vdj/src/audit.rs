@@ -600,6 +600,8 @@ mod tests {
             stage: RecombinationStage::Vj,
             v: Some(support(0, "IGKV1", SegmentKind::V)),
             d: None,
+            d_inferred_from_vj_junction: false,
+            d_hypothesis_margin: None,
             j: Some(support(1, "IGKJ1", SegmentKind::J)),
             c: None,
             total_supporting_umis: 1,
@@ -608,6 +610,7 @@ mod tests {
                     umi: "u1".into(),
                     read_name: "vread".into(),
                     sequence: b"AACCGGTTAACCGGTTAACCGGTT".to_vec(),
+                    qualities: vec![30; 24],
                     bam_is_reverse: false,
                     is_supplementary: false,
                     supports_v: true,
@@ -623,6 +626,7 @@ mod tests {
                     umi: "u1".into(),
                     read_name: "jread".into(),
                     sequence: b"TTGGAACCTTGGAACCTTGGAACC".to_vec(),
+                    qualities: vec![30; 24],
                     bam_is_reverse: false,
                     is_supplementary: false,
                     supports_v: false,
@@ -635,6 +639,7 @@ mod tests {
                     c_alignment: None,
                 },
             ],
+            junction: None,
             notation: "IGK:IGKV1-IGKJ1-?".into(),
         };
         assert!(reconstruct_candidate(&call, &reference).is_none());

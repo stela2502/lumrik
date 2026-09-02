@@ -10,4 +10,4 @@ cargo install --path crates/read-tag-table --force
 cargo install --path crates/snp-index --force
 cargo install --path crates/sc-beacon --force
 cargo install --path crates/nelrune --force
-
+cargo install --path crates/sc-vdj --force

@@ -1,8 +1,9 @@
 use anyhow::Result;
+use clap::Parser;
 use bam_tide::ont_normalizer::{OntNormalizer, cli::Cli};
 
 fn main() -> Result<()> {
-    let cli = Cli::parse_args();
+    let cli = Cli::parse();
     let mut normalizer = OntNormalizer::from_cli(cli)?;
     normalizer.run()?;
 

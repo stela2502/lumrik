@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{Parser, ValueEnum};
+use clap::{Args, ValueEnum};
 
 use read_tag_table::ReadTagTableCli;
 
@@ -39,11 +39,7 @@ impl FromStr for BamAuxTag {
     }
 }
 
-#[derive(Parser, Debug, Clone)]
-#[command(
-    name = "bam-quant",
-    about = "Quantify 10x BAM against splice index into scdata, optionally collecting SNP ref/alt matrices"
-)]
+#[derive(Args, Debug, Clone)]
 pub struct QuantCli {
     /// Input BAM file(s) from a single cell mapping.
     #[arg(short = 'b', long = "bam", required = true, num_args = 1..)]

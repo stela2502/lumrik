@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 thiserror = "2"
 shell-words = "1"
 

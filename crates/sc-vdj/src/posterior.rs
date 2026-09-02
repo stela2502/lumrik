@@ -1,8 +1,12 @@
-use crate::align::{best_oriented_local_alignment, best_oriented_local_alignment_with_reverse, OrientedLocalAlignment};
+use crate::align::{
+    best_oriented_local_alignment, best_oriented_local_alignment_with_reverse, local_alignment,
+    OrientedLocalAlignment,
+};
 use crate::gex::ExpressionMatrix;
+use crate::junction::{measure_junction, JunctionInput, JunctionMeasurement};
 use crate::mapper::{CoverageFamilyScore, IdentitySeedScore, VdjMapper};
 use crate::reference::VdjReference;
-use crate::score::{score_development, DevelopmentEvidence};
+use crate::score::{score_recombination_activity, RecombinationActivityEvidence};
 use crate::sterile::{SterileAccumulator, SterileProfile};
 use crate::types::{Chain, SegmentKind};
 use mapping_info::MappingInfo;
@@ -15,6 +19,8 @@ pub struct BamReadEvidence {
     pub umi: String,
     pub read_name: String,
     pub sequence: Vec<u8>,
+    /// Raw BAM Phred qualities, one byte per base in `sequence`.
+    pub qualities: Vec<u8>,
     pub chr: Option<String>,
     pub ref_start: Option<u32>,
     pub ref_end: Option<u32>,
@@ -64,6 +70,8 @@ pub struct RearrangementSupportingRead {
     pub read_name: String,
     /// Sequence exactly as stored in BAM. It is not silently reverse-complemented.
     pub sequence: Vec<u8>,
+    /// Raw BAM Phred qualities corresponding to `sequence`.
+    pub qualities: Vec<u8>,
     pub bam_is_reverse: bool,
     pub is_supplementary: bool,
     pub supports_v: bool,
@@ -82,6 +90,12 @@ pub struct RearrangementCall {
     pub stage: RecombinationStage,
     pub v: Option<GermlineSegmentSupport>,
     pub d: Option<GermlineSegmentSupport>,
+    /// For D-bearing chains, true when the selected D was inferred by comparing
+    /// all locus-compatible D genes only inside the already-established V/J junction.
+    pub d_inferred_from_vj_junction: bool,
+    /// Score difference between the best and second-best bounded D hypotheses.
+    /// This is deliberately diagnostic rather than an acceptance threshold.
+    pub d_hypothesis_margin: Option<i32>,
     pub j: Option<GermlineSegmentSupport>,
     pub c: Option<GermlineSegmentSupport>,
     /// UMIs with coherent support for both the selected V and J segments.
@@ -89,6 +103,8 @@ pub struct RearrangementCall {
     /// Original BAM reads from those coherent UMIs that support at least one
     /// segment in the final call. Used only for auditable sequence diagnostics.
     pub supporting_reads: Vec<RearrangementSupportingRead>,
+    /// Junction geometry measured on one continuous coherent UMI contig.
+    pub junction: Option<JunctionMeasurement>,
     pub notation: String,
 }
 
@@ -97,7 +113,7 @@ pub struct CellVdjSummary {
     pub cell: String,
     pub rearrangements: Vec<RearrangementCall>,
     pub sterile: Vec<SterileProfile>,
-    pub development: DevelopmentEvidence,
+    pub recombination_activity: RecombinationActivityEvidence,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +217,7 @@ struct SeededRead<'a> {
     identity_seed_used: bool,
 }
 
+#[derive(Debug, Clone)]
 struct SelectedSegment {
     support: GermlineSegmentSupport,
     umis: HashSet<String>,
@@ -233,9 +250,9 @@ impl<'a> PosteriorAnalyzer<'a> {
     }
 
     /// Analyze a bounded batch while optionally predeclaring cells that must be
-    /// emitted even if receptor prefiltering retained no BAM records for them.
-    /// This is important for whole-dataset sharding because developmental GEX
-    /// scoring is still meaningful for an otherwise receptor-silent cell.
+    /// emitted even if receptor routing retained no BAM records for them.
+    /// Developmental/recombination GEX scoring remains meaningful for an
+    /// otherwise receptor-silent cell.
     pub fn analyze_for_cells<E, I>(
         &self,
         reads: impl IntoIterator<Item = BamReadEvidence>,
@@ -281,6 +298,97 @@ impl<'a> PosteriorAnalyzer<'a> {
             .map(|(cell, reads)| {
                 let mut local = MappingInfo::new(None, 0.0, 0);
                 let summary = self.analyze_cell_profiled(cell, reads, gex, &mut local);
+                (summary, local)
+            })
+            .collect();
+        for (_, local) in &out {
+            report.merge(local);
+        }
+        out.sort_by(|a, b| a.0.cell.cmp(&b.0.cell));
+        out.into_iter().map(|(summary, _)| summary).collect()
+    }
+
+    /// Analyze evidence that was already routed by indexed genomic locus during
+    /// the single BAM scan. Each receptor locus is reconstructed independently;
+    /// calls from another locus are never allowed to leak out of that bucket.
+    pub fn analyze_routed_for_cells_with_mapping_info<E, I>(
+        &self,
+        routed: crate::bam::RoutedBamEvidence,
+        gex: &E,
+        required_cells: I,
+        report: &mut MappingInfo,
+    ) -> Vec<CellVdjSummary>
+    where
+        E: ExpressionMatrix + Sync,
+        I: IntoIterator<Item = String>,
+    {
+        self.analyze_routed_for_cells_with_progress(
+            routed,
+            gex,
+            required_cells,
+            report,
+            |_, _| {},
+        )
+    }
+
+    /// Progress-enabled locus-routed analysis. The callback is invoked from
+    /// Rayon worker threads after each cell is complete, so callers can expose
+    /// genuine live reconstruction progress without creating artificial shards.
+    pub fn analyze_routed_for_cells_with_progress<E, I, G>(
+        &self,
+        mut routed: crate::bam::RoutedBamEvidence,
+        gex: &E,
+        required_cells: I,
+        report: &mut MappingInfo,
+        progress: G,
+    ) -> Vec<CellVdjSummary>
+    where
+        E: ExpressionMatrix + Sync,
+        I: IntoIterator<Item = String>,
+        G: Fn(&CellVdjSummary, &MappingInfo) + Sync,
+    {
+        for cell in required_cells {
+            routed.entry(cell).or_default();
+        }
+        report.report_n("vdj.cells", routed.len());
+
+        let mut out: Vec<_> = routed
+            .into_par_iter()
+            .map(|(cell, loci)| {
+                let mut local = MappingInfo::new(None, 0.0, 0);
+                let mut rearrangements = Vec::new();
+                let mut sterile = Vec::new();
+
+                for (chain, reads) in loci {
+                    let summary = self.analyze_cell_profiled(
+                        cell.clone(),
+                        reads,
+                        gex,
+                        &mut local,
+                    );
+                    rearrangements.extend(
+                        summary
+                            .rearrangements
+                            .into_iter()
+                            .filter(|call| call.chain == chain),
+                    );
+                    sterile.extend(
+                        summary
+                            .sterile
+                            .into_iter()
+                            .filter(|profile| profile.chain == chain),
+                    );
+                }
+
+                rearrangements.sort_by_key(|call| call.chain);
+                sterile.sort_by_key(|profile| profile.chain);
+                let summary = CellVdjSummary {
+                    recombination_activity: score_recombination_activity(gex, &cell),
+                    cell,
+                    rearrangements,
+                    sterile,
+                };
+                progress(&summary, &local);
                 (summary, local)
             })
             .collect();
@@ -430,28 +538,18 @@ impl<'a> PosteriorAnalyzer<'a> {
         report.report_n("vdj.rearrangements_called", rearrangements.len());
         report.stop_timer("cell_work.chain_calls_geometry");
 
-        report.start_timer("cell_work.development_scoring");
+        report.start_timer("cell_work.recombination_activity");
         let sterile: Vec<_> = Chain::ALL
             .into_iter()
             .filter_map(|c| sterile_acc.remove(&c).map(|a| a.finish()))
             .collect();
-        let b_locus = sterile
-            .iter()
-            .filter(|p| p.chain.is_bcr())
-            .map(locus_signal)
-            .fold(0.0, f64::max);
-        let t_locus = sterile
-            .iter()
-            .filter(|p| p.chain.is_tcr())
-            .map(locus_signal)
-            .fold(0.0, f64::max);
-        let development = score_development(gex, &cell, b_locus, t_locus);
-        report.stop_timer("cell_work.development_scoring");
+        let recombination_activity = score_recombination_activity(gex, &cell);
+        report.stop_timer("cell_work.recombination_activity");
         CellVdjSummary {
             cell,
             rearrangements,
             sterile,
-            development,
+            recombination_activity,
         }
     }
 
@@ -806,14 +904,23 @@ impl<'a> PosteriorAnalyzer<'a> {
             return None;
         }
 
-        // D is short and often seeds poorly. Search it only in UMIs already
-        // shown to coherently support this V/J pair; do not require D to define
-        // the chain support count.
-        let d = if chain.has_d() {
-            self.best_segment(chain, SegmentKind::D, reads, Some(&coherent_vj))
+        // D is intrinsically difficult: it is short, frequently clipped and may
+        // already carry somatic mutations. V/J coherence establishes the heavy
+        // rearrangement. Only then compare every D from the same locus inside the
+        // bounded V..J junction, molecule by molecule. D therefore refines the HC
+        // identity but never gates the HC call itself.
+        let d_hypothesis = if chain.has_d() {
+            self.best_d_hypothesis_in_vj_junction(
+                chain,
+                reads,
+                &coherent_vj,
+                v.support.segment_index,
+                j.support.segment_index,
+            )
         } else {
             None
         };
+        let d = d_hypothesis.as_ref().map(|x| x.selected.clone());
 
         // C is supporting context, not evidence that creates a VJ call.  It must
         // be physically plausible and share at least one coherent VJ UMI.
@@ -837,6 +944,13 @@ impl<'a> PosteriorAnalyzer<'a> {
             Some(&j.support),
             c.as_ref().map(|x| &x.support),
         );
+        let mut junction = self.measure_call_junction(
+            reads,
+            &coherent_vj,
+            v.support.segment_index,
+            j.support.segment_index,
+            d.as_ref().map(|x| x.support.segment_index),
+        );
         let supporting_reads = self.collect_supporting_reads(
             reads,
             &coherent_vj,
@@ -845,16 +959,200 @@ impl<'a> PosteriorAnalyzer<'a> {
             d.as_ref().map(|x| x.support.segment_index),
             c.as_ref().map(|x| x.support.segment_index),
         );
+        if let Some(measurement) = junction.as_mut() {
+            refine_junction_observed_sequences(measurement, &supporting_reads);
+        }
         Some(RearrangementCall {
             chain,
             stage,
             v: Some(v.support),
             d: d.map(|x| x.support),
+            d_inferred_from_vj_junction: d_hypothesis.is_some(),
+            d_hypothesis_margin: d_hypothesis.as_ref().map(|x| x.margin),
             j: Some(j.support),
             c: c.map(|x| x.support),
             total_supporting_umis: coherent_vj.len(),
             supporting_reads,
+            junction,
             notation,
+        })
+    }
+
+    fn measure_call_junction(
+        &self,
+        reads: &[&SeededRead<'_>],
+        coherent_umis: &HashSet<String>,
+        v_index: usize,
+        j_index: usize,
+        d_index: Option<usize>,
+    ) -> Option<JunctionMeasurement> {
+        let v_ref = &self.reference.segments[v_index].sequence;
+        let j_ref = &self.reference.segments[j_index].sequence;
+        let d_ref = d_index.map(|idx| self.reference.segments[idx].sequence.as_slice());
+
+        let mut best: Option<(i32, JunctionMeasurement)> = None;
+        for evidence in reads {
+            if !coherent_umis.contains(evidence.umi) {
+                continue;
+            }
+            let v_alignment = best_oriented_local_alignment_with_reverse(
+                &evidence.sequence,
+                &evidence.reverse_sequence,
+                v_ref,
+            );
+            let j_alignment = best_oriented_local_alignment_with_reverse(
+                &evidence.sequence,
+                &evidence.reverse_sequence,
+                j_ref,
+            );
+            if v_alignment.alignment.score < self.config.min_local_score
+                || j_alignment.alignment.score < self.config.min_local_score
+            {
+                continue;
+            }
+
+            let d_alignment = d_ref.and_then(|reference| {
+                bounded_d_alignment(
+                    &evidence.sequence,
+                    &evidence.reverse_sequence,
+                    v_alignment,
+                    j_alignment,
+                    reference,
+                )
+            });
+            // If an HC has a selected D hypothesis, junction geometry must be
+            // measured with that D inside the V/J interval. There is intentionally
+            // no absolute D score cutoff: short/mutated D sequence is expected.
+            if d_ref.is_some() && d_alignment.is_none() {
+                continue;
+            }
+
+            let Some(measurement) = measure_junction(JunctionInput {
+                observed: &evidence.sequence,
+                v: v_ref,
+                v_alignment,
+                d: d_ref,
+                d_alignment,
+                j: j_ref,
+                j_alignment,
+            }) else {
+                continue;
+            };
+            let score = v_alignment.alignment.score
+                + j_alignment.alignment.score
+                + d_alignment.map_or(0, |x| x.alignment.score);
+            if best
+                .as_ref()
+                .map_or(true, |(best_score, _)| score > *best_score)
+            {
+                best = Some((score, measurement));
+            }
+        }
+        best.map(|(_, measurement)| measurement)
+    }
+
+    fn best_d_hypothesis_in_vj_junction(
+        &self,
+        chain: Chain,
+        reads: &[&SeededRead<'_>],
+        coherent_umis: &HashSet<String>,
+        v_index: usize,
+        j_index: usize,
+    ) -> Option<DHypothesis> {
+        let v_ref = &self.reference.segments[v_index].sequence;
+        let j_ref = &self.reference.segments[j_index].sequence;
+        let d_indices: Vec<usize> = self
+            .reference
+            .segments_for(chain, SegmentKind::D)
+            .map(|(idx, _)| idx)
+            .collect();
+        if d_indices.is_empty() {
+            return None;
+        }
+
+        // Each UMI contributes at most its best bounded score for each D gene.
+        // This keeps PCR/read multiplicity from turning into false D confidence.
+        let mut by_d: HashMap<usize, HashMap<&str, i32>> = HashMap::new();
+        let mut reads_by_d: HashMap<usize, usize> = HashMap::new();
+        for evidence in reads {
+            if !coherent_umis.contains(evidence.umi) {
+                continue;
+            }
+            let v_alignment = best_oriented_local_alignment_with_reverse(
+                &evidence.sequence,
+                &evidence.reverse_sequence,
+                v_ref,
+            );
+            let j_alignment = best_oriented_local_alignment_with_reverse(
+                &evidence.sequence,
+                &evidence.reverse_sequence,
+                j_ref,
+            );
+            if v_alignment.alignment.score < self.config.min_local_score
+                || j_alignment.alignment.score < self.config.min_local_score
+                || v_alignment.reverse_complement != j_alignment.reverse_complement
+                || v_alignment.alignment.query_end > j_alignment.alignment.query_start
+            {
+                continue;
+            }
+
+            for &idx in &d_indices {
+                let d_ref = &self.reference.segments[idx].sequence;
+                let Some(hit) = bounded_d_alignment(
+                    &evidence.sequence,
+                    &evidence.reverse_sequence,
+                    v_alignment,
+                    j_alignment,
+                    d_ref,
+                ) else {
+                    continue;
+                };
+                if hit.alignment.score <= 0 || hit.alignment.reference_end <= hit.alignment.reference_start {
+                    continue;
+                }
+                by_d
+                    .entry(idx)
+                    .or_default()
+                    .entry(evidence.umi)
+                    .and_modify(|old| *old = (*old).max(hit.alignment.score))
+                    .or_insert(hit.alignment.score);
+                *reads_by_d.entry(idx).or_default() += evidence.multiplicity;
+            }
+        }
+
+        let mut ranked: Vec<(usize, i32, usize)> = by_d
+            .into_iter()
+            .map(|(idx, by_umi)| {
+                let umi_count = by_umi.len();
+                let total = by_umi
+                    .into_values()
+                    .fold(0i32, |acc, score| acc.saturating_add(score));
+                (idx, total, umi_count)
+            })
+            .collect();
+        ranked.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let &(best_idx, best_score, best_umis) = ranked.first()?;
+        let second_score = ranked.get(1).map(|x| x.1).unwrap_or(0);
+        let seg = &self.reference.segments[best_idx];
+        Some(DHypothesis {
+            selected: SelectedSegment {
+                support: GermlineSegmentSupport {
+                    segment_index: best_idx,
+                    id: seg.name.clone(),
+                    kind: SegmentKind::D,
+                    local_alignment_score: best_score,
+                    supporting_umis: best_umis,
+                    supporting_reads: reads_by_d.get(&best_idx).copied().unwrap_or(0),
+                    locus_fraction: seg.locus_fraction,
+                    distance_to_recombination_center: seg.distance_to_recombination_center,
+                },
+                umis: coherent_umis.clone(),
+            },
+            margin: best_score.saturating_sub(second_score),
         })
     }
 
@@ -1047,6 +1345,7 @@ impl<'a> PosteriorAnalyzer<'a> {
                     umi: raw.umi.clone(),
                     read_name: raw.read_name.clone(),
                     sequence: raw.sequence.clone(),
+                    qualities: raw.qualities.clone(),
                     bam_is_reverse: raw.is_reverse,
                     is_supplementary: raw.is_supplementary,
                     supports_v,
@@ -1311,6 +1610,281 @@ impl<'a> PosteriorAnalyzer<'a> {
                     // index wins exact ties independent of Rayon scheduling.
                     .then_with(|| b.support.segment_index.cmp(&a.support.segment_index))
             })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DHypothesis {
+    selected: SelectedSegment,
+    margin: i32,
+}
+
+/// Align a D reference only inside an already-coherent V/J junction and project
+/// the hit back onto the oriented full molecule. This is the critical difference
+/// from a whole-read D search: N/P sequence and flanking V/J cannot attract the D
+/// alignment outside the biologically admissible interval.
+fn bounded_d_alignment(
+    forward: &[u8],
+    reverse: &[u8],
+    v: OrientedLocalAlignment,
+    j: OrientedLocalAlignment,
+    d_ref: &[u8],
+) -> Option<OrientedLocalAlignment> {
+    if v.reverse_complement != j.reverse_complement
+        || v.alignment.query_end > j.alignment.query_start
+    {
+        return None;
+    }
+    let oriented = if v.reverse_complement { reverse } else { forward };
+    let start = v.alignment.query_end;
+    let end = j.alignment.query_start;
+    if start >= end || end > oriented.len() || d_ref.is_empty() {
+        return None;
+    }
+    let mut hit = local_alignment(&oriented[start..end], d_ref);
+    if hit.score <= 0 {
+        return None;
+    }
+    hit.query_start += start;
+    hit.query_end += start;
+    Some(OrientedLocalAlignment {
+        alignment: hit,
+        reverse_complement: v.reverse_complement,
+    })
+}
+
+const CONSENSUS_MIN_BASE_QUAL: u8 = 20;
+const CONSENSUS_MIN_OVERLAP: usize = 12;
+
+#[derive(Debug, Clone, Copy)]
+struct OverlapProjection {
+    reverse_complement: bool,
+    target_start: usize,
+    read_start: usize,
+    overlap: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct UmiBaseCall {
+    base: u8,
+    qual: u8,
+    conflicted: bool,
+}
+
+fn refine_junction_observed_sequences(
+    measurement: &mut JunctionMeasurement,
+    reads: &[RearrangementSupportingRead],
+) {
+    repair_unresolved_bases(&mut measurement.observed_sequence, reads, |_| true);
+    repair_unresolved_bases(&mut measurement.observed_v, reads, |read| read.supports_v);
+    if !measurement.observed_d.is_empty() {
+        repair_unresolved_bases(&mut measurement.observed_d, reads, |read| read.supports_d);
+    }
+    repair_unresolved_bases(&mut measurement.observed_j, reads, |read| read.supports_j);
+}
+
+/// Resolve only bases that are genuinely unresolved in the selected observed
+/// molecule. Germline sequence is deliberately absent from this function: a base
+/// can leave `N` only through independent sequencing evidence.
+///
+/// Reads are first collapsed within each UMI at every target position. One UMI
+/// therefore contributes at most one vote, regardless of PCR/read multiplicity.
+/// The highest-quality observation wins within a UMI; equal-quality conflicts
+/// invalidate that UMI at that position. Across UMIs, a unique winning nucleotide
+/// is accepted when its quality-weighted support is at least twice the runner-up.
+fn repair_unresolved_bases<F>(
+    target: &mut [u8],
+    reads: &[RearrangementSupportingRead],
+    keep_read: F,
+) where
+    F: Fn(&RearrangementSupportingRead) -> bool,
+{
+    let unresolved: Vec<usize> = target
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, base)| (!is_acgt(*base)).then_some(idx))
+        .collect();
+    if unresolved.is_empty() || target.is_empty() {
+        return;
+    }
+
+    let mut by_position: HashMap<usize, HashMap<&str, UmiBaseCall>> = HashMap::new();
+    for read in reads.iter().filter(|read| keep_read(read)) {
+        if read.sequence.len() != read.qualities.len() || read.sequence.is_empty() {
+            continue;
+        }
+        let min_overlap = CONSENSUS_MIN_OVERLAP.min(target.len()).min(read.sequence.len());
+        if min_overlap == 0 {
+            continue;
+        }
+        let Some(projection) = best_overlap_projection(target, &read.sequence, min_overlap) else {
+            continue;
+        };
+        let oriented_sequence;
+        let oriented_qualities;
+        let (sequence, qualities): (&[u8], &[u8]) = if projection.reverse_complement {
+            oriented_sequence = crate::sequence::reverse_complement(&read.sequence);
+            oriented_qualities = read.qualities.iter().rev().copied().collect::<Vec<_>>();
+            (&oriented_sequence, &oriented_qualities)
+        } else {
+            (&read.sequence, &read.qualities)
+        };
+        let target_end = projection.target_start + projection.overlap;
+        for &target_pos in unresolved
+            .iter()
+            .filter(|&&pos| pos >= projection.target_start && pos < target_end)
+        {
+            let read_pos = projection.read_start + (target_pos - projection.target_start);
+            let base = sequence[read_pos].to_ascii_uppercase();
+            let qual = qualities[read_pos];
+            if !is_acgt(base) || qual < CONSENSUS_MIN_BASE_QUAL {
+                continue;
+            }
+            let call = by_position
+                .entry(target_pos)
+                .or_default()
+                .entry(read.umi.as_str())
+                .or_default();
+            if qual > call.qual {
+                call.base = base;
+                call.qual = qual;
+                call.conflicted = false;
+            } else if qual == call.qual && call.base != 0 && call.base != base {
+                call.conflicted = true;
+            }
+        }
+    }
+
+    for pos in unresolved {
+        let Some(umis) = by_position.get(&pos) else {
+            continue;
+        };
+        let mut support = [0u32; 4];
+        for call in umis.values() {
+            if call.conflicted || call.qual < CONSENSUS_MIN_BASE_QUAL {
+                continue;
+            }
+            if let Some(idx) = base_index(call.base) {
+                // Quality-weighting rewards a well-supported high-quality call,
+                // while the UMI collapse above prevents PCR duplication from
+                // manufacturing support.
+                support[idx] = support[idx].saturating_add(u32::from(call.qual));
+            }
+        }
+        let mut ranked: Vec<(u32, usize)> = support
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, score)| (score, idx))
+            .collect();
+        ranked.sort_unstable_by(|a, b| b.cmp(a));
+        let (best, best_idx) = ranked[0];
+        let second = ranked[1].0;
+        if best >= u32::from(CONSENSUS_MIN_BASE_QUAL)
+            && (second == 0 || best >= second.saturating_mul(2))
+        {
+            target[pos] = b"ACGT"[best_idx];
+        }
+    }
+}
+
+fn best_overlap_projection(
+    target: &[u8],
+    read: &[u8],
+    min_overlap: usize,
+) -> Option<OverlapProjection> {
+    let reverse = crate::sequence::reverse_complement(read);
+    let forward = best_oriented_overlap_projection(target, read, min_overlap, false);
+    let reverse = best_oriented_overlap_projection(target, &reverse, min_overlap, true);
+    match (forward, reverse) {
+        (Some(a), Some(b)) => Some(if overlap_projection_better(a, b) { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn best_oriented_overlap_projection(
+    target: &[u8],
+    read: &[u8],
+    min_overlap: usize,
+    reverse_complement: bool,
+) -> Option<OverlapProjection> {
+    if target.is_empty() || read.is_empty() {
+        return None;
+    }
+    let min_overlap = min_overlap.min(target.len()).min(read.len());
+    if min_overlap == 0 {
+        return None;
+    }
+    let min_offset = -(read.len() as isize) + min_overlap as isize;
+    let max_offset = target.len() as isize - min_overlap as isize;
+    let mut best: Option<(usize, usize, OverlapProjection)> = None;
+    for offset in min_offset..=max_offset {
+        let target_start = offset.max(0) as usize;
+        let read_start = (-offset).max(0) as usize;
+        let overlap = (target.len() - target_start).min(read.len() - read_start);
+        if overlap < min_overlap {
+            continue;
+        }
+        let mut informative = 0usize;
+        let mut mismatches = 0usize;
+        for i in 0..overlap {
+            let a = target[target_start + i].to_ascii_uppercase();
+            let b = read[read_start + i].to_ascii_uppercase();
+            if !is_acgt(a) || !is_acgt(b) {
+                continue;
+            }
+            informative += 1;
+            if a != b {
+                mismatches += 1;
+            }
+        }
+        if informative < min_overlap.saturating_sub(2) {
+            continue;
+        }
+        if mismatches > (informative / 20).max(1) {
+            continue;
+        }
+        let projection = OverlapProjection {
+            reverse_complement,
+            target_start,
+            read_start,
+            overlap,
+        };
+        let replace = best.as_ref().map_or(true, |(old_overlap, old_mismatches, old)| {
+            overlap > *old_overlap
+                || (overlap == *old_overlap
+                    && (mismatches < *old_mismatches
+                        || (mismatches == *old_mismatches
+                            && overlap_projection_better(projection, *old))))
+        });
+        if replace {
+            best = Some((overlap, mismatches, projection));
+        }
+    }
+    best.map(|(_, _, projection)| projection)
+}
+
+fn overlap_projection_better(a: OverlapProjection, b: OverlapProjection) -> bool {
+    a.overlap > b.overlap
+        || (a.overlap == b.overlap
+            && (!a.reverse_complement && b.reverse_complement
+                || (a.reverse_complement == b.reverse_complement
+                    && (a.target_start, a.read_start) < (b.target_start, b.read_start))))
+}
+
+fn is_acgt(base: u8) -> bool {
+    matches!(base.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T')
+}
+
+fn base_index(base: u8) -> Option<usize> {
+    match base.to_ascii_uppercase() {
+        b'A' => Some(0),
+        b'C' => Some(1),
+        b'G' => Some(2),
+        b'T' => Some(3),
+        _ => None,
     }
 }
 
@@ -1579,10 +2153,6 @@ fn umi_intersection(a: &HashSet<String>, b: &HashSet<String>) -> HashSet<String>
     }
 }
 
-fn locus_signal(p: &SterileProfile) -> f64 {
-    let umi = (p.total_unique_umis as f64 / 4.0).min(1.0);
-    (0.50 * umi + 0.35 * p.breadth + 0.15 * p.distal_fraction).clamp(0.0, 1.0)
-}
 fn support_id(support: Option<&GermlineSegmentSupport>) -> &str {
     support.map_or("?", |support| support.id.as_str())
 }
@@ -1676,6 +2246,7 @@ mod tests {
             umi: "umi".to_string(),
             read_name: "read".to_string(),
             sequence: b"AACCGGTTAAAA".to_vec(),
+            qualities: vec![30; 12],
             chr: None,
             ref_start: None,
             ref_end: None,
@@ -1694,7 +2265,7 @@ mod tests {
         assert!(seed_scores.contains_key(&0));
         assert!(seed_scores.contains_key(&1));
 
-        let (best, _) = analyzer.best_read_matches(&read.sequence, &reverse, &ranked);
+        let (best, _, _, _, _) = analyzer.best_read_matches(&read.sequence, &reverse, &ranked);
         assert_eq!(best[&SegmentKind::V].segment_index, 0);
     }
     #[test]
@@ -1705,6 +2276,7 @@ mod tests {
                 umi: "umi".to_string(),
                 read_name: name.to_string(),
                 sequence: sequence.to_vec(),
+                qualities: vec![30; sequence.len()],
                 chr: None,
                 ref_start: None,
                 ref_end: None,
@@ -1734,6 +2306,114 @@ mod tests {
         let merged = merge_sequences_any_orientation(a, &b, 12).expect("compatible overlap");
         assert!(merged.sequence.len() > a.len());
         assert!(merged.overlap >= 12);
+    }
+
+    #[test]
+    fn unresolved_base_is_repaired_from_quality_weighted_umi_evidence() {
+        fn support(umi: &str, name: &str, sequence: &[u8], qualities: &[u8]) -> RearrangementSupportingRead {
+            RearrangementSupportingRead {
+                umi: umi.to_string(),
+                read_name: name.to_string(),
+                sequence: sequence.to_vec(),
+                qualities: qualities.to_vec(),
+                bam_is_reverse: false,
+                is_supplementary: false,
+                supports_v: true,
+                supports_j: true,
+                supports_d: false,
+                supports_c: false,
+                v_alignment: None,
+                j_alignment: None,
+                d_alignment: None,
+                c_alignment: None,
+            }
+        }
+
+        let mut target = b"AACCGGNTTAACCGG".to_vec();
+        let q30 = vec![30; target.len()];
+        let q35 = vec![35; target.len()];
+        let q40 = vec![40; target.len()];
+        let reads = vec![
+            // Two PCR observations from one UMI still contribute one molecule vote.
+            support("u1", "r1", b"AACCGGATTAACCGG", &q30),
+            support("u1", "r2", b"AACCGGATTAACCGG", &q35),
+            support("u2", "r3", b"AACCGGATTAACCGG", &q40),
+        ];
+        repair_unresolved_bases(&mut target, &reads, |_| true);
+        assert_eq!(target, b"AACCGGATTAACCGG");
+    }
+
+    #[test]
+    fn conflicting_umi_evidence_keeps_base_unresolved() {
+        fn support(umi: &str, sequence: &[u8]) -> RearrangementSupportingRead {
+            RearrangementSupportingRead {
+                umi: umi.to_string(),
+                read_name: umi.to_string(),
+                sequence: sequence.to_vec(),
+                qualities: vec![35; sequence.len()],
+                bam_is_reverse: false,
+                is_supplementary: false,
+                supports_v: true,
+                supports_j: true,
+                supports_d: false,
+                supports_c: false,
+                v_alignment: None,
+                j_alignment: None,
+                d_alignment: None,
+                c_alignment: None,
+            }
+        }
+
+        let mut target = b"AACCGGNTTAACCGG".to_vec();
+        let reads = vec![
+            support("u1", b"AACCGGATTAACCGG"),
+            support("u2", b"AACCGGGTTAACCGG"),
+        ];
+        repair_unresolved_bases(&mut target, &reads, |_| true);
+        assert_eq!(target, b"AACCGGNTTAACCGG");
+    }
+
+    #[test]
+    fn low_quality_base_does_not_repair_unresolved_position() {
+        let sequence = b"AACCGGATTAACCGG";
+        let mut qualities = vec![35; sequence.len()];
+        qualities[6] = CONSENSUS_MIN_BASE_QUAL - 1;
+        let read = RearrangementSupportingRead {
+            umi: "u1".to_string(),
+            read_name: "r1".to_string(),
+            sequence: sequence.to_vec(),
+            qualities,
+            bam_is_reverse: false,
+            is_supplementary: false,
+            supports_v: true,
+            supports_j: true,
+            supports_d: false,
+            supports_c: false,
+            v_alignment: None,
+            j_alignment: None,
+            d_alignment: None,
+            c_alignment: None,
+        };
+        let mut target = b"AACCGGNTTAACCGG".to_vec();
+        repair_unresolved_bases(&mut target, &[read], |_| true);
+        assert_eq!(target, b"AACCGGNTTAACCGG");
+    }
+
+    #[test]
+    fn d_alignment_is_bounded_to_the_established_vj_junction() {
+        let observed = b"AAAACCCCACGGGGTTTTAAAA";
+        let reverse = crate::sequence::reverse_complement(observed);
+        let v_ref = b"AAAACCCC";
+        let d_ref = b"GGGG";
+        let j_ref = b"TTTTAAAA";
+        let v = best_oriented_local_alignment_with_reverse(observed, &reverse, v_ref);
+        let j = best_oriented_local_alignment_with_reverse(observed, &reverse, j_ref);
+        let d = bounded_d_alignment(observed, &reverse, v, j, d_ref).expect("bounded D hit");
+        assert!(!d.reverse_complement);
+        assert!(d.alignment.query_start >= v.alignment.query_end);
+        assert!(d.alignment.query_end <= j.alignment.query_start);
+        assert_eq!(d.alignment.reference_end - d.alignment.reference_start, 4);
+        assert_eq!(d.alignment.score, 8);
     }
 
 }

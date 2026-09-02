@@ -991,6 +991,9 @@ dependencies = [
 [[package]]
 name = "int-to-str"
 version = "0.2.3"
+dependencies = [
+ "clap",
+]
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -1127,6 +1130,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "lumrik-status"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "lzma-sys"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1205,6 +1215,7 @@ dependencies = [
  "clap",
  "flate2",
  "gtf_splice_index",
+ "lumrik-status",
  "mapping_info",
  "rayon",
  "rust-htslib",
@@ -1746,8 +1757,10 @@ name = "sc-vdj"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "clap",
  "flate2",
  "gtf_splice_index",
+ "lumrik-status",
  "mapping_info",
  "rayon",
  "rust-htslib",

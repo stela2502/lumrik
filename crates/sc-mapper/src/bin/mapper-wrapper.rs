@@ -7,6 +7,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
+#[command(
+    author,
+    version,
+    about = "Stream FASTQ reads through an external mapper and write mapper BAM output"
+)]
 struct Cli {
     #[command(flatten)]
     mapper: StreamingMapperCli,

@@ -1,2 +1,2 @@
 elapsed_s	reads_processed	reads_per_second	average_reads_per_second	steady_reads_per_second	no_cell_umi	no_cell_umi_pct	duplicates	duplicate_pct	unique_genomic	unique_feature	unique_yield_pct	process_rss_mib	process_peak_rss_mib	system_available_mib
-0.018	4	219.278	219.276	0.000	0	0.000	0	0.000	2	2	100.000	9.371	9.371	24860.473
+0.016	4	256.151	256.148	0.000	0	0.000	0	0.000	2	2	100.000	9.734	9.734	23446.289

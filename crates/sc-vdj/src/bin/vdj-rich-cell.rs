@@ -1,12 +1,11 @@
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use rust_htslib::bam::record::Aux;
 use rust_htslib::bam::{self, Read};
 use std::cmp::Ordering;
-use std::env;
-use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read as IoRead, Write};
 use std::path::{Path, PathBuf};
@@ -18,19 +17,58 @@ struct CellScore {
     total_molecules: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Parser)]
+#[command(
+    author,
+    version,
+    name = "vdj-rich-cell",
+    about = "Build a real one-cell Nelrune V(D)J integration fixture",
+    after_help = "The selected cell is written as a one-cell exonic MEX plus a BAM containing
+only that cell. This is intended for reproducible integration/regression fixtures."
+)]
 struct Cli {
+    /// Nelrune exonic MEX directory.
+    #[arg(long, value_name = "MEX_DIR")]
     exonic: PathBuf,
+
+    /// Retained Nelrune mapper BAM.
+    #[arg(long, value_name = "BAM")]
     bam: PathBuf,
+
+    /// Output fixture directory.
+    #[arg(long, value_name = "DIR")]
     out: PathBuf,
+
+    /// Use this matrix cell instead of the richest IG/TR cell.
+    #[arg(long, value_name = "BARCODE")]
     cell: Option<String>,
+
+    /// Show the top N receptor-rich cells.
+    #[arg(long, default_value_t = 20, value_name = "N")]
     top: usize,
+
+    /// Show the top N receptor genes for the selected cell.
+    #[arg(long, default_value_t = 40, value_name = "N")]
     genes: usize,
+
+    /// Use the first N matrix-barcode bases for exact BAM CB matching.
+    #[arg(long, value_name = "N")]
     cell_barcode_len: Option<usize>,
 }
 
+impl Cli {
+    fn validate(self) -> Result<Self> {
+        if let Some(len) = self.cell_barcode_len {
+            if !(1..=32).contains(&len) {
+                bail!("--cell-barcode-len must be between 1 and 32");
+            }
+        }
+        Ok(self)
+    }
+}
+
 fn main() -> Result<()> {
-    let cli = parse_cli(env::args_os().skip(1))?;
+    let cli = Cli::parse().validate()?;
     let barcodes_path = find_file(&cli.exonic, &["barcodes.tsv.gz", "barcodes.tsv"])?;
     let features_path = find_file(
         &cli.exonic,
@@ -139,69 +177,6 @@ fn main() -> Result<()> {
         exonic_out.display()
     );
     Ok(())
-}
-
-fn parse_cli<I: IntoIterator<Item = OsString>>(args: I) -> Result<Cli> {
-    let mut exonic = None;
-    let mut bam = None;
-    let mut out = None;
-    let mut cell = None;
-    let mut top = 20;
-    let mut genes = 40;
-    let mut cell_barcode_len = None;
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.to_string_lossy().as_ref() {
-            "-h" | "--help" => {
-                print_help();
-                std::process::exit(0)
-            }
-            "--exonic" => exonic = Some(PathBuf::from(next_value(&mut args, "--exonic")?)),
-            "--bam" => bam = Some(PathBuf::from(next_value(&mut args, "--bam")?)),
-            "--out" => out = Some(PathBuf::from(next_value(&mut args, "--out")?)),
-            "--cell" => {
-                cell = Some(
-                    next_value(&mut args, "--cell")?
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-            }
-            "--top" => top = parse_usize(next_value(&mut args, "--top")?, "--top")?,
-            "--genes" => genes = parse_usize(next_value(&mut args, "--genes")?, "--genes")?,
-            "--cell-barcode-len" => {
-                let len = parse_usize(
-                    next_value(&mut args, "--cell-barcode-len")?,
-                    "--cell-barcode-len",
-                )?;
-                if !(1..=32).contains(&len) {
-                    bail!("--cell-barcode-len must be between 1 and 32");
-                }
-                cell_barcode_len = Some(len);
-            }
-            other => bail!("unknown argument {other}\n\nRun vdj-rich-cell --help for usage."),
-        }
-    }
-    Ok(Cli {
-        exonic: exonic.context("missing --exonic <DIR>")?,
-        bam: bam.context("missing --bam <BAM>")?,
-        out: out.context("missing --out <DIR>")?,
-        cell,
-        top,
-        genes,
-        cell_barcode_len,
-    })
-}
-fn next_value<I: Iterator<Item = OsString>>(args: &mut I, flag: &str) -> Result<OsString> {
-    args.next()
-        .with_context(|| format!("{flag} requires a value"))
-}
-fn parse_usize(v: OsString, flag: &str) -> Result<usize> {
-    v.to_string_lossy()
-        .parse()
-        .with_context(|| format!("invalid value for {flag}"))
-}
-fn print_help() {
-    println!("vdj-rich-cell - build a real one-cell Nelrune VDJ integration fixture\n\nUsage:\n  vdj-rich-cell --exonic <MEX_DIR> --bam <BAM> --out <DIR> [options]\n\nRequired:\n  --exonic <DIR>   Nelrune exonic MEX\n  --bam <FILE>     retained Nelrune mapper BAM\n  --out <DIR>      output fixture directory\n\nOptions:\n  --cell <BARCODE> use this matrix cell instead of richest IG/TR cell\n  --cell-barcode-len <N> use first N matrix-barcode bases for exact BAM CB matching\n  --top <N>        show top N cells [20]\n  --genes <N>      show top N receptor genes [40]\n  -h, --help");
 }
 
 fn find_file(dir: &Path, names: &[&str]) -> Result<PathBuf> {

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 #[command(
     author,
     version,
+    name = "fastq-primer-restore",
     about = "Restore single-cell primer sequence to normalized FASTQ reads",
     long_about = "\
 Restore primer-derived cell/UMI sequence to normalized FASTQ reads.
@@ -75,8 +76,3 @@ pub struct Cli {
     pub no_gzip: bool,
 }
 
-impl Cli {
-    pub fn parse_args() -> Self {
-        Self::parse()
-    }
-}

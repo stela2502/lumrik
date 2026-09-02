@@ -16,6 +16,7 @@ categories = ["algorithms"]
 authors = ["Stefan Lang"]
 
 [dependencies]
+clap = { workspace = true }
 
 
 [features]

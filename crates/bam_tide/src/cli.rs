@@ -12,6 +12,12 @@ pub enum AnalysisType {
 
 /// Shared CLI options for coverage exporters (bedGraph / bigWig)
 #[derive(Parser, Debug, Clone)]
+#[command(
+    author,
+    version,
+    name = "bam-coverage",
+    about = "Calculate BAM coverage and write bedGraph or BigWig output"
+)]
 pub struct CoverageCli {
     /// Input BAM file (no need to sort or index)
     #[arg(short = 'b', long)]

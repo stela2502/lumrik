@@ -10,6 +10,7 @@ members = [
     "crates/snp-index",
     "crates/scdata",
     "crates/mapping_info",
+    "crates/lumrik-status",
     "crates/read-tag-table",
     "crates/int_to_str", 
     "crates/nelrune", 
@@ -23,4 +24,5 @@ authors = ["Stefan Lang"]
 
 
 [workspace.dependencies]
+clap = { version = "4.6.6", features = ["derive"] }
 rust-htslib = { path = "crates/rust-htslib" }

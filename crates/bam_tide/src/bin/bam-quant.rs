@@ -35,8 +35,15 @@ use snp_index::Genome;
 
 const CHUNK: usize = 2_000_000;
 
+#[derive(Debug, Parser)]
+#[command(author, version, about = "Quantify 10x BAM against a splice index into scdata")]
+struct Cli {
+    #[command(flatten)]
+    quant: QuantCli,
+}
+
 fn main() -> Result<()> {
-    let args = QuantCli::parse();
+    let args = Cli::parse().quant;
     run(args)
 }
 

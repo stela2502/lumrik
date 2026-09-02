@@ -15,7 +15,7 @@ authors = ["Stefan Lang"]
 
 [dependencies]
 flate2 = "1.1.9"
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
