@@ -1,7 +1,7 @@
 # Runtime image for Norn/Lumrik.
 # STAR comes from the pinned BioContainers image; Lumrik binaries are static
 # x86_64-musl release binaries built before this image is assembled.
-FROM quay.io/biocontainers/star:2.7.11b--h5ca1c30_0
+FROM quay.io/biocontainers/star:2.7.11b--h5ca1c30_8
 
 LABEL org.opencontainers.image.title="Lumrik + STAR runtime"
 LABEL org.opencontainers.image.description="Runtime image for Lumrik/Norn single-cell processing"
