@@ -37,6 +37,7 @@ jobs:
           cargo build --locked --release --target "$TARGET" \
             --bin nelrune \
             --bin nelrune-vdj \
+            --bin nelrune-te \
             --bin vdj-index \
             --bin gtf-splice-index \
             --bin lumrik-guides

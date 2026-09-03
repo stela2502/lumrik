@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::thread::{self, JoinHandle};
@@ -22,6 +22,21 @@ use crate::process::{
 const DEFAULT_CLUSTER_CHANNEL_SIZE: usize = 10_000;
 const DEFAULT_CLUSTER_MAX_GAP: u64 = 100_000;
 const DEFAULT_CLUSTER_FLUSH_EVERY: u64 = 1_000;
+
+fn mapper_tempdir() -> Result<TempDir> {
+    match std::env::var_os("LUMRIK_TMPDIR") {
+        Some(root) => {
+            let root = PathBuf::from(root);
+            fs::create_dir_all(&root).with_context(|| {
+                format!("failed to create Lumrik temporary directory `{}`", root.display())
+            })?;
+            tempfile::tempdir_in(&root).with_context(|| {
+                format!("failed to create temporary directory in `{}`", root.display())
+            })
+        }
+        None => tempfile::tempdir().context("failed to create temporary directory"),
+    }
+}
 
 pub enum FastqInput {
     SingleStdin(ChildStdin),
@@ -136,7 +151,7 @@ impl MapperProcess {
          * Keep the FIFO directory alive inside MapperProcess.
          */
         let input_tmpdir =
-            tempfile::tempdir().context("failed to create temporary FASTQ FIFO directory")?;
+            mapper_tempdir().context("failed to create temporary FASTQ FIFO directory")?;
 
         /*
          * Keep the mapper's private working directory alive too.
@@ -145,7 +160,7 @@ impl MapperProcess {
          * other runtime files relative to its working directory.
          */
         let work_tmpdir =
-            tempfile::tempdir().context("failed to create temporary mapper working directory")?;
+            mapper_tempdir().context("failed to create temporary mapper working directory")?;
 
         let r1_path = input_tmpdir.path().join("r1.fq");
 
@@ -223,11 +238,11 @@ impl MapperProcess {
         base_args: &[String],
         header: Option<Header>,
     ) -> Result<Self> {
-        let input_tmpdir = tempfile::tempdir()
+        let input_tmpdir = mapper_tempdir()
             .context("failed to create temporary paired FASTQ FIFO directory")?;
 
         let work_tmpdir =
-            tempfile::tempdir().context("failed to create temporary mapper working directory")?;
+            mapper_tempdir().context("failed to create temporary mapper working directory")?;
 
         let r1_path = input_tmpdir.path().join("r1.fq");
 
