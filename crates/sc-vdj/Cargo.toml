@@ -1,6 +1,6 @@
 [package]
 name = "sc-vdj"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Posterior single-cell V(D)J reconstruction and antigen-receptor locus-state analysis for lumrik/nelrune"

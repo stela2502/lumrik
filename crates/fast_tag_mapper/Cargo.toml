@@ -1,6 +1,6 @@
 [package]
 name = "fast_tag_mapper"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Fast BD/FASTA feature-id mapper for bam_tide"
 

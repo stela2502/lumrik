@@ -63,7 +63,42 @@ impl TeCollector {
             self.report.report("te.original.overlapping_te_features.multiple");
             return false;
         }
-        let feature = candidates[0];
+        self.insert_anchor(cell_id, umi_id, candidates[0])
+    }
+
+    /// Consume the complete candidate set already present in the source BAM.
+    /// A source-BAM multimapper that collapses to one spatial TE feature is an
+    /// anchor at the spatial resolution used by this index; otherwise it enters
+    /// the same pending multimapper pool as permissively remapped reads.
+    pub fn add_original_candidates(
+        &mut self,
+        cell_id: u64,
+        umi_id: u64,
+        candidates: &[u64],
+    ) -> bool {
+        if candidates.is_empty() {
+            return false;
+        }
+
+        let mut candidates = candidates.to_vec();
+        candidates.sort_unstable();
+        candidates.dedup();
+        self.report.report("te.original.overlaps_te");
+
+        if candidates.len() == 1 {
+            return self.insert_anchor(cell_id, umi_id, candidates[0]);
+        }
+
+        self.report
+            .report("te.original.overlapping_te_features.multiple");
+        self.pending_multi.insert(MultiMolecule {
+            cell_id,
+            umi_id,
+            candidates,
+        })
+    }
+
+    fn insert_anchor(&mut self, cell_id: u64, umi_id: u64, feature: u64) -> bool {
         let inserted = self.anchor.try_insert_value(
             &cell_id,
             GeneUmiHash(feature, umi_id),

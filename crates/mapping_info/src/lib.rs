@@ -92,8 +92,18 @@ impl fmt::Display for MappingInfo {
         })?;
         writeln!(f)?;
 
-        // Core counters
-        if self.total > 0 {
+        // Core counters. Only print this legacy summary when at least one
+        // of its counters is actually populated. Some tools use MappingInfo
+        // purely for named/read-type counters and would otherwise get a
+        // misleading block of zeros just because `total` is known.
+        let has_core_counts = self.cellular_reads > 0
+            || self.ok_reads > 0
+            || self.no_sample > 0
+            || self.no_data > 0
+            || self.multimapper > 0
+            || self.pcr_duplicates > 0
+            || unknown > 0;
+        if self.total > 0 && has_core_counts {
             writeln!(f, "Counts")?;
             writeln!(
                 f,
@@ -775,17 +785,24 @@ mod tests {
         assert!(!rendered.contains("  bin  2: "));
     }
     #[test]
-    fn counts_section_is_gated_by_total_only() {
+    fn counts_section_requires_total_and_meaningful_core_counts() {
         let mut m0 = base(0);
-        // even if other counters are non-zero, total==0 => Counts should not appear
+        // Even if legacy counters are populated, total==0 means no Counts block.
         m0.ok_reads = 10;
         m0.cellular_reads = 10;
         let s0 = format!("{m0}");
         assert!(!s0.contains("\nCounts\n"));
 
+        // A known total alone is not enough: tools that only populate reads_log
+        // or named counters must not emit a misleading all-zero legacy summary.
         let m1 = base(1);
         let s1 = format!("{m1}");
-        assert!(s1.contains("\nCounts\n"));
+        assert!(!s1.contains("\nCounts\n"));
+
+        let mut m2 = base(1);
+        m2.ok_reads = 1;
+        let s2 = format!("{m2}");
+        assert!(s2.contains("\nCounts\n"));
     }
 
     #[test]

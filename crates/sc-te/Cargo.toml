@@ -1,6 +1,6 @@
 [package]
 name = "sc-te"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "AGPL-3.0-or-later"
 authors = ["Stefan Lang"]
@@ -17,3 +17,4 @@ read-tag-table = { path = "../read-tag-table" }
 rust-htslib = { path = "../rust-htslib" }
 sc-mapper = { path = "../sc-mapper" }
 scdata = { path = "../scdata" }
+flate2 = "1"

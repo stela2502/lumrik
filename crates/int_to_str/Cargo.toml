@@ -1,6 +1,6 @@
 [package]
 name = "int-to-str"
-version = "0.2.3"
+version.workspace = true
 edition = "2021"
 
 description = "Fast integer to string conversion utilities optimized for high-throughput data processing."

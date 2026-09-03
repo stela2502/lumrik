@@ -366,8 +366,14 @@ fn print_diagnostic_report(
     let tagged = report.get_issue_count("10x.records.with_cb_ub");
     let cells = report.get_issue_count("10x.cells.distinct");
     let molecules = report.get_issue_count("10x.cell_umi_pairs.distinct");
+    let mapped = report.get_issue_count("bam.records.mapped");
+    let unmapped = report.get_issue_count("bam.records.unmapped");
+    let tagged_unmapped = report.get_issue_count("10x.records.unmapped_with_cb_ub");
+    let mapped_tagged = tagged.saturating_sub(tagged_unmapped);
     let nh1 = report.get_issue_count("bam.records.nh1");
     let nh_multi = report.get_issue_count("bam.records.nh_gt1");
+    let nh0 = report.get_issue_count("bam.records.nh0");
+    let no_nh = report.get_issue_count("bam.records.no_nh");
     let no_overlap = report.get_issue_count("te.records.no_overlap");
     let one_feature = report.get_issue_count("te.records.one_feature");
     let multiple_features = report.get_issue_count("te.records.multiple_features");
@@ -390,15 +396,23 @@ fn print_diagnostic_report(
 
     writeln!(writer, "Alignment structure")?;
     writeln!(writer, "-------------------")?;
+    write_count_line(writer, "Mapped BAM records:", mapped, scanned)?;
+    write_count_line(writer, "Unmapped BAM records:", unmapped, scanned)?;
     write_count_line(writer, "Unique alignments (NH=1):", nh1, scanned)?;
     write_count_line(writer, "Multimapping alignments (NH>1):", nh_multi, scanned)?;
+    write_count_line(writer, "NH=0 records:", nh0, scanned)?;
+    write_count_line(writer, "Records without NH tag:", no_nh, scanned)?;
 
     writeln!(writer, "\nTE overlap")?;
     writeln!(writer, "----------")?;
-    writeln!(writer, "Percentages in this section use records carrying both CB and UB as denominator.")?;
-    write_count_line(writer, "No spatial TE feature overlap:", no_overlap, tagged)?;
-    write_count_line(writer, "Exactly one spatial TE feature:", one_feature, tagged)?;
-    write_count_line(writer, "Multiple spatial TE features:", multiple_features, tagged)?;
+    write_count_line(writer, "Records with cell barcode + UMI:", tagged, scanned)?;
+    write_count_line(writer, "Unmapped records with CB + UB:", tagged_unmapped, tagged)?;
+    write_count_line(writer, "Mapped records evaluated for TE overlap:", mapped_tagged, tagged)?;
+    writeln!(writer)?;
+    writeln!(writer, "Among mapped records carrying both CB and UB:")?;
+    write_count_line(writer, "No spatial TE feature overlap:", no_overlap, mapped_tagged)?;
+    write_count_line(writer, "Exactly one spatial TE feature:", one_feature, mapped_tagged)?;
+    write_count_line(writer, "Multiple spatial TE features:", multiple_features, mapped_tagged)?;
     writeln!(writer)?;
     writeln!(writer, "A spatial TE feature is defined as:")?;
     writeln!(writer, "    chromosome + {} bp genomic bin + TE gene/subfamily", index.splice_index().bin_width)?;

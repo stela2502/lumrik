@@ -1,6 +1,6 @@
 [package]
 name = "bam_tide"
-version = "1.3.2"
+version.workspace = true
 edition = "2024"
 
 [dependencies]

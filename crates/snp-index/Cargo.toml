@@ -1,6 +1,6 @@
 [package]
 name = "snp-index"
-version = "0.1.3"
+version.workspace = true
 edition = "2024"
 
 description = "Fast SNP indexing and read matching with scdata integration (cell × SNP sparse matrices)"

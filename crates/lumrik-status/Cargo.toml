@@ -1,6 +1,6 @@
 [package]
 name = "lumrik-status"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "AGPL-3.0-or-later"
 description = "Reusable live status server and dashboard for Lumrik command-line tools"

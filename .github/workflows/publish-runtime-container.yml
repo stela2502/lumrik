@@ -32,22 +32,48 @@ jobs:
       - name: Install Rust target
         run: rustup target add "$TARGET"
 
-      - name: Build Lumrik runtime binaries
+      - name: Build all Lumrik binaries
         run: |
-          cargo build --locked --release --target "$TARGET" \
-            --bin nelrune \
-            --bin nelrune-vdj \
-            --bin nelrune-te \
-            --bin vdj-index \
-            --bin gtf-splice-index \
-            --bin lumrik-guides
+          cargo build \
+            --locked \
+            --release \
+            --workspace \
+            --bins \
+            --target "$TARGET"
 
-      - name: Check runtime binaries
+      - name: Collect and check runtime binaries
         run: |
-          for exe in nelrune nelrune-vdj vdj-index gtf-splice-index lumrik-guides; do
-            test -x "target/$TARGET/release/$exe"
-            file "target/$TARGET/release/$exe"
-          done
+          set -euo pipefail
+
+          release_dir="target/$TARGET/release"
+          runtime_dir="containers/lumrik-star/runtime-bin"
+
+          rm -rf "$runtime_dir"
+          mkdir -p "$runtime_dir"
+
+          count=0
+
+          while IFS= read -r exe; do
+            name="$(basename "$exe")"
+
+            echo "Collecting $name"
+            file "$exe"
+
+            cp "$exe" "$runtime_dir/$name"
+            count=$((count + 1))
+          done < <(
+            find "$release_dir" \
+              -maxdepth 1 \
+              -type f \
+              -executable \
+              -print | sort
+          )
+
+          test "$count" -gt 0
+
+          echo
+          echo "Collected $count Lumrik binaries:"
+          ls -lh "$runtime_dir"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
