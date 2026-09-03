@@ -57,6 +57,7 @@ fn prepare_bwa_reference() -> Result<(TempDir, PathBuf)> {
 }
 
 #[test]
+#[ignore = "requires local BWA/reference data"]
 fn bwa_maps_a_real_fastq_record() -> Result<()> {
     if !bwa_available() {
         eprintln!("bwa is not available - abort");

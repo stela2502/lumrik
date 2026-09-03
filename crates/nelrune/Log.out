@@ -1,25 +1,33 @@
 STAR version=2.7.11b
 STAR compilation time,server,dir=2024-04-14T23:10:25+00:00 <place not set in Debian package>
 ##### Command Line:
-/usr/lib/rna-star/bin/STAR-avx2 --genomeDir tests/data/star_index --readFilesIn /tmp/qname_test.fastq --outSAMtype SAM --outStd SAM
+/usr/lib/rna-star/bin/STAR-avx2 --runThreadN 2 --genomeDir /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index --outSAMtype BAM Unsorted --outStd BAM_Unsorted --outBAMcompression 0 --outSAMattributes NH HI AS nM --outReadsUnmapped None --readFilesIn /tmp/.tmpxsirBY/r1.fq
 ##### Initial USER parameters from Command Line:
-outStd                            SAM
+outStd                            BAM_Unsorted
 ###### All USER parameters from Command Line:
-genomeDir                     tests/data/star_index     ~RE-DEFINED
-readFilesIn                   /tmp/qname_test.fastq        ~RE-DEFINED
-outSAMtype                    SAM        ~RE-DEFINED
-outStd                        SAM     ~RE-DEFINED
+runThreadN                    2     ~RE-DEFINED
+genomeDir                     /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index     ~RE-DEFINED
+outSAMtype                    BAM   Unsorted        ~RE-DEFINED
+outStd                        BAM_Unsorted     ~RE-DEFINED
+outBAMcompression             0     ~RE-DEFINED
+outSAMattributes              NH   HI   AS   nM        ~RE-DEFINED
+outReadsUnmapped              None     ~RE-DEFINED
+readFilesIn                   /tmp/.tmpxsirBY/r1.fq        ~RE-DEFINED
 ##### Finished reading parameters from all sources
 
 ##### Final user re-defined parameters-----------------:
-genomeDir                         tests/data/star_index
-readFilesIn                       /tmp/qname_test.fastq   
-outStd                            SAM
-outSAMtype                        SAM   
+runThreadN                        2
+genomeDir                         /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index
+readFilesIn                       /tmp/.tmpxsirBY/r1.fq   
+outStd                            BAM_Unsorted
+outReadsUnmapped                  None
+outSAMtype                        BAM   Unsorted   
+outSAMattributes                  NH   HI   AS   nM   
+outBAMcompression                 0
 
 -------------------------------
 ##### Final effective command line:
-/usr/lib/rna-star/bin/STAR-avx2   --genomeDir tests/data/star_index   --readFilesIn /tmp/qname_test.fastq      --outStd SAM   --outSAMtype SAM   
+/usr/lib/rna-star/bin/STAR-avx2   --runThreadN 2   --genomeDir /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/star_index   --readFilesIn /tmp/.tmpxsirBY/r1.fq      --outStd BAM_Unsorted   --outReadsUnmapped None   --outSAMtype BAM   Unsorted      --outSAMattributes NH   HI   AS   nM      --outBAMcompression 0
 ----------------------------------------
 
 Number of fastq files for each mate = 1
@@ -49,7 +57,7 @@ Genome version is compatible with current STAR
 Number of real (reference) chromosomes= 1
 1	chrTiny	400	0
 --sjdbOverhang = 59 taken from the generated genome
-Started loading the genome: Tue Aug 25 13:08:43 2026
+Started loading the genome: Thu Sep  3 08:27:42 2026
 
 Genome: size given as a parameter = 262263
 SA: size given as a parameter = 4277
@@ -63,15 +71,18 @@ Loading Genome ... done! state: good=1 eof=0 fail=0 bad=0; loaded 262263 bytes
 SA file size: 4277 bytes; state: good=1 eof=0 fail=0 bad=0
 Loading SA ... done! state: good=1 eof=0 fail=0 bad=0; loaded 4277 bytes
 Loading SAindex ... done: 123 bytes
-Finished loading the genome: Tue Aug 25 13:08:43 2026
+Finished loading the genome: Thu Sep  3 08:27:42 2026
 
 Processing splice junctions database sjdbN=1,   pGe.sjdbOverhang=59 
 alignIntronMax=alignMatesGapMax=0, the max intron size will be approximately determined by (2^winBinNbits)*winAnchorDistNbins=589824
+Created thread # 1
 Thread #0 end of input stream, nextChar=-1
+Completed: thread #1
 Completed: thread #0
-Aug 25 13:08:43 ..... finished mapping
+Joined thread # 1
+Sep 03 08:27:42 ..... finished mapping
 RAM after mapping:
-VmPeak:	  160448 kB; VmSize:	  160448 kB; VmHWM:	  106292 kB; VmRSS:	  106292 kB; 
+VmPeak:	  450496 kB; VmSize:	  384828 kB; VmHWM:	  206716 kB; VmRSS:	  206716 kB; 
 RAM after freeing genome index memory:
-VmPeak:	  160448 kB; VmSize:	  160188 kB; VmHWM:	  106208 kB; VmRSS:	  106032 kB; 
+VmPeak:	  450496 kB; VmSize:	  384568 kB; VmHWM:	  206704 kB; VmRSS:	  206456 kB; 
 ALL DONE!

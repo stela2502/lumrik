@@ -114,14 +114,28 @@ impl ExternalMapper for Star {
             "--readFilesIn",
             Some(if self.launch.paired { 2 } else { 1 }),
         );
-        remove_option(&mut args, "--outSAMtype", Some(2));
+        remove_option(&mut args, "--outSAMtype", None);
         remove_option(&mut args, "--outStd", Some(1));
+
+        /*
+         * MapperProcess runs FIFO-based mappers in a private temporary
+         * working directory so concurrent STAR processes do not collide
+         * on files such as ./_STARtmp. Resolve a relative genome index
+         * against the caller's working directory before changing cwd.
+         */
+        let genome_dir = if self.launch.index.is_absolute() {
+            self.launch.index.clone()
+        } else {
+            std::env::current_dir()
+                .context("getting current directory for relative STAR genome index")?
+                .join(&self.launch.index)
+        };
 
         args.extend([
             "--runThreadN".into(),
             self.launch.threads.min(4).to_string(),
             "--genomeDir".into(),
-            self.launch.index.to_string_lossy().into_owned(),
+            genome_dir.to_string_lossy().into_owned(),
             "--outSAMtype".into(),
             "BAM".into(),
             "Unsorted".into(),

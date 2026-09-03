@@ -183,8 +183,8 @@ pub fn measure_junction(input: JunctionInput<'_>) -> Option<JunctionMeasurement>
         naive.extend_from_slice(&naive_d);
         naive.extend_from_slice(&p_d3);
         naive.extend_from_slice(&n2);
-        naive.extend_from_slice(&p_j5);
     }
+    naive.extend_from_slice(&p_j5);
     naive.extend_from_slice(&naive_j);
 
     Some(JunctionMeasurement {

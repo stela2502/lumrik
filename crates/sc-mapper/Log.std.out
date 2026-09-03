@@ -1,7 +1,7 @@
-	/usr/lib/rna-star/bin/STAR-avx2 --runThreadN 1 --outSAMtype SAM --outStd SAM --genomeDir /tmp/.tmplXrlfL/star-index --readFilesIn /tmp/.tmpOCYozW/r1.fq
+	/usr/lib/rna-star/bin/STAR-avx2 --runThreadN 2 --genomeDir /tmp/.tmpV3K4rg/star-index --outSAMtype BAM Unsorted --outStd BAM_Unsorted --outBAMcompression 0 --outSAMattributes NH HI AS nM --outReadsUnmapped None --readFilesIn /tmp/.tmpj1ZCBX/r1.fq
 	STAR version: 2.7.11b   compiled: 2024-04-14T23:10:25+00:00 <place not set in Debian package>
-Aug 21 13:28:18 ..... started STAR run
-Aug 21 13:28:18 ..... loading genome
-Aug 21 13:28:18 ..... started mapping
-Aug 21 13:28:18 ..... finished mapping
-Aug 21 13:28:18 ..... finished successfully
+Sep 03 08:27:53 ..... started STAR run
+Sep 03 08:27:53 ..... loading genome
+Sep 03 08:27:53 ..... started mapping
+Sep 03 08:27:54 ..... finished mapping
+Sep 03 08:27:54 ..... finished successfully

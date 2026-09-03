@@ -1,5 +1,5 @@
 MappingInfo
-  started: 2026-09-02 08:45:52.049755598 UTC
+  started: 2026-09-03 06:30:55.045624836 UTC
 
 Read types (n=1)
   Type                             Count           Fraction total [%]
@@ -18,7 +18,7 @@ Named timings
   bam_tide/multi_cpu/quantify_chunk: 0 h 0 min 0 sec 0 ms
   bam_tide/single_cpu/merge_quantification: 0 h 0 min 0 sec 0 ms
   nelrune/input_and_mapper:        0 h 0 min 0 sec 2 ms
-  nelrune/mapper_finish:           0 h 0 min 0 sec 133 ms
+  nelrune/mapper_finish:           0 h 0 min 0 sec 135 ms
   nelrune/quantification:          0 h 0 min 0 sec 0 ms
   nelrune/startup:                 0 h 0 min 0 sec 13 ms
   nelrune/writing:                 0 h 0 min 0 sec 0 ms
