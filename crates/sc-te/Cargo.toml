@@ -1,0 +1,19 @@
+[package]
+name = "sc-te"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+authors = ["Stefan Lang"]
+description = "Single-cell transposable-element quantification from multimapping alignments"
+
+[dependencies]
+bam_tide = { path = "../bam_tide" }
+clap = { workspace = true }
+gtf_splice_index = { path = "../gtf_splice_index" }
+anyhow = "1"
+int-to-str = { path = "../int_to_str" }
+mapping_info = { path = "../mapping_info" }
+read-tag-table = { path = "../read-tag-table" }
+rust-htslib = { path = "../rust-htslib" }
+sc-mapper = { path = "../sc-mapper" }
+scdata = { path = "../scdata" }

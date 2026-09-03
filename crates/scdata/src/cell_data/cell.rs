@@ -118,6 +118,19 @@ impl CellData {
         }
     }
 
+    /// Merge another cell by adding its already-accumulated numeric feature values.
+    ///
+    /// This is intended for disjoint real-valued evidence layers (for example
+    /// unique and fractional multimapper TE counts). It preserves f32 totals
+    /// instead of reconstructing each observation as 1.0.
+    pub fn merge_values(&mut self, other: CellData) {
+        self.seen.extend(other.seen);
+        for (feature_id, value) in other.total_reads {
+            *self.total_reads.entry(feature_id).or_insert(0.0) += value;
+        }
+        self.multimapper.extend(other.multimapper);
+    }
+
     /// Insert one unique feature/UMI observation.
     ///
     /// Returns `false` if this exact feature/UMI pair was already seen.

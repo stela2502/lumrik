@@ -1,0 +1,30 @@
+[package]
+name = "data_table"
+version = "0.22.0"
+edition = "2024"
+
+description = "A lightweight Rust data table structure supporting numeric columns and categorical factors."
+license = "MIT"
+repository = "https://github.com/stela2502/rust_data_table"
+homepage = "https://github.com/stela2502/rust_data_table"
+documentation = "https://docs.rs/stela_data_table"
+readme = "README.md"
+
+authors = ["Stefan Lang"]
+keywords = ["dataframe", "table", "statistics", "bioinformatics"]
+categories = ["data-structures", "science"]
+
+[dependencies]
+anyhow = "1.0.100"
+clap = "4.5.50"
+csv = "1.4.0"
+ndarray = "0.16.1"
+ordered-float = "5.1.0"
+rand = "0.9.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.23.0"
+
+[dev-dependencies]
+tempfile = "3"
+clap = { version = "4", features = ["derive"] }

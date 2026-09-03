@@ -247,6 +247,31 @@ impl Scdata {
         }
     }
 
+    /// Merge a disjoint numeric evidence layer while preserving accumulated f32 values.
+    ///
+    /// Unlike `merge`, this does not reconstruct observations as unit counts.
+    /// It is therefore suitable for combining independently computed real-valued
+    /// matrices such as unique and fractional multimapper evidence.
+    pub fn merge_values(&mut self, mut other: Scdata) {
+        if other.is_empty() {
+            return;
+        }
+
+        self.invalidate_export_cache();
+
+        for other_cell in other.data.iter_mut().flat_map(|map| map.values_mut()) {
+            let index = self.to_key(&other_cell.name);
+            match self.data[index].entry(other_cell.name) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().merge_values(std::mem::take(other_cell));
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(std::mem::take(other_cell));
+                }
+            }
+        }
+    }
+
     /// Insert one unique feature/UMI observation for a cell.
     ///
     /// Returns `false` if the exact feature/UMI pair already existed.

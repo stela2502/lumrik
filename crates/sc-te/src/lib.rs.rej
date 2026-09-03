@@ -1,0 +1,11 @@
+--- crates/sc-te/src/lib.rs	2026-09-03 09:51:31.653489138 +0000
++++ crates/sc-te/src/lib.rs	2026-09-03 09:52:05.184436851 +0000
+@@ -19,7 +19,7 @@
+ /// The splice index remains the genomic lookup structure. `TeIndex` only adds a
+ /// compact feature space for TE quantification:
+ ///
+-///     (chromosome, splice-index bin, TE gene) -> u64 feature id
++/// Maps `(chromosome, splice-index bin, TE gene)` to a `u64` feature ID.
+ ///
+ /// Feature ids are created lazily as overlaps are observed and are what Scdata
+ /// sees during counting.

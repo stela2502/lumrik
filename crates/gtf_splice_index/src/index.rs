@@ -677,6 +677,53 @@ impl SpliceIndex {
         ret
     }
 
+    /// Genes overlapping a genomic span, retaining the bucket in which the
+    /// overlap was observed.
+    ///
+    /// Returns unique `(bin_id, gene_id)` pairs. Bin ids are chromosome-local
+    /// indices into `chr_buckets[chr_id].bins`.
+    pub fn overlapping_genes_with_bins(
+        &self,
+        chr_id: usize,
+        start0: u32,
+        end0: u32,
+    ) -> Vec<(usize, GeneId)> {
+        if chr_id >= self.chr_buckets.len() || end0 <= start0 {
+            return Vec::new();
+        }
+
+        let chr_bins = &self.chr_buckets[chr_id];
+        if chr_bins.bins.is_empty() {
+            return Vec::new();
+        }
+
+        let first_bin = (start0 / chr_bins.bin_width) as usize;
+        if first_bin >= chr_bins.bins.len() {
+            return Vec::new();
+        }
+
+        let last_bin = ((end0.saturating_sub(1)) / chr_bins.bin_width) as usize;
+        let last_bin = last_bin.min(chr_bins.bins.len() - 1);
+        let mut hits = HashSet::<(usize, GeneId)>::new();
+
+        for bin_idx in first_bin..=last_bin {
+            let transcripts_in_bin = &chr_bins.bins[bin_idx];
+            let cutoff = Self::partition_point(transcripts_in_bin, |&tx_id| {
+                self.tx_span_start[tx_id] < end0
+            });
+
+            for &tx_id in &transcripts_in_bin[..cutoff] {
+                if self.tx_span_end[tx_id] > start0 {
+                    hits.insert((bin_idx, self.transcripts[tx_id].gene_id));
+                }
+            }
+        }
+
+        let mut ret: Vec<_> = hits.into_iter().collect();
+        ret.sort_unstable();
+        ret
+    }
+
     #[inline]
     fn partition_point<T, F>(slice: &[T], mut pred: F) -> usize
     where
@@ -1493,6 +1540,26 @@ mod tests {
         let mut c = idx.candidates_for_span_union(1, 95, 96);
         c.sort_by_key(|x| *x);
         assert_eq!(c, vec![tid(2)]);
+
+        // ---- overlapping_genes_with_bins retains the chromosome-local bin id
+        // chr1 150..250 touches bins 1 and 2. Gene 0 occurs in both bins.
+        assert_eq!(
+            idx.overlapping_genes_with_bins(0, 150, 250),
+            vec![(1, gid(0)), (2, gid(0))]
+        );
+
+        // tx2 crosses the chr2 bin boundary, so a span crossing that boundary
+        // reports the same gene once for each touched bin.
+        assert_eq!(
+            idx.overlapping_genes_with_bins(1, 95, 105),
+            vec![(0, gid(1)), (1, gid(1))]
+        );
+
+        // A span contained inside one bin only reports that bin.
+        assert_eq!(
+            idx.overlapping_genes_with_bins(1, 95, 96),
+            vec![(0, gid(1))]
+        );
 
         // ---- candidates_for_read_union should match span behavior across blocks
         // Adjust this section if your SplicedRead struct differs.

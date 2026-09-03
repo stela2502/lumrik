@@ -247,3 +247,120 @@ fn star_from_cli_maps_after_input_is_closed() -> Result<()> {
 
     Ok(())
 }
+
+
+#[test]
+fn star_relative_index_survives_private_mapper_workdir() -> Result<()> {
+    if !star_available() {
+        return Ok(());
+    }
+
+    /*
+     * Put the complete STAR test reference below the process's existing
+     * working directory.  This lets us hand Star a genuinely relative
+     * genomeDir without changing the process-global cwd (Rust tests run
+     * concurrently, so set_current_dir() would make this test racy).
+     *
+     * MapperProcess will still launch STAR in its own private working
+     * directory.  The test therefore reproduces the Norn requirement:
+     * a caller-relative index must remain usable after mapper spawn.
+     */
+    let cwd = std::env::current_dir().context("failed to get test working directory")?;
+    let tmpdir = tempfile::tempdir_in(&cwd)
+        .context("failed to create relative-path STAR test directory")?;
+
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/tiny.fa");
+    let fasta = tmpdir.path().join("tiny.fa");
+
+    fs::copy(&source, &fasta).with_context(|| {
+        format!(
+            "failed to copy STAR test reference {} -> {}",
+            source.display(),
+            fasta.display()
+        )
+    })?;
+
+    let genome_dir = tmpdir.path().join("star-index");
+    fs::create_dir(&genome_dir).context("failed to create temporary STAR genome directory")?;
+
+    let output = Command::new("STAR")
+        .current_dir(tmpdir.path())
+        .arg("--runMode")
+        .arg("genomeGenerate")
+        .arg("--runThreadN")
+        .arg("1")
+        .arg("--genomeDir")
+        .arg(&genome_dir)
+        .arg("--genomeFastaFiles")
+        .arg(&fasta)
+        .arg("--genomeSAindexNbases")
+        .arg("1")
+        .output()
+        .context("failed to run STAR genomeGenerate")?;
+
+    if !output.status.success() {
+        bail!(
+            "STAR genomeGenerate failed with status {}\n\nstdout:\n{}\n\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let relative_genome_dir = genome_dir.strip_prefix(&cwd).with_context(|| {
+        format!(
+            "STAR test index {} is not below cwd {}",
+            genome_dir.display(),
+            cwd.display()
+        )
+    })?;
+
+    assert!(
+        relative_genome_dir.is_relative(),
+        "regression test must pass a relative STAR genomeDir"
+    );
+
+    let launch = MapperLaunch {
+        mapper_bin: "STAR".into(),
+        index: relative_genome_dir.to_path_buf(),
+        options: vec![
+            "--runThreadN".into(),
+            "1".into(),
+            "--outSAMtype".into(),
+            "SAM".into(),
+            "--outStd".into(),
+            "SAM".into(),
+        ],
+        threads: 2,
+        paired: false,
+    };
+
+    let mapper = Star::from_launch(launch)?;
+    mapper.check()?;
+
+    let mut mapper = mapper.spawn()?;
+    let read = fq("read_relative_001", "ACGTTGCAACGTTGCAACGTTGCAACGTTGCA");
+
+    let mut calls = Vec::new();
+    if let Some(call) = mapper.process(&read, None)? {
+        calls.push(call);
+    }
+    calls.extend(mapper.finish()?);
+
+    assert_eq!(
+        calls.len(),
+        1,
+        "expected exactly one MappingCall using a relative STAR index"
+    );
+    assert_eq!(calls[0].read_id, "read_relative_001");
+    assert!(
+        calls[0]
+            .records
+            .records
+            .iter()
+            .any(|rec| !rec.record.is_unmapped()),
+        "STAR failed to map using caller-relative genomeDir after private-cwd spawn"
+    );
+
+    Ok(())
+}

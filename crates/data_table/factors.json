@@ -1,0 +1,32 @@
+[
+  {
+    "column": "Color",
+    "levels": [
+      "Red",
+      "Blue",
+      "Green"
+    ],
+    "numeric": [
+      0.0,
+      1.0,
+      2.0
+    ],
+    "matching": null,
+    "one_hot": true
+  },
+  {
+    "column": "Number",
+    "levels": [
+      "1",
+      "2",
+      "3"
+    ],
+    "numeric": [
+      0.0,
+      1.0,
+      2.0
+    ],
+    "matching": null,
+    "one_hot": true
+  }
+]
