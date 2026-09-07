@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use rust_htslib::bam::{self, Read};
-use sc_vdj::{Chain, EvidenceId, Recombination, SegmentKind, VdjRunner};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use sc_vdj::{Chain, Recombination, SegmentKind, VdjRunner};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -9,77 +8,6 @@ use std::path::Path;
 struct BamRecordCounts {
     total: usize,
     mapped: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct LinkSignature {
-    v: Vec<String>,
-    d: Vec<String>,
-    j: Vec<String>,
-    c: Vec<String>,
-}
-
-impl LinkSignature {
-    fn from_segments(segments: &BTreeSet<(SegmentKind, String)>) -> Self {
-        let mut out = Self {
-            v: Vec::new(),
-            d: Vec::new(),
-            j: Vec::new(),
-            c: Vec::new(),
-        };
-        for (kind, name) in segments {
-            match kind {
-                SegmentKind::V => out.v.push(name.clone()),
-                SegmentKind::D => out.d.push(name.clone()),
-                SegmentKind::J => out.j.push(name.clone()),
-                SegmentKind::C => out.c.push(name.clone()),
-            }
-        }
-        out
-    }
-
-    fn has_link(&self) -> bool {
-        [self.v.len(), self.d.len(), self.j.len(), self.c.len()]
-            .into_iter()
-            .filter(|n| *n > 0)
-            .count()
-            >= 2
-    }
-
-    fn render(&self) -> String {
-        fn names(xs: &[String]) -> String {
-            if xs.is_empty() {
-                "-".to_string()
-            } else {
-                xs.join(",")
-            }
-        }
-        format!(
-            "V={} -> D={} -> J={} -> C={}",
-            names(&self.v),
-            names(&self.d),
-            names(&self.j),
-            names(&self.c)
-        )
-    }
-}
-
-#[derive(Debug, Clone)]
-struct FragmentLinkAudit {
-    signature: LinkSignature,
-    record_signatures: Vec<LinkSignature>,
-}
-
-impl FragmentLinkAudit {
-    fn crosses_records(&self) -> bool {
-        !self.record_signatures.iter().any(|record| {
-            (!record.v.is_empty() || !record.j.is_empty()) && !record.c.is_empty()
-        })
-    }
-}
-
-fn evidence_id_label(id: EvidenceId) -> String {
-    format!("{}:{}", id.flush, id.entry)
 }
 
 pub fn describe_vdj_run<P: AsRef<Path>>(
@@ -93,46 +21,27 @@ pub fn describe_vdj_run<P: AsRef<Path>>(
     let accepted_records: usize = runner
         .evidence
         .cells()
-        .map(|(_, cell)| cell.features.len())
+        .map(|(_, cell)| cell.accepted_records())
         .sum();
     let accepted_fragments: usize = runner
         .evidence
         .cells()
-        .map(|(_, cell)| {
-            cell.features
-                .iter()
-                .map(|feature| feature.id)
-                .collect::<HashSet<_>>()
-                .len()
-        })
+        .map(|(_, cell)| cell.physical_fragments())
         .sum();
     let single_segment_records: usize = runner
         .evidence
         .cells()
-        .flat_map(|(_, cell)| &cell.features)
-        .filter(|feature| feature.mappings.len() == 1)
-        .count();
+        .map(|(_, cell)| cell.single_segment_records())
+        .sum();
     let multi_segment_records: usize = runner
         .evidence
         .cells()
-        .flat_map(|(_, cell)| &cell.features)
-        .filter(|feature| feature.mappings.len() > 1)
-        .count();
+        .map(|(_, cell)| cell.multi_segment_records())
+        .sum();
     let linked_fragments: usize = runner
         .evidence
         .cells()
-        .map(|(_, cell)| {
-            let mut fragments = BTreeMap::<EvidenceId, BTreeSet<SegmentKind>>::new();
-            for feature in &cell.features {
-                let kinds = fragments.entry(feature.id).or_default();
-                for mapping in &feature.mappings {
-                    if let Some(segment) = runner.index.segment(mapping.segment_id) {
-                        kinds.insert(segment.kind);
-                    }
-                }
-            }
-            fragments.values().filter(|kinds| kinds.len() > 1).count()
-        })
+        .map(|(_, cell)| cell.linked_fragments())
         .sum();
 
     writeln!(out, "VDJ EVIDENCE SUMMARY")?;
@@ -145,6 +54,7 @@ pub fn describe_vdj_run<P: AsRef<Path>>(
     writeln!(out, "multi-segment BAM records:   {multi_segment_records}")?;
     writeln!(out, "multi-segment fragments:     {linked_fragments}")?;
     writeln!(out, "cells with VDJ evidence:     {}", runner.evidence.cell_count())?;
+    writeln!(out, "raw read-level evidence:     discarded after each 20,000-record batch")?;
 
     for (cell_id, cell) in runner.evidence.cells() {
         let cell_name = runner
@@ -178,87 +88,51 @@ fn describe_chain(
     calls: &[Recombination],
 ) -> Result<()> {
     let cell = runner.evidence.get(&cell_id).expect("cell disappeared");
-    let features = cell.features_for_chain(&runner.index, chain);
-    let mut fragment_segments =
-        BTreeMap::<EvidenceId, BTreeSet<(SegmentKind, String)>>::new();
-    let mut fragment_records = BTreeMap::<EvidenceId, Vec<LinkSignature>>::new();
-    let mut record_links = BTreeMap::<LinkSignature, usize>::new();
-    let mut kind_records = BTreeMap::<SegmentKind, usize>::new();
-
-    for feature in &features {
-        let mut record_segments = BTreeSet::<(SegmentKind, String)>::new();
-        for mapping in &feature.mappings {
-            let Some(segment) = runner.index.segment(mapping.segment_id) else {
-                continue;
-            };
-            if segment.chain != chain {
-                continue;
-            }
-            record_segments.insert((segment.kind, segment.name.clone()));
-            fragment_segments
-                .entry(feature.id)
-                .or_default()
-                .insert((segment.kind, segment.name.clone()));
-            *kind_records.entry(segment.kind).or_insert(0) += 1;
-        }
-
-        let record_signature = LinkSignature::from_segments(&record_segments);
-        if record_signature.has_link() {
-            *record_links.entry(record_signature.clone()).or_insert(0) += 1;
-        }
-        fragment_records
-            .entry(feature.id)
-            .or_default()
-            .push(record_signature);
-    }
-
-    let mut fragments = BTreeMap::<EvidenceId, FragmentLinkAudit>::new();
-    let mut fragment_link_counts = BTreeMap::<LinkSignature, usize>::new();
-    for (id, segments) in &fragment_segments {
-        let signature = LinkSignature::from_segments(segments);
-        if signature.has_link() {
-            *fragment_link_counts.entry(signature.clone()).or_insert(0) += 1;
-        }
-        fragments.insert(
-            *id,
-            FragmentLinkAudit {
-                signature,
-                record_signatures: fragment_records.remove(id).unwrap_or_default(),
-            },
-        );
-    }
 
     writeln!(out, "  {chain}")?;
     writeln!(
         out,
-        "    evidence: {} records / {} physical fragments",
-        features.len(),
-        fragment_segments.len()
+        "    evidence: {} records / compact fragment summaries",
+        cell.chain_records(chain)
     )?;
     writeln!(
         out,
         "    segment mappings: V={} D={} J={} C={}",
-        kind_records.get(&SegmentKind::V).copied().unwrap_or(0),
-        kind_records.get(&SegmentKind::D).copied().unwrap_or(0),
-        kind_records.get(&SegmentKind::J).copied().unwrap_or(0),
-        kind_records.get(&SegmentKind::C).copied().unwrap_or(0),
+        cell.segment_mappings(chain, SegmentKind::V),
+        cell.segment_mappings(chain, SegmentKind::D),
+        cell.segment_mappings(chain, SegmentKind::J),
+        cell.segment_mappings(chain, SegmentKind::C),
     )?;
 
-    if record_links.is_empty() {
-        writeln!(out, "    direct links within one BAM record: none")?;
+    let mut links: Vec<_> = cell
+        .fragment_link_support()
+        .iter()
+        .filter(|(signature, _)| signature.chain == chain)
+        .collect();
+    links.sort_by_key(|(signature, _)| {
+        (
+            signature.receptor_segments.clone(),
+            signature.constant_segments.clone(),
+        )
+    });
+    if links.is_empty() {
+        writeln!(out, "    fragment-level receptor -> C links: none")?;
     } else {
-        writeln!(out, "    direct links within one BAM record:")?;
-        for (signature, count) in record_links {
-            writeln!(out, "      {count:>4} x {}", signature.render())?;
-        }
-    }
-
-    if fragment_link_counts.is_empty() {
-        writeln!(out, "    fragment-level links (same EvidenceId): none")?;
-    } else {
-        writeln!(out, "    fragment-level links (same EvidenceId):")?;
-        for (signature, count) in fragment_link_counts {
-            writeln!(out, "      {count:>4} x {}", signature.render())?;
+        writeln!(out, "    fragment-level receptor -> C links:")?;
+        for (signature, count) in links {
+            let receptor = signature
+                .receptor_segments
+                .iter()
+                .filter_map(|id| runner.index.segment(*id).map(|s| s.name.as_str()))
+                .collect::<Vec<_>>()
+                .join(",");
+            let constant = signature
+                .constant_segments
+                .iter()
+                .filter_map(|id| runner.index.segment(*id).map(|s| s.name.as_str()))
+                .collect::<Vec<_>>()
+                .join(",");
+            writeln!(out, "      {count:>4} x {receptor} -> {constant}")?;
         }
     }
 
@@ -297,57 +171,9 @@ fn describe_chain(
             call.stable_id,
             call.supporting_features
         )?;
-
-        let direct_c = direct_constant_links(&fragments, v, j);
-        if direct_c.is_empty() {
-            writeln!(out, "        V/J -> C fragment links used by rescue: none")?;
-        } else {
-            writeln!(out, "        V/J -> C fragment links used by rescue:")?;
-            for link in direct_c {
-                writeln!(
-                    out,
-                    "          fragment {} [{}]: {}",
-                    evidence_id_label(link.id),
-                    if link.crosses_records {
-                        "across BAM records"
-                    } else {
-                        "within one BAM record"
-                    },
-                    link.signature.render()
-                )?;
-            }
-        }
     }
 
     Ok(())
-}
-
-fn direct_constant_links(
-    fragments: &BTreeMap<EvidenceId, FragmentLinkAudit>,
-    called_v: &str,
-    called_j: &str,
-) -> Vec<ConstantLinkAudit> {
-    let mut out = Vec::new();
-    for (id, fragment) in fragments {
-        let supports_call = fragment.signature.v.iter().any(|name| name == called_v)
-            || fragment.signature.j.iter().any(|name| name == called_j);
-        if !supports_call || fragment.signature.c.is_empty() {
-            continue;
-        }
-        out.push(ConstantLinkAudit {
-            id: *id,
-            signature: fragment.signature.clone(),
-            crosses_records: fragment.crosses_records(),
-        });
-    }
-    out
-}
-
-#[derive(Debug, Clone)]
-struct ConstantLinkAudit {
-    id: EvidenceId,
-    signature: LinkSignature,
-    crosses_records: bool,
 }
 
 fn count_bam_records(path: &Path) -> Result<BamRecordCounts> {

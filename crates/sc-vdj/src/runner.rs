@@ -16,6 +16,8 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
 
+const EVIDENCE_BATCH_SIZE: usize = 200_000;
+
 pub trait BamIdentityResolver {
     fn cell(&self, record: &bam::Record) -> Option<String>;
 }
@@ -82,7 +84,16 @@ impl VdjRunner {
         let header = reader.header().to_owned();
         let mut n = 0usize;
         let mut entry = 0u32;
-        let mut evidence_ids = HashMap::<(u64, Vec<u8>), EvidenceId>::new();
+        let mut batch = Vec::<(u64, BamFeatureEvidence)>::with_capacity(EVIDENCE_BATCH_SIZE);
+
+        // Mapper BAMs emit the records belonging to one physical query together.
+        // Keep only the immediately preceding query key so paired/supplementary
+        // records share an EvidenceId without retaining a BAM-sized QNAME map.
+        // A full batch is flushed only when a new query begins, so one physical
+        // fragment is never split merely because it crossed the 20k boundary.
+        let mut last_query: Option<(u64, Vec<u8>)> = None;
+        let mut current_evidence_id: Option<EvidenceId> = None;
+
         for rec in reader.records() {
             let rec = rec?;
             if rec.is_unmapped() {
@@ -92,6 +103,24 @@ impl VdjRunner {
                 continue;
             };
             let cell_id = IntToStr::new(cell.as_bytes()).into_u64();
+            let query_key = (cell_id, rec.qname().to_vec());
+
+            if last_query.as_ref() != Some(&query_key) {
+                if batch.len() >= EVIDENCE_BATCH_SIZE {
+                    let full = std::mem::replace(
+                        &mut batch,
+                        Vec::with_capacity(EVIDENCE_BATCH_SIZE),
+                    );
+                    self.evidence.consume_batch(
+                        full,
+                        &self.index,
+                        self.config.min_sequence_overlap,
+                    );
+                }
+                last_query = Some(query_key);
+                current_evidence_id = None;
+            }
+
             let tid = rec.tid();
             if tid < 0 {
                 continue;
@@ -102,6 +131,16 @@ impl VdjRunner {
             if segment_ids.is_empty() {
                 continue;
             }
+
+            let id = *current_evidence_id.get_or_insert_with(|| {
+                let id = EvidenceId {
+                    flush: self.flush_id,
+                    entry,
+                };
+                entry = entry.wrapping_add(1);
+                id
+            });
+
             let geometry = AlignmentGeometry {
                 tid,
                 start: blocks.first().map_or(0, |x| x.0),
@@ -129,25 +168,25 @@ impl VdjRunner {
             } else {
                 sequence.r1 = Some(part)
             };
-            let qname_key = (cell_id, rec.qname().to_vec());
-            let id = *evidence_ids.entry(qname_key).or_insert_with(|| {
-                let id = EvidenceId {
-                    flush: self.flush_id,
-                    entry,
-                };
-                entry = entry.wrapping_add(1);
-                id
-            });
-            self.evidence.push(
+
+            batch.push((
                 cell_id,
                 BamFeatureEvidence {
                     id,
                     sequence,
                     mappings,
                 },
-            );
+            ));
             self.cell_names.entry(cell_id).or_insert(cell);
             n += 1;
+        }
+
+        if !batch.is_empty() {
+            self.evidence.consume_batch(
+                batch,
+                &self.index,
+                self.config.min_sequence_overlap,
+            );
         }
         self.flush_id = self.flush_id.wrapping_add(1);
         Ok(n)

@@ -1,23 +1,14 @@
 //! Direct fragment-level linkage between an assembled V(D)J call and a
 //! transcript constant region.
 //!
-//! Constant exons are spliced onto receptor transcripts, so they need not be
-//! contiguous with the compact sequence used to reconstruct V(D)J.  This
-//! module therefore assigns a missing constant region only when the same
-//! physical fragment (`EvidenceId`) directly supports the called V or J and a
-//! constant segment.  Paired mates and same-QNAME multimapping BAM records
-//! share an `EvidenceId` during BAM ingestion.
+//! Raw BAM records are discarded in bounded batches.  During each batch we
+//! collapse physical-fragment V/J -> C linkage into compact signature counters;
+//! this module consumes those counters without retaining read-level evidence.
 
 use super::{ConstantRegionEvidence, Recombination};
-use crate::cellrep::{CellEvidence, EvidenceId};
-use crate::index::{Chain, SegmentId, SegmentKind, VdjIndex};
-use std::collections::{HashMap, HashSet};
-
-#[derive(Debug, Default)]
-struct FragmentSegmentLinks {
-    receptor_segments: HashSet<SegmentId>,
-    constant_segments: HashSet<SegmentId>,
-}
+use crate::cellrep::CellEvidence;
+use crate::index::{Chain, SegmentId, VdjIndex};
+use std::collections::HashMap;
 
 pub(super) fn rescue_missing_constant_regions(
     calls: &mut [Recombination],
@@ -25,11 +16,9 @@ pub(super) fn rescue_missing_constant_regions(
     index: &VdjIndex,
     chain: Chain,
 ) {
-    let fragments = collect_fragment_segment_links(cell, index, chain);
-
     for call in calls.iter_mut().filter(|call| call.constant.is_none()) {
         let Some((constant_id, supporting_fragments)) =
-            best_direct_constant_link(call, &fragments)
+            best_direct_constant_link(call, cell, chain)
         else {
             continue;
         };
@@ -45,53 +34,25 @@ pub(super) fn rescue_missing_constant_regions(
     }
 }
 
-fn collect_fragment_segment_links(
-    cell: &CellEvidence,
-    index: &VdjIndex,
-    chain: Chain,
-) -> HashMap<EvidenceId, FragmentSegmentLinks> {
-    let mut fragments = HashMap::<EvidenceId, FragmentSegmentLinks>::new();
-
-    for feature in cell.features_for_chain(index, chain) {
-        let links = fragments.entry(feature.id).or_default();
-        for mapping in &feature.mappings {
-            let Some(segment) = index.segment(mapping.segment_id) else {
-                continue;
-            };
-            if segment.chain != chain {
-                continue;
-            }
-
-            match segment.kind {
-                SegmentKind::V | SegmentKind::J => {
-                    links.receptor_segments.insert(mapping.segment_id);
-                }
-                SegmentKind::C => {
-                    links.constant_segments.insert(mapping.segment_id);
-                }
-                SegmentKind::D => {}
-            }
-        }
-    }
-
-    fragments
-}
-
 fn best_direct_constant_link(
     call: &Recombination,
-    fragments: &HashMap<EvidenceId, FragmentSegmentLinks>,
+    cell: &CellEvidence,
+    chain: Chain,
 ) -> Option<(SegmentId, u32)> {
     let mut support = HashMap::<SegmentId, u32>::new();
 
-    for links in fragments.values() {
-        let supports_call =
-            links.receptor_segments.contains(&call.v) || links.receptor_segments.contains(&call.j);
+    for (signature, &count) in cell.fragment_link_support() {
+        if signature.chain != chain || count == 0 {
+            continue;
+        }
+        let supports_call = signature.receptor_segments.contains(&call.v)
+            || signature.receptor_segments.contains(&call.j);
         if !supports_call {
             continue;
         }
-
-        for &constant_id in &links.constant_segments {
-            *support.entry(constant_id).or_default() += 1;
+        for &constant_id in &signature.constant_segments {
+            let n = support.entry(constant_id).or_default();
+            *n = n.saturating_add(count);
         }
     }
 
@@ -103,11 +64,16 @@ fn best_direct_constant_link(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cellrep::FragmentLinkSignature;
 
     #[test]
-    fn fragment_links_default_empty() {
-        let links = FragmentSegmentLinks::default();
-        assert!(links.receptor_segments.is_empty());
-        assert!(links.constant_segments.is_empty());
+    fn fragment_link_signature_can_be_empty() {
+        let signature = FragmentLinkSignature {
+            chain: Chain::Igh,
+            receptor_segments: Vec::new(),
+            constant_segments: Vec::new(),
+        };
+        assert!(signature.receptor_segments.is_empty());
+        assert!(signature.constant_segments.is_empty());
     }
 }

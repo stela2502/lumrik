@@ -316,15 +316,93 @@ pub struct ChainSummaryWork<'a> {
 /// actual sequence/germline evidence bridges them.
 pub fn summarize_chain_work(work: ChainSummaryWork<'_>) -> Vec<ReceptorSequenceEvidence> {
     let mut summaries = Vec::<ReceptorSequenceEvidence>::new();
+    consume_chain_features(
+        &mut summaries,
+        work.features,
+        work.index,
+        work.chain,
+        work.min_overlap,
+    );
+    summaries
+}
 
-    for feature in work.features {
+/// Fold another bounded feature batch into an already-persistent chain summary.
+/// The caller retains only `summaries`; all raw feature objects may be dropped
+/// immediately after this returns.
+/// Merge the compact delta produced by one bounded BAM batch into the
+/// persistent summaries for one cell/chain.
+///
+/// The expensive raw-read assembly has already happened against an empty,
+/// batch-local summary set.  Persistent state is therefore probed only once
+/// per compact incoming summary rather than once per BAM sequence part.
+pub(crate) fn merge_summary_batch(
+    summaries: &mut Vec<ReceptorSequenceEvidence>,
+    batch_summaries: Vec<ReceptorSequenceEvidence>,
+    index: &VdjIndex,
+    min_overlap: usize,
+) {
+    for incoming in batch_summaries {
+        let mut target = None;
+
+        // Shared germline identity is the normal path and is both cheaper and
+        // biologically more constrained than a sequence-only search.
+        for i in 0..summaries.len() {
+            if !summaries[i].shares_segment(&incoming) {
+                continue;
+            }
+            if summaries[i].try_consume(&incoming, index, min_overlap) {
+                target = Some(i);
+                break;
+            }
+        }
+
+        // A genuinely bridging batch summary can connect components that do
+        // not yet share a segment identity.  Keep the old observed-overlap
+        // fallback, but pay for it once per compact batch summary, not once per
+        // original read.
+        if target.is_none() {
+            for i in 0..summaries.len() {
+                if summaries[i].shares_segment(&incoming) {
+                    continue;
+                }
+                if summaries[i].try_consume(&incoming, index, min_overlap) {
+                    target = Some(i);
+                    break;
+                }
+            }
+        }
+
+        let target = match target {
+            Some(i) => i,
+            None => {
+                summaries.push(incoming);
+                summaries.len() - 1
+            }
+        };
+
+        // One incoming compact component may bridge two persistent components.
+        // Reconcile only around the component that changed.
+        collapse_from(summaries, target, index, min_overlap);
+    }
+
+    summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
+}
+
+pub(crate) fn consume_chain_features(
+    summaries: &mut Vec<ReceptorSequenceEvidence>,
+    features: &[&BamFeatureEvidence],
+    index: &VdjIndex,
+    chain: Chain,
+    min_overlap: usize,
+) {
+    for feature in features {
         let mut segment_ids: Vec<_> = feature
             .mappings
             .iter()
             .filter_map(|m| {
-                work.index
+                index
                     .segment(m.segment_id)
-                    .filter(|s| s.chain == work.chain)
+                    .filter(|s| s.chain == chain)
                     .map(|_| m.segment_id)
             })
             .collect();
@@ -341,8 +419,8 @@ pub fn summarize_chain_work(work: ChainSummaryWork<'_>) -> Vec<ReceptorSequenceE
             .mappings
             .iter()
             .filter_map(|m| {
-                let s = work.index.segment(m.segment_id)?;
-                (s.chain == work.chain).then_some(
+                let s = index.segment(m.segment_id)?;
+                (s.chain == chain).then_some(
                     m.alignment.is_reverse
                         ^ matches!(s.strand, crate::index::Strand::Minus),
                 )
@@ -361,8 +439,8 @@ pub fn summarize_chain_work(work: ChainSummaryWork<'_>) -> Vec<ReceptorSequenceE
                 part,
                 &segment_ids,
                 reverse,
-                work.index,
-                work.min_overlap,
+                index,
+                min_overlap,
             );
 
             let mut target = None;
@@ -373,7 +451,7 @@ pub fn summarize_chain_work(work: ChainSummaryWork<'_>) -> Vec<ReceptorSequenceE
                 if !summaries[i].shares_segment(&incoming) {
                     continue;
                 }
-                if summaries[i].try_consume(&incoming, work.index, work.min_overlap) {
+                if summaries[i].try_consume(&incoming, index, min_overlap) {
                     target = Some(i);
                     break;
                 }
@@ -387,7 +465,7 @@ pub fn summarize_chain_work(work: ChainSummaryWork<'_>) -> Vec<ReceptorSequenceE
                     if summaries[i].shares_segment(&incoming) {
                         continue; // already tested above
                     }
-                    if summaries[i].try_consume(&incoming, work.index, work.min_overlap) {
+                    if summaries[i].try_consume(&incoming, index, min_overlap) {
                         target = Some(i);
                         break;
                     }
@@ -406,26 +484,15 @@ pub fn summarize_chain_work(work: ChainSummaryWork<'_>) -> Vec<ReceptorSequenceE
             // new bridge to another existing component.  Re-test that one
             // component rather than rescanning every pair after every read.
             collapse_from(
-                &mut summaries,
+                summaries,
                 target,
-                work.index,
-                work.min_overlap,
+                index,
+                min_overlap,
             );
         }
     }
 
     summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
-    for s in &mut summaries {
-        for v in &mut s.base_counts {
-            v.shrink_to_fit();
-        }
-        for v in &mut s.base_max_qual {
-            v.shrink_to_fit();
-        }
-        s.segment_support.shrink_to_fit();
-        s.germline_anchors.shrink_to_fit();
-    }
-    summaries
 }
 
 fn collapse_from(

@@ -1,4 +1,4 @@
-use crate::cellrep::{summarize_chain_work, CellEvidence, ChainSummaryWork, ReceptorSequenceEvidence};
+use crate::cellrep::{CellEvidence, ReceptorSequenceEvidence};
 use crate::index::{
     reference_base_matches, reverse_complement, Chain, SegmentId, SegmentKind, VdjIndex,
 };
@@ -220,13 +220,7 @@ pub struct ChainWork<'a> {
 pub fn process_chain_work(work: ChainWork<'_>) -> Vec<Recombination> {
     const MAX_FINAL_RECOMBINATIONS_PER_LOCUS: usize = 2;
 
-    let features = work.cell.features_for_chain(work.index, work.chain);
-    let summaries = summarize_chain_work(ChainSummaryWork {
-        features: &features,
-        index: work.index,
-        chain: work.chain,
-        min_overlap: work.min_overlap,
-    });
+    let summaries = work.cell.summaries_for_chain(work.chain);
 
     let mut calls: Vec<_> = summaries
         .iter()
