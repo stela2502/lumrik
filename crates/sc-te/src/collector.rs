@@ -60,7 +60,8 @@ impl TeCollector {
     pub fn add_anchor(&mut self, cell_id: u64, umi_id: u64, candidates: &[u64]) -> bool {
         self.report.report("te.original.overlaps_te");
         if candidates.len() != 1 {
-            self.report.report("te.original.overlapping_te_features.multiple");
+            self.report
+                .report("te.original.overlapping_te_features.multiple");
             return false;
         }
         self.insert_anchor(cell_id, umi_id, candidates[0])

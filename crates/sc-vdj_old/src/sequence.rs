@@ -287,3 +287,172 @@ mod tests {
         assert!(reference_base_matches(b'N', b'G'));
     }
 }
+
+
+#[derive(Debug, Clone)]
+pub(crate) struct SequenceMerge {
+    pub(crate) sequence: Vec<u8>,
+    pub(crate) overlap: usize,
+    pub(crate) mismatches: usize,
+    pub(crate) extension: usize,
+    /// Start of the right sequence relative to the left sequence.
+    pub(crate) right_offset: isize,
+    /// True when the reverse-complemented right sequence produced this merge.
+    pub(crate) right_reverse: bool,
+}
+
+impl SequenceMerge {
+    pub(crate) fn better_than(&self, other: &Self) -> bool {
+        self.overlap > other.overlap
+            || (self.overlap == other.overlap
+                && (self.mismatches < other.mismatches
+                    || (self.mismatches == other.mismatches
+                        && (self.extension > other.extension
+                            || (self.extension == other.extension
+                                && self.sequence < other.sequence)))))
+    }
+}
+
+pub(crate) fn merge_sequences_any_orientation(
+    left: &[u8],
+    right: &[u8],
+    min_overlap: usize,
+) -> Option<SequenceMerge> {
+    let reverse = reverse_complement(right);
+    let forward = merge_oriented_sequences(left, right, min_overlap, false);
+    let reverse = merge_oriented_sequences(left, &reverse, min_overlap, true);
+    match (forward, reverse) {
+        (Some(a), Some(b)) => Some(if a.better_than(&b) { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn merge_oriented_sequences(
+    left: &[u8],
+    right: &[u8],
+    min_overlap: usize,
+    right_reverse: bool,
+) -> Option<SequenceMerge> {
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+    let min_overlap = min_overlap.min(left.len()).min(right.len());
+    if min_overlap == 0 {
+        return None;
+    }
+
+    let min_offset = -(right.len() as isize) + min_overlap as isize;
+    let max_offset = left.len() as isize - min_overlap as isize;
+    let mut best: Option<SequenceMerge> = None;
+
+    for offset in min_offset..=max_offset {
+        let left_start = offset.max(0) as usize;
+        let right_start = (-offset).max(0) as usize;
+        let overlap = (left.len() - left_start).min(right.len() - right_start);
+        if overlap < min_overlap {
+            continue;
+        }
+
+        let mut mismatches = 0usize;
+        for i in 0..overlap {
+            let a = left[left_start + i].to_ascii_uppercase();
+            let b = right[right_start + i].to_ascii_uppercase();
+            if a != b && a != b'N' && b != b'N' {
+                mismatches += 1;
+            }
+        }
+        let max_mismatches = (overlap / 20).max(1);
+        if mismatches > max_mismatches {
+            continue;
+        }
+
+        let start = offset.min(0);
+        let end = (left.len() as isize).max(offset + right.len() as isize);
+        let mut sequence = Vec::with_capacity((end - start) as usize);
+        for pos in start..end {
+            let a = if pos >= 0 && pos < left.len() as isize {
+                Some(left[pos as usize].to_ascii_uppercase())
+            } else {
+                None
+            };
+            let right_pos = pos - offset;
+            let b = if right_pos >= 0 && right_pos < right.len() as isize {
+                Some(right[right_pos as usize].to_ascii_uppercase())
+            } else {
+                None
+            };
+            sequence.push(match (a, b) {
+                (Some(x), None) | (None, Some(x)) => x,
+                (Some(x), Some(y)) if x == y => x,
+                (Some(b'N'), Some(y)) => y,
+                (Some(x), Some(b'N')) => x,
+                (Some(_), Some(_)) => b'N',
+                (None, None) => unreachable!(),
+            });
+        }
+
+        let candidate = SequenceMerge {
+            extension: sequence.len().saturating_sub(left.len().max(right.len())),
+            sequence,
+            overlap,
+            mismatches,
+            right_offset: offset,
+            right_reverse,
+        };
+        if best.as_ref().map_or(true, |old| candidate.better_than(old)) {
+            best = Some(candidate);
+        }
+    }
+    best
+}
+
+/// Translate one DNA reading frame using the standard genetic code.
+/// Incomplete trailing codons are ignored; non-ACGT codons become `X`.
+pub fn translate_frame(sequence: &[u8], frame: usize) -> Vec<u8> {
+    sequence
+        .get(frame..)
+        .unwrap_or_default()
+        .chunks_exact(3)
+        .map(translate_codon)
+        .collect()
+}
+
+/// Translate a single DNA codon with the standard genetic code.
+pub fn translate_codon(codon: &[u8]) -> u8 {
+    if codon.len() != 3 {
+        return b'X';
+    }
+    let a = codon[0].to_ascii_uppercase();
+    let b = codon[1].to_ascii_uppercase();
+    let c = codon[2].to_ascii_uppercase();
+    match (a, b, c) {
+        (b'T', b'T', b'T' | b'C') => b'F',
+        (b'T', b'T', b'A' | b'G') => b'L',
+        (b'T', b'C', _) => b'S',
+        (b'T', b'A', b'T' | b'C') => b'Y',
+        (b'T', b'A', b'A' | b'G') => b'*',
+        (b'T', b'G', b'T' | b'C') => b'C',
+        (b'T', b'G', b'A') => b'*',
+        (b'T', b'G', b'G') => b'W',
+        (b'C', b'T', _) => b'L',
+        (b'C', b'C', _) => b'P',
+        (b'C', b'A', b'T' | b'C') => b'H',
+        (b'C', b'A', b'A' | b'G') => b'Q',
+        (b'C', b'G', _) => b'R',
+        (b'A', b'T', b'T' | b'C' | b'A') => b'I',
+        (b'A', b'T', b'G') => b'M',
+        (b'A', b'C', _) => b'T',
+        (b'A', b'A', b'T' | b'C') => b'N',
+        (b'A', b'A', b'A' | b'G') => b'K',
+        (b'A', b'G', b'T' | b'C') => b'S',
+        (b'A', b'G', b'A' | b'G') => b'R',
+        (b'G', b'T', _) => b'V',
+        (b'G', b'C', _) => b'A',
+        (b'G', b'A', b'T' | b'C') => b'D',
+        (b'G', b'A', b'A' | b'G') => b'E',
+        (b'G', b'G', _) => b'G',
+        _ => b'X',
+    }
+}

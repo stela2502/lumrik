@@ -5,6 +5,7 @@ use crate::align::{
 use crate::gex::ExpressionMatrix;
 use crate::junction::{measure_junction, JunctionInput, JunctionMeasurement};
 use crate::mapper::{CoverageFamilyScore, IdentitySeedScore, VdjMapper};
+use crate::sequence::{merge_sequences_any_orientation, SequenceMerge};
 use crate::reference::VdjReference;
 use crate::score::{score_recombination_activity, RecombinationActivityEvidence};
 use crate::sterile::{SterileAccumulator, SterileProfile};
@@ -30,6 +31,8 @@ pub struct BamReadEvidence {
     pub is_reverse: bool,
     pub is_secondary: bool,
     pub is_supplementary: bool,
+    /// Exact VDJ-index segments overlapped by the original genomic mapper alignment.
+    pub mapped_segment_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -348,18 +351,20 @@ impl<'a> PosteriorAnalyzer<'a> {
         G: Fn(&CellVdjSummary, &MappingInfo) + Sync,
     {
         for cell in required_cells {
-            routed.entry(cell).or_default();
+            routed.ensure_cell(cell);
         }
         report.report_n("vdj.cells", routed.len());
 
         let mut out: Vec<_> = routed
+            .into_cells()
             .into_par_iter()
             .map(|(cell, loci)| {
                 let mut local = MappingInfo::new(None, 0.0, 0);
                 let mut rearrangements = Vec::new();
                 let mut sterile = Vec::new();
 
-                for (chain, reads) in loci {
+                for (chain, compact) in loci {
+                    let reads = self.expand_compact_locus(&cell, chain, compact);
                     let summary = self.analyze_cell_profiled(
                         cell.clone(),
                         reads,
@@ -397,6 +402,61 @@ impl<'a> PosteriorAnalyzer<'a> {
         }
         out.sort_by(|a, b| a.0.cell.cmp(&b.0.cell));
         out.into_iter().map(|(summary, _)| summary).collect()
+    }
+
+    fn expand_compact_locus(
+        &self,
+        cell: &str,
+        chain: Chain,
+        compact: Vec<crate::cell_evidence::CellRecombinationResults>,
+    ) -> Vec<BamReadEvidence> {
+        let chr = self
+            .reference
+            .locus_bounds(chain)
+            .map(|(chr, _, _)| chr.to_string());
+        let total: usize = compact
+            .iter()
+            .map(|evidence| evidence.supporting_sequence_ids.len().max(1))
+            .sum();
+        let mut reads = Vec::with_capacity(total);
+
+        for (contig_idx, evidence) in compact.into_iter().enumerate() {
+            let ref_start = evidence.ref_blocks.first().map(|block| block.0);
+            let ref_end = evidence.ref_blocks.last().map(|block| block.1);
+            let (sequence, qualities) = evidence.finalize();
+            let support_ids = if evidence.supporting_sequence_ids.is_empty() {
+                // Defensive fallback for hand-built evidence in tests. Real BAM
+                // collection always records the provisional sequence ID.
+                vec![u64::MAX - contig_idx as u64]
+            } else {
+                evidence.supporting_sequence_ids.clone()
+            };
+
+            // The provisional sequence-entry ID is the linkage key. Disconnected
+            // finalized pieces originating from the same BAM feature sequence
+            // therefore receive the same synthetic UMI and remain coherent for
+            // V/J/C inference.
+            for sequence_id in support_ids {
+                let support_id = format!("sequence-{sequence_id}");
+                reads.push(BamReadEvidence {
+                    cell: cell.to_string(),
+                    umi: support_id.clone(),
+                    read_name: support_id,
+                    sequence: sequence.clone(),
+                    qualities: qualities.clone(),
+                    chr: chr.clone(),
+                    ref_start,
+                    ref_end,
+                    ref_blocks: evidence.ref_blocks.clone(),
+                    mapq: evidence.mapq,
+                    is_reverse: false,
+                    is_secondary: false,
+                    is_supplementary: !evidence.has_primary,
+                    mapped_segment_indices: evidence.mapped_segment_indices.clone(),
+                });
+            }
+        }
+        reads
     }
 
     fn analyze_cell_profiled<E: ExpressionMatrix>(
@@ -464,9 +524,21 @@ impl<'a> PosteriorAnalyzer<'a> {
                     best_by_kind,
                     alignments,
                     candidate_alignments,
-                    family_candidates,
+                    mut family_candidates,
                     identity_seed_used,
                 ) = self.best_read_matches(&contig.sequence, &reverse_sequence, &ranked);
+                // Genomic mapper overlap is direct locus evidence. Preserve it
+                // as a family candidate instead of requiring the reconstructed
+                // sequence to rediscover a known C family from k-mers.
+                for member in &contig.members {
+                    for &segment_index in &member.mapped_segment_indices {
+                        let segment = &self.reference.segments[segment_index];
+                        let chains = family_candidates.entry(segment.kind).or_default();
+                        if !chains.contains(&segment.chain) {
+                            chains.push(segment.chain);
+                        }
+                    }
+                }
                 SeededRead {
                     umi: contig.umi,
                     sequence: contig.sequence,
@@ -927,9 +999,17 @@ impl<'a> PosteriorAnalyzer<'a> {
         let c = self
             .best_segment(chain, SegmentKind::C, reads, Some(&coherent_vj))
             .filter(|candidate| {
+                let exact_bam_support = reads.iter().any(|evidence| {
+                    evidence.members.iter().any(|member| {
+                        member
+                            .mapped_segment_indices
+                            .contains(&candidate.support.segment_index)
+                    })
+                });
                 candidate.support.distance_to_recombination_center
                     <= self.config.max_constant_distance_bp
-                    && candidate.umis.iter().any(|umi| coherent_vj.contains(umi))
+                    && (candidate.umis.iter().any(|umi| coherent_vj.contains(umi))
+                        || exact_bam_support)
             });
 
         let stage = if chain.has_d() {
@@ -1410,8 +1490,32 @@ impl<'a> PosteriorAnalyzer<'a> {
         // strongest seed score for that germline segment.
         let mut seed_by_umi: HashMap<usize, HashMap<&str, u32>> = HashMap::new();
         let mut identity_by_umi: HashMap<usize, HashMap<&str, u32>> = HashMap::new();
+        let mut bam_mapped_umis: HashMap<usize, HashSet<&str>> = HashMap::new();
+        if kind == SegmentKind::C {
+            for evidence in reads {
+                if restrict_umis.is_some_and(|allowed| !allowed.contains(evidence.umi)) {
+                    continue;
+                }
+                for member in &evidence.members {
+                    for &segment_index in &member.mapped_segment_indices {
+                        let segment = &self.reference.segments[segment_index];
+                        if segment.chain == chain && segment.kind == SegmentKind::C {
+                            bam_mapped_umis.entry(segment_index).or_default().insert(evidence.umi);
+                        }
+                    }
+                }
+            }
+        }
         for evidence in reads {
-            if restrict_umis.is_some_and(|allowed| !allowed.contains(evidence.umi)) {
+            if restrict_umis.is_some_and(|allowed| !allowed.contains(evidence.umi))
+                && !(kind == SegmentKind::C
+                    && evidence.members.iter().any(|member| {
+                        member.mapped_segment_indices.iter().any(|&idx| {
+                            let segment = &self.reference.segments[idx];
+                            segment.chain == chain && segment.kind == SegmentKind::C
+                        })
+                    }))
+            {
                 continue;
             }
             if kind == SegmentKind::C
@@ -1495,6 +1599,13 @@ impl<'a> PosteriorAnalyzer<'a> {
         } else {
             seed_totals.into_iter().collect()
         };
+        if kind == SegmentKind::C {
+            for (&segment_index, umis) in &bam_mapped_umis {
+                if !cand.iter().any(|(idx, _)| *idx == segment_index) {
+                    cand.push((segment_index, umis.len() as u32));
+                }
+            }
+        }
         cand.sort_by_key(|x| std::cmp::Reverse(x.1));
         cand.truncate(if kind == SegmentKind::C {
             2
@@ -1532,13 +1643,17 @@ impl<'a> PosteriorAnalyzer<'a> {
                         if !self.c_bam_locus_compatible(evidence, idx) {
                             continue;
                         }
+                        let exact_bam_support = evidence.members.iter().any(|member| {
+                            member.mapped_segment_indices.contains(&idx)
+                        });
                         let family_supported = evidence
                             .family_candidates
                             .get(&SegmentKind::C)
                             .is_some_and(|chains| chains.contains(&chain));
-                        if !family_supported
-                            || evidence.seed_scores.get(&idx).copied().unwrap_or(0)
-                                < self.config.min_seed_hits
+                        if !exact_bam_support
+                            && (!family_supported
+                                || evidence.seed_scores.get(&idx).copied().unwrap_or(0)
+                                    < self.config.min_seed_hits)
                         {
                             continue;
                         }
@@ -1981,117 +2096,7 @@ fn assemble_umi_contigs<'a>(
     out
 }
 
-#[derive(Debug, Clone)]
-struct SequenceMerge {
-    sequence: Vec<u8>,
-    overlap: usize,
-    mismatches: usize,
-    extension: usize,
-}
 
-impl SequenceMerge {
-    fn better_than(&self, other: &Self) -> bool {
-        self.overlap > other.overlap
-            || (self.overlap == other.overlap
-                && (self.mismatches < other.mismatches
-                    || (self.mismatches == other.mismatches
-                        && (self.extension > other.extension
-                            || (self.extension == other.extension
-                                && self.sequence < other.sequence)))))
-    }
-}
-
-fn merge_sequences_any_orientation(
-    left: &[u8],
-    right: &[u8],
-    min_overlap: usize,
-) -> Option<SequenceMerge> {
-    let reverse = crate::sequence::reverse_complement(right);
-    let forward = merge_oriented_sequences(left, right, min_overlap);
-    let reverse = merge_oriented_sequences(left, &reverse, min_overlap);
-    match (forward, reverse) {
-        (Some(a), Some(b)) => Some(if a.better_than(&b) { a } else { b }),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    }
-}
-
-fn merge_oriented_sequences(
-    left: &[u8],
-    right: &[u8],
-    min_overlap: usize,
-) -> Option<SequenceMerge> {
-    if left.is_empty() || right.is_empty() {
-        return None;
-    }
-    let min_overlap = min_overlap.min(left.len()).min(right.len());
-    if min_overlap == 0 {
-        return None;
-    }
-
-    let min_offset = -(right.len() as isize) + min_overlap as isize;
-    let max_offset = left.len() as isize - min_overlap as isize;
-    let mut best: Option<SequenceMerge> = None;
-
-    for offset in min_offset..=max_offset {
-        let left_start = offset.max(0) as usize;
-        let right_start = (-offset).max(0) as usize;
-        let overlap = (left.len() - left_start).min(right.len() - right_start);
-        if overlap < min_overlap {
-            continue;
-        }
-
-        let mut mismatches = 0usize;
-        for i in 0..overlap {
-            let a = left[left_start + i].to_ascii_uppercase();
-            let b = right[right_start + i].to_ascii_uppercase();
-            if a != b && a != b'N' && b != b'N' {
-                mismatches += 1;
-            }
-        }
-        let max_mismatches = (overlap / 20).max(1);
-        if mismatches > max_mismatches {
-            continue;
-        }
-
-        let start = offset.min(0);
-        let end = (left.len() as isize).max(offset + right.len() as isize);
-        let mut sequence = Vec::with_capacity((end - start) as usize);
-        for pos in start..end {
-            let a = if pos >= 0 && pos < left.len() as isize {
-                Some(left[pos as usize].to_ascii_uppercase())
-            } else {
-                None
-            };
-            let right_pos = pos - offset;
-            let b = if right_pos >= 0 && right_pos < right.len() as isize {
-                Some(right[right_pos as usize].to_ascii_uppercase())
-            } else {
-                None
-            };
-            sequence.push(match (a, b) {
-                (Some(x), None) | (None, Some(x)) => x,
-                (Some(x), Some(y)) if x == y => x,
-                (Some(b'N'), Some(y)) => y,
-                (Some(x), Some(b'N')) => x,
-                (Some(_), Some(_)) => b'N',
-                (None, None) => unreachable!(),
-            });
-        }
-
-        let candidate = SequenceMerge {
-            extension: sequence.len().saturating_sub(left.len().max(right.len())),
-            sequence,
-            overlap,
-            mismatches,
-        };
-        if best.as_ref().map_or(true, |old| candidate.better_than(old)) {
-            best = Some(candidate);
-        }
-    }
-    best
-}
 
 fn audit_alignment(
     sequence: &[u8],
@@ -2255,6 +2260,7 @@ mod tests {
             is_reverse: false,
             is_secondary: false,
             is_supplementary: false,
+            mapped_segment_indices: Vec::new(),
         };
         let reverse = crate::sequence::reverse_complement(&read.sequence);
         let ranked = mapper.segment_seed_scores_ranked_oriented(&read.sequence, &reverse);
@@ -2285,6 +2291,7 @@ mod tests {
                 is_reverse: false,
                 is_secondary: false,
                 is_supplementary: false,
+                mapped_segment_indices: Vec::new(),
             }
         }
 

@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufWriter, Write};
@@ -75,8 +75,7 @@ fn main() -> Result<()> {
     if cli.cell_tag.len() != 2 || cli.umi_tag.len() != 2 {
         bail!("--cell-tag and --umi-tag must be exactly two characters");
     }
-    fs::create_dir_all(&cli.out)
-        .with_context(|| format!("creating {}", cli.out.display()))?;
+    fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
 
     let mut report = MappingInfo::new(None, 0.0, 0);
 
@@ -248,7 +247,10 @@ fn main() -> Result<()> {
         .filter(|x| x.anchor_reads == 0 && x.multimapper_reads > 0)
         .count();
 
-    report.report_n("te.features.seen_in_anchor_or_multimapper", te_features_seen);
+    report.report_n(
+        "te.features.seen_in_anchor_or_multimapper",
+        te_features_seen,
+    );
     report.report_n("te.features.with_anchor", te_features_with_anchor);
     report.report_n("te.features.only_multimapper", te_features_only_multi);
     report.stop_timer("te.postprocess");
@@ -289,11 +291,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn classify_ambiguity(
-    index: &TeIndex,
-    candidates: &HashSet<u64>,
-    summary: &mut AmbiguitySummary,
-) {
+fn classify_ambiguity(index: &TeIndex, candidates: &HashSet<u64>, summary: &mut AmbiguitySummary) {
     let mut chromosomes = HashSet::<usize>::new();
     let mut bins = HashSet::<(usize, usize)>::new();
     let mut genes = HashSet::<usize>::new();
@@ -332,7 +330,11 @@ fn write_count_line(
     count: usize,
     denominator: usize,
 ) -> Result<()> {
-    writeln!(writer, "{label:<46} {count:>12}   ({:>6.2}%)", pct(count, denominator))?;
+    writeln!(
+        writer,
+        "{label:<46} {count:>12}   ({:>6.2}%)",
+        pct(count, denominator)
+    )?;
     Ok(())
 }
 
@@ -389,10 +391,19 @@ fn print_diagnostic_report(
 
     writeln!(writer, "Input")?;
     writeln!(writer, "-----")?;
-    writeln!(writer, "BAM records scanned:                         {scanned:>12}")?;
+    writeln!(
+        writer,
+        "BAM records scanned:                         {scanned:>12}"
+    )?;
     write_count_line(writer, "Records with cell barcode + UMI:", tagged, scanned)?;
-    writeln!(writer, "Cells observed:                              {cells:>12}")?;
-    writeln!(writer, "Distinct cell/UMI pairs:                     {molecules:>12}\n")?;
+    writeln!(
+        writer,
+        "Cells observed:                              {cells:>12}"
+    )?;
+    writeln!(
+        writer,
+        "Distinct cell/UMI pairs:                     {molecules:>12}\n"
+    )?;
 
     writeln!(writer, "Alignment structure")?;
     writeln!(writer, "-------------------")?;
@@ -406,31 +417,88 @@ fn print_diagnostic_report(
     writeln!(writer, "\nTE overlap")?;
     writeln!(writer, "----------")?;
     write_count_line(writer, "Records with cell barcode + UMI:", tagged, scanned)?;
-    write_count_line(writer, "Unmapped records with CB + UB:", tagged_unmapped, tagged)?;
-    write_count_line(writer, "Mapped records evaluated for TE overlap:", mapped_tagged, tagged)?;
+    write_count_line(
+        writer,
+        "Unmapped records with CB + UB:",
+        tagged_unmapped,
+        tagged,
+    )?;
+    write_count_line(
+        writer,
+        "Mapped records evaluated for TE overlap:",
+        mapped_tagged,
+        tagged,
+    )?;
     writeln!(writer)?;
     writeln!(writer, "Among mapped records carrying both CB and UB:")?;
-    write_count_line(writer, "No spatial TE feature overlap:", no_overlap, mapped_tagged)?;
-    write_count_line(writer, "Exactly one spatial TE feature:", one_feature, mapped_tagged)?;
-    write_count_line(writer, "Multiple spatial TE features:", multiple_features, mapped_tagged)?;
+    write_count_line(
+        writer,
+        "No spatial TE feature overlap:",
+        no_overlap,
+        mapped_tagged,
+    )?;
+    write_count_line(
+        writer,
+        "Exactly one spatial TE feature:",
+        one_feature,
+        mapped_tagged,
+    )?;
+    write_count_line(
+        writer,
+        "Multiple spatial TE features:",
+        multiple_features,
+        mapped_tagged,
+    )?;
     writeln!(writer)?;
     writeln!(writer, "A spatial TE feature is defined as:")?;
-    writeln!(writer, "    chromosome + {} bp genomic bin + TE gene/subfamily", index.splice_index().bin_width)?;
+    writeln!(
+        writer,
+        "    chromosome + {} bp genomic bin + TE gene/subfamily",
+        index.splice_index().bin_width
+    )?;
     writeln!(writer, "Example:")?;
     writeln!(writer, "    chr1 + 100-101 Mb + L1M2")?;
 
     writeln!(writer, "\nTE anchor evidence")?;
     writeln!(writer, "------------------")?;
-    write_count_line(writer, "Reads usable as unambiguous TE anchors:", anchors, tagged)?;
-    writeln!(writer, "Spatial TE features observed:                 {:>12}", index.len())?;
-    writeln!(writer, "Features supported by anchors:                {with_anchor:>12}")?;
-    writeln!(writer, "Features seen only through multimappers:      {only_multi:>12}")?;
+    write_count_line(
+        writer,
+        "Reads usable as unambiguous TE anchors:",
+        anchors,
+        tagged,
+    )?;
+    writeln!(
+        writer,
+        "Spatial TE features observed:                 {:>12}",
+        index.len()
+    )?;
+    writeln!(
+        writer,
+        "Features supported by anchors:                {with_anchor:>12}"
+    )?;
+    writeln!(
+        writer,
+        "Features seen only through multimappers:      {only_multi:>12}"
+    )?;
 
     writeln!(writer, "\nTE multimapping")?;
     writeln!(writer, "---------------")?;
-    writeln!(writer, "Multimapping read IDs overlapping a TE:       {multi_te:>12}")?;
-    write_count_line(writer, "Resolve to ONE spatial TE feature:", multi_one, multi_te)?;
-    write_count_line(writer, "Remain ambiguous between features:", multi_many, multi_te)?;
+    writeln!(
+        writer,
+        "Multimapping read IDs overlapping a TE:       {multi_te:>12}"
+    )?;
+    write_count_line(
+        writer,
+        "Resolve to ONE spatial TE feature:",
+        multi_one,
+        multi_te,
+    )?;
+    write_count_line(
+        writer,
+        "Remain ambiguous between features:",
+        multi_many,
+        multi_te,
+    )?;
     if multi_te > 0 {
         writeln!(writer)?;
         writeln!(writer, "Interpretation:")?;
@@ -448,7 +516,10 @@ fn print_diagnostic_report(
 
     writeln!(writer, "\nAmbiguity structure")?;
     writeln!(writer, "-------------------")?;
-    writeln!(writer, "Among TE multimappers that still have >1 spatial candidate:")?;
+    writeln!(
+        writer,
+        "Among TE multimappers that still have >1 spatial candidate:"
+    )?;
     write_count_line(
         writer,
         "Same TE gene, different genomic bins:",
@@ -476,10 +547,18 @@ fn print_diagnostic_report(
 
     writeln!(writer, "\nCandidate features per TE multimapping read")?;
     writeln!(writer, "-------------------------------------------")?;
-    let mut rows: Vec<_> = candidate_histogram.iter().map(|(&n, &count)| (n, count)).collect();
+    let mut rows: Vec<_> = candidate_histogram
+        .iter()
+        .map(|(&n, &count)| (n, count))
+        .collect();
     rows.sort_unstable_by_key(|x| x.0);
     for (n, count) in rows {
-        writeln!(writer, "{n:>4} candidate{:1}: {count:>12}   ({:>6.2}%)", if n == 1 { " " } else { "s" }, pct(count, multi_te))?;
+        writeln!(
+            writer,
+            "{n:>4} candidate{:1}: {count:>12}   ({:>6.2}%)",
+            if n == 1 { " " } else { "s" },
+            pct(count, multi_te)
+        )?;
     }
 
     writeln!(writer, "\nTiming")?;
@@ -499,7 +578,11 @@ fn print_diagnostic_report(
     }
     let scan_seconds = report.timer_duration("bam.scan").as_secs_f64();
     if scan_seconds > 0.0 {
-        writeln!(writer, "BAM scan throughput          {:>10.0} records/s", scanned as f64 / scan_seconds)?;
+        writeln!(
+            writer,
+            "BAM scan throughput          {:>10.0} records/s",
+            scanned as f64 / scan_seconds
+        )?;
     }
 
     Ok(())

@@ -18,9 +18,9 @@ use bam_tide::quantification::cli::QuantMode;
 use gtf_splice_index::SpliceIndex;
 use sc_mapper::{MappingCall, StreamingMapper};
 
+use lumrik_status::{public_hostname, spawn_status_server};
 use nelrune::cli::Cli;
 use nelrune::progress::RunProgress;
-use lumrik_status::{public_hostname, spawn_status_server};
 
 fn main() -> Result<()> {
     let command = Cli::command();

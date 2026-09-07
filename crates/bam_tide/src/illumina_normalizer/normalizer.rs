@@ -87,17 +87,84 @@ impl IlluminaPartial {
             }
         };
 
-        let cell = primer_match.get_cell(&r1.seq, &r1.qual).map_err(|err| {
-            self.stats.report("bad_cell_slice");
-            self.stats.report("no_cell_umi");
-            anyhow::anyhow!(err)
-        })?;
+        let unbarcoded = config.primer.grammar().is_unbarcoded();
 
-        let umi = primer_match.get_umi(&r1.seq, &r1.qual).map_err(|err| {
-            self.stats.report("bad_umi_slice");
-            self.stats.report("no_cell_umi");
-            anyhow::anyhow!(err)
-        })?;
+        let cell = if unbarcoded {
+            None
+        } else {
+            Some(primer_match.get_cell(&r1.seq, &r1.qual).map_err(|err| {
+                self.stats.report("bad_cell_slice");
+                self.stats.report("no_cell_umi");
+                anyhow::anyhow!(err)
+            })?)
+        };
+
+        let umi = if unbarcoded {
+            None
+        } else {
+            Some(primer_match.get_umi(&r1.seq, &r1.qual).map_err(|err| {
+                self.stats.report("bad_umi_slice");
+                self.stats.report("no_cell_umi");
+                anyhow::anyhow!(err)
+            })?)
+        };
+
+        let identity = config
+            .primer
+            .grammar()
+            .molecule_identity(
+                cell.as_ref().map(|x| x.seq.as_slice()),
+                umi.as_ref().map(|x| x.seq.as_slice()),
+                &r1.seq,
+                &r2.seq,
+            )
+            .map_err(anyhow::Error::msg)?;
+
+        let dedup_key = DedupKey {
+            cell_id: identity.cell_id,
+            hard_umi: identity.molecule_id,
+        };
+
+        if unbarcoded {
+            self.stats.report("unbarcoded_sequence_identity");
+
+            let mut emitted_r2 = r2.clone();
+            emitted_r2.id = NgsNormalizerSupport::normalized_molecule_id(&r2.id, 0);
+
+            let paired_r1_record = if usable_insert(&r1.seq, 30, 0.5) {
+                Some(FastqRecord::new(&emitted_r2.id, &r1.seq, &r1.qual))
+            } else {
+                None
+            };
+
+            let synthetic_cell = b"C";
+            let synthetic_cell_qual = b"I";
+            let synthetic_umi = IntToStr::from_u64(identity.molecule_id)
+                .to_string(32)
+                .into_bytes();
+            let synthetic_umi_qual = vec![b'I'; synthetic_umi.len()];
+
+            let read_tag = ReadTagRecord::new(
+                emitted_r2.id.clone(),
+                Some(r2.id.clone()),
+                synthetic_cell,
+                synthetic_cell_qual,
+                &synthetic_umi,
+                &synthetic_umi_qual,
+            );
+
+            self.candidates.push(IlluminaCandidate {
+                dedup_key,
+                fastq_record: emitted_r2,
+                paired_r1_record,
+                read_tag,
+            });
+            self.stats.report("candidate_pairs");
+            return Ok(());
+        }
+
+        let cell = cell.expect("barcoded grammar must have CELL");
+        let umi = umi.expect("barcoded grammar must have UMI");
 
         let cell_id = IntToStr::new(&cell.seq).into_u64();
         let umi_id = IntToStr::new(&umi.seq).into_u64();
@@ -131,22 +198,6 @@ impl IlluminaPartial {
                 None
             }
         };
-
-        let cell_str = std::str::from_utf8(&cell.seq).unwrap();
-        let cell_id = IntToStr::str_to_u64(cell_str)
-            .expect("cell barcode should be <=32 bp ACGT after primer extraction");
-
-        let mut hard_key = Vec::with_capacity(32);
-        hard_key.extend_from_slice(&umi.seq);
-
-        let remaining = 32usize.saturating_sub(umi.seq.len());
-        hard_key.extend_from_slice(&r2.seq[..remaining.min(r2.seq.len())]);
-
-        let hard_umi_str = std::str::from_utf8(&hard_key).unwrap();
-        let hard_umi = IntToStr::str_to_u64(hard_umi_str)
-            .expect("hard UMI should be <=32 bp ACGT after construction");
-
-        let dedup_key = DedupKey { cell_id, hard_umi };
 
         let read_tag = ReadTagRecord::new(
             emitted_r2.id.clone(),

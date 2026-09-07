@@ -1872,10 +1872,9 @@ dependencies = [
  "clap",
  "flate2",
  "gtf_splice_index",
- "lumrik-status",
- "mapping_info",
- "rayon",
+ "int-to-str",
  "rust-htslib",
+ "scdata",
  "tempfile",
 ]
 

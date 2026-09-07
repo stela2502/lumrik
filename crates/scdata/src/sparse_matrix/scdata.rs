@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use core::fmt;
 use rayon::prelude::*;
@@ -7,15 +7,15 @@ use mapping_info::MappingInfo;
 
 use crate::cell_data::CellData;
 use crate::cell_data::GeneUmiHash;
-use crate::{FeatureIndex, MatrixValueType};
+use crate::{CellHash, FeatureIndex, MatrixValueType};
 
 /// Sparse single-cell count store.
 ///
-/// Cells are partitioned into 256 buckets by the top byte of the cell id.
-/// Each bucket stores `CellData` objects keyed by the full cell id.
+/// Cells are partitioned into 256 buckets by the first packed 4-base byte
+/// produced by `IntToStr`. Each bucket stores `CellData` keyed by the full cell id.
 pub struct Scdata {
-    /// 256 buckets, indexed by top 8 bits of the cell id.
-    pub(crate) data: [HashMap<u64, CellData>; u8::MAX as usize + 1],
+    /// Shared 256-bucket cell store.
+    pub(crate) data: CellHash<CellData>,
 
     /// Cached ordered feature ids currently observed in retained cells.
     pub(crate) feature_ids_with_data: Vec<u64>,
@@ -130,7 +130,7 @@ impl fmt::Display for Scdata {
 impl Scdata {
     /// Create a new empty sparse matrix store.
     pub fn new(num_threads: usize, value_type: MatrixValueType) -> Self {
-        let data = std::array::from_fn(|_| HashMap::<u64, CellData>::new());
+        let data = CellHash::<CellData>::new();
 
         Self {
             data,
@@ -155,10 +155,10 @@ impl Scdata {
         &self.value_type
     }
 
-    /// Map a cell id to one of the 256 storage buckets.
+    /// Map a cell id to the bucket selected by its first packed 4-base byte.
     #[inline]
     fn to_key(&self, name: &u64) -> usize {
-        (*name >> 56) as usize
+        CellHash::<CellData>::bucket_index(*name)
     }
 
     /// Invalidate cached export-derived state after matrix mutation.
@@ -195,8 +195,7 @@ impl Scdata {
 
     /// Get read-only access to one cell by id.
     pub fn get(&self, key: &u64) -> Option<&CellData> {
-        let index = self.to_key(key);
-        self.data[index].get(key)
+        self.data.get_cell(key)
     }
 
     /// Merge another matrix into this one in parallel, bucket by bucket.

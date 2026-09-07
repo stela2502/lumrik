@@ -105,4 +105,3 @@ pub struct Cli {
     )]
     pub min_transcript_len: usize,
 }
-

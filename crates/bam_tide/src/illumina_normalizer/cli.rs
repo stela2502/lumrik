@@ -173,4 +173,3 @@ pub struct Cli {
     )]
     pub no_gzip: bool,
 }
-

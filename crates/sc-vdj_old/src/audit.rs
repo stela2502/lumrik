@@ -413,7 +413,7 @@ fn alignment_label(alignment: Option<&crate::posterior::ReadSegmentAlignment>) -
 
 fn write_candidate_proteins<W: Write>(out: &mut W, header: &str, sequence: &[u8]) -> Result<()> {
     for frame in 0..3 {
-        let protein = translate_frame(sequence, frame);
+        let protein = crate::sequence::translate_frame(sequence, frame);
         let stops = protein.iter().filter(|&&aa| aa == b'*').count();
         writeln!(out, ">{header}|frame={frame}|aa_len={}|stops={stops}", protein.len())?;
         write_fasta_sequence(out, &protein)?;
@@ -421,51 +421,6 @@ fn write_candidate_proteins<W: Write>(out: &mut W, header: &str, sequence: &[u8]
     Ok(())
 }
 
-fn translate_frame(sequence: &[u8], frame: usize) -> Vec<u8> {
-    sequence
-        .get(frame..)
-        .unwrap_or_default()
-        .chunks_exact(3)
-        .map(translate_codon)
-        .collect()
-}
-
-fn translate_codon(codon: &[u8]) -> u8 {
-    if codon.len() != 3 {
-        return b'X';
-    }
-    let a = codon[0].to_ascii_uppercase();
-    let b = codon[1].to_ascii_uppercase();
-    let c = codon[2].to_ascii_uppercase();
-    match (a, b, c) {
-        (b'T', b'T', b'T' | b'C') => b'F',
-        (b'T', b'T', b'A' | b'G') => b'L',
-        (b'T', b'C', _) => b'S',
-        (b'T', b'A', b'T' | b'C') => b'Y',
-        (b'T', b'A', b'A' | b'G') => b'*',
-        (b'T', b'G', b'T' | b'C') => b'C',
-        (b'T', b'G', b'A') => b'*',
-        (b'T', b'G', b'G') => b'W',
-        (b'C', b'T', _) => b'L',
-        (b'C', b'C', _) => b'P',
-        (b'C', b'A', b'T' | b'C') => b'H',
-        (b'C', b'A', b'A' | b'G') => b'Q',
-        (b'C', b'G', _) => b'R',
-        (b'A', b'T', b'T' | b'C' | b'A') => b'I',
-        (b'A', b'T', b'G') => b'M',
-        (b'A', b'C', _) => b'T',
-        (b'A', b'A', b'T' | b'C') => b'N',
-        (b'A', b'A', b'A' | b'G') => b'K',
-        (b'A', b'G', b'T' | b'C') => b'S',
-        (b'A', b'G', b'A' | b'G') => b'R',
-        (b'G', b'T', _) => b'V',
-        (b'G', b'C', _) => b'A',
-        (b'G', b'A', b'T' | b'C') => b'D',
-        (b'G', b'A', b'A' | b'G') => b'E',
-        (b'G', b'G', _) => b'G',
-        _ => b'X',
-    }
-}
 
 fn support_name(call: &RearrangementCall, kind: SegmentKind) -> &str {
     let support = match kind {
@@ -647,8 +602,8 @@ mod tests {
 
     #[test]
     fn translates_all_standard_codons_used_in_simple_example() {
-        assert_eq!(translate_frame(b"ATGGCTTAA", 0), b"MA*");
-        assert_eq!(translate_frame(b"NATGCT", 0), b"XA");
+        assert_eq!(crate::sequence::translate_frame(b"ATGGCTTAA", 0), b"MA*");
+        assert_eq!(crate::sequence::translate_frame(b"NATGCT", 0), b"XA");
     }
 
     #[test]

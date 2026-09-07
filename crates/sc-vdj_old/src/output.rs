@@ -1,3 +1,4 @@
+use crate::airr::annotate_rearrangement;
 use crate::identity::{PackedRecombinationId, RecombinationMeasurements};
 use crate::posterior::CellVdjSummary;
 use crate::types::Chain;
@@ -20,6 +21,7 @@ struct SampleAccumulator {
 pub struct ReportWriter {
     summary: BufWriter<File>,
     calls: BufWriter<File>,
+    airr: BufWriter<File>,
     sterile: BufWriter<File>,
     intervals: BufWriter<File>,
     rationale: BufWriter<File>,
@@ -42,6 +44,11 @@ impl ReportWriter {
             calls,
             "cell\trecombination_id\tchain\tstage\tnotation\tv\td\tj\tc\tumis\tv_locus_fraction\tv_distance_to_center\tv_del_3\tp_v3_len\tp_v3\tn1_len\tn1\tp_d5_len\tp_d5\td_del_5\td_retained_len\td_del_3\td_inferred_from_vj_junction\td_hypothesis_margin\tp_d3_len\tp_d3\tn2_len\tn2\tp_j5_len\tp_j5\tj_del_5\tpn_alternative\tobserved_v\tobserved_d\tobserved_j\tnaive_v\tnaive_d\tnaive_j\tobserved_rearrangement\tnaive_recombination"
         )?;
+        let mut airr = BufWriter::new(File::create(dir.join("airr_rearrangements.tsv"))?);
+        writeln!(
+            airr,
+            "sequence_id\tsequence\tsequence_aa\trev_comp\tproductive\tvj_in_frame\tstop_codon\tcomplete_vdj\tlocus\tv_call\td_call\tj_call\tc_call\tsequence_alignment\tgermline_alignment\tjunction\tjunction_aa\tnp1\tnp2\tcdr3\tcdr3_aa\tjunction_length\tjunction_aa_length\tcdr3_start\tcdr3_end\tnp1_length\tnp2_length\tcell_id\tlumrik_supporting_umis\tlumrik_v_cys_anchor\tlumrik_j_anchor"
+        )?;
         let mut sterile = BufWriter::new(File::create(dir.join("vdj_sterile_spatial.tsv"))?);
         writeln!(sterile,"cell\tchain\tbin\tstart_fraction\tend_fraction\tunique_umis\treads\tbreadth\tcentroid\tproximal_fraction\tdistal_fraction")?;
         let mut intervals = BufWriter::new(File::create(dir.join("vdj_sterile_intervals.tsv"))?);
@@ -51,6 +58,7 @@ impl ReportWriter {
         Ok(Self {
             summary,
             calls,
+            airr,
             sterile,
             intervals,
             rationale,
@@ -136,6 +144,69 @@ impl ReportWriter {
                     seq(junction.map(|x| x.inferred_naive_sequence.as_slice())),
                 ];
                 writeln!(self.calls, "{}", fields.join("\t"))?;
+
+                let airr = annotate_rearrangement(r);
+                let sequence_id = PackedRecombinationId::from_call(r)
+                    .map(|x| format!("{}|{}", c.cell, x))
+                    .unwrap_or_else(|| format!("{}|{}|{}", c.cell, r.chain, r.notation));
+                let bool_field = |value: Option<bool>| {
+                    value.map(|x| if x { "T" } else { "F" }.to_string()).unwrap_or_default()
+                };
+                let text = |value: &[u8]| String::from_utf8_lossy(value).into_owned();
+                let np1 = junction.map(|x| {
+                    let mut sequence = Vec::new();
+                    sequence.extend_from_slice(&x.p_v3);
+                    sequence.extend_from_slice(&x.n1);
+                    if r.chain.has_d() {
+                        sequence.extend_from_slice(&x.p_d5);
+                    } else {
+                        sequence.extend_from_slice(&x.p_j5);
+                    }
+                    sequence
+                }).unwrap_or_default();
+                let np2 = junction.filter(|_| r.chain.has_d()).map(|x| {
+                    let mut sequence = Vec::new();
+                    sequence.extend_from_slice(&x.p_d3);
+                    sequence.extend_from_slice(&x.n2);
+                    sequence.extend_from_slice(&x.p_j5);
+                    sequence
+                }).unwrap_or_default();
+                let np1_length = junction.map(|_| np1.len().to_string()).unwrap_or_default();
+                let np2_length = junction.filter(|_| r.chain.has_d()).map(|_| np2.len().to_string()).unwrap_or_default();
+                let airr_fields = vec![
+                    sequence_id,
+                    text(&airr.sequence),
+                    text(&airr.sequence_aa),
+                    "F".to_string(),
+                    bool_field(airr.productive),
+                    bool_field(airr.vj_in_frame),
+                    bool_field(airr.stop_codon),
+                    String::new(),
+                    r.chain.to_string(),
+                    id(&r.v).to_string(),
+                    id(&r.d).to_string(),
+                    id(&r.j).to_string(),
+                    id(&r.c).to_string(),
+                    text(&airr.sequence),
+                    String::new(),
+                    text(&airr.junction),
+                    text(&airr.junction_aa),
+                    text(&np1),
+                    text(&np2),
+                    text(&airr.cdr3),
+                    text(&airr.cdr3_aa),
+                    (!airr.junction.is_empty()).then_some(airr.junction.len().to_string()).unwrap_or_default(),
+                    (!airr.junction_aa.is_empty()).then_some(airr.junction_aa.len().to_string()).unwrap_or_default(),
+                    airr.cdr3_start.map(|x| x.to_string()).unwrap_or_default(),
+                    airr.cdr3_end.map(|x| x.to_string()).unwrap_or_default(),
+                    np1_length,
+                    np2_length,
+                    c.cell.clone(),
+                    r.total_supporting_umis.to_string(),
+                    bool_field(airr.v_cys_anchor),
+                    bool_field(airr.j_anchor),
+                ];
+                writeln!(self.airr, "{}", airr_fields.join("\t"))?;
             }
 
             for p in &c.sterile {
@@ -189,6 +260,7 @@ impl ReportWriter {
     pub fn finish(mut self) -> Result<()> {
         self.summary.flush()?;
         self.calls.flush()?;
+        self.airr.flush()?;
         self.sterile.flush()?;
         self.intervals.flush()?;
         self.rationale.flush()?;

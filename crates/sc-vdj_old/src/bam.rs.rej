@@ -1,0 +1,179 @@
+--- crates/sc-vdj/src/bam.rs	2026-09-04 10:27:39.918926424 +0000
++++ crates/sc-vdj/src/bam.rs	2026-09-04 10:27:51.598564263 +0000
+@@ -1,6 +1,6 @@
+ use crate::posterior::BamReadEvidence;
+ use crate::reference::VdjReference;
+-use crate::cell_evidence::{absorb_provisional, BamFeatureSequenceParts, CellEvidence, CellRecombinationResults, InitialMapperResults};
++use crate::cell_evidence::{absorb_provisional, BamFeatureSequenceParts, CellEvidence, CellRecombinationResults, InitialMapperResults, MappedSegment};
+ use rayon::prelude::*;
+ use int_to_str::IntToStr;
+ use scdata::CellHash;
+@@ -107,7 +107,9 @@
+ struct SegmentInterval {
+     start: u32,
+     end: u32,
++    segment_index: usize,
+     chain: crate::types::Chain,
++    kind: crate::types::SegmentKind,
+ }
+ 
+ /// Small BAM-TID routing table derived directly from the serialized VDJ index.
+@@ -127,7 +129,7 @@
+             );
+         }
+         let mut by_tid = vec![Vec::new(); header.target_count() as usize];
+-        for segment in &reference.segments {
++        for (segment_index, segment) in reference.segments.iter().enumerate() {
+             let Some(&tid) = tid_by_name.get(&segment.chr) else {
+                 continue;
+             };
+@@ -137,11 +139,13 @@
+             by_tid[tid].push(SegmentInterval {
+                 start: segment.start,
+                 end: segment.end,
++                segment_index,
+                 chain: segment.chain,
++                kind: segment.kind,
+             });
+         }
+         for intervals in &mut by_tid {
+-            intervals.sort_by_key(|interval| (interval.start, interval.end, chain_index(interval.chain)));
++            intervals.sort_by_key(|interval| (interval.start, interval.end, chain_index(interval.chain), interval.segment_index));
+         }
+         Self { by_tid }
+     }
+@@ -154,15 +158,15 @@
+                 .is_some_and(|intervals| !intervals.is_empty())
+     }
+ 
+-    fn matching_chains(&self, record: &bam::Record) -> Vec<crate::types::Chain> {
+-        self.matching_chains_for_blocks(record.tid(), &aligned_blocks(record))
++    fn matching_segments(&self, record: &bam::Record) -> Vec<MappedSegment> {
++        self.matching_segments_for_blocks(record.tid(), &aligned_blocks(record))
+     }
+ 
+-    fn matching_chains_for_blocks(
++    fn matching_segments_for_blocks(
+         &self,
+         tid: i32,
+         blocks: &[(u32, u32)],
+-    ) -> Vec<crate::types::Chain> {
++    ) -> Vec<MappedSegment> {
+         if tid < 0 || blocks.is_empty() {
+             return Vec::new();
+         }
+@@ -173,24 +177,37 @@
+             return Vec::new();
+         }
+ 
+-        let mut seen = [false; 7];
++        let mut out = Vec::new();
+         for &(block_start, block_end) in blocks {
+-            // Intervals are sorted by start. Once an interval starts beyond the
+-            // aligned block, no later segment can overlap this block.
+             for interval in intervals {
+                 if interval.start >= block_end {
+                     break;
+                 }
+-                if interval.end > block_start {
+-                    seen[chain_index(interval.chain)] = true;
++                if interval.end > block_start
++                    && !out.iter().any(|hit: &MappedSegment| hit.segment_index == interval.segment_index)
++                {
++                    out.push(MappedSegment {
++                        segment_index: interval.segment_index,
++                        chain: interval.chain,
++                        kind: interval.kind,
++                    });
+                 }
+             }
+         }
+-        crate::types::Chain::ALL
+-            .into_iter()
+-            .filter(|chain| seen[chain_index(*chain)])
+-            .collect()
++        out.sort_by_key(|hit| (chain_index(hit.chain), hit.kind, hit.segment_index));
++        out
+     }
++
++    fn matching_chains(&self, record: &bam::Record) -> Vec<crate::types::Chain> {
++        let mut chains = Vec::new();
++        for hit in self.matching_segments(record) {
++            if !chains.contains(&hit.chain) {
++                chains.push(hit.chain);
++            }
++        }
++        chains
++    }
++
+ }
+ 
+ fn chain_index(chain: crate::types::Chain) -> usize {
+@@ -452,8 +469,8 @@
+         }
+         stats.receptor_chromosome_records += 1;
+ 
+-        let chains = router.matching_chains(&record);
+-        if chains.is_empty() {
++        let mapped_segments = router.matching_segments(&record);
++        if mapped_segments.is_empty() {
+             stats.non_segment_overlap_records += 1;
+             continue;
+         }
+@@ -507,13 +524,19 @@
+             *sequence_slot = Some((record.seq().as_bytes(), record.qual().to_vec()));
+         }
+         mappings.push(InitialMapperResults {
+-            chains: chains.clone(),
++            segments: mapped_segments.clone(),
+             read2,
+             ref_blocks: aligned_blocks(&record),
+             mapq: record.mapq(),
+             is_supplementary: record.is_supplementary(),
+         });
+ 
++        let mut chains = Vec::new();
++        for segment in &mapped_segments {
++            if !chains.contains(&segment.chain) {
++                chains.push(segment.chain);
++            }
++        }
+         for chain in chains {
+             provisional_count += 1;
+             stats.locus_records[chain_index(chain)] += 1;
+@@ -584,26 +607,26 @@
+     fn routes_only_actual_segment_overlaps() {
+         let router = BamLocusRouter {
+             by_tid: vec![vec![
+-                SegmentInterval { start: 100, end: 150, chain: crate::types::Chain::Igh },
+-                SegmentInterval { start: 300, end: 350, chain: crate::types::Chain::Igk },
++                SegmentInterval { start: 100, end: 150, segment_index: 0, chain: crate::types::Chain::Igh, kind: crate::types::SegmentKind::V },
++                SegmentInterval { start: 300, end: 350, segment_index: 1, chain: crate::types::Chain::Igk, kind: crate::types::SegmentKind::C },
+             ]],
+         };
+-        assert_eq!(router.matching_chains_for_blocks(0, &[(120, 130)]), vec![crate::types::Chain::Igh]);
+-        assert!(router.matching_chains_for_blocks(0, &[(200, 250)]).is_empty());
+-        assert_eq!(router.matching_chains_for_blocks(0, &[(320, 330)]), vec![crate::types::Chain::Igk]);
++        assert_eq!(router.matching_segments_for_blocks(0, &[(120, 130)]).iter().map(|hit| (hit.segment_index, hit.chain, hit.kind)).collect::<Vec<_>>(), vec![(0, crate::types::Chain::Igh, crate::types::SegmentKind::V)]);
++        assert!(router.matching_segments_for_blocks(0, &[(200, 250)]).is_empty());
++        assert_eq!(router.matching_segments_for_blocks(0, &[(320, 330)]).iter().map(|hit| (hit.segment_index, hit.chain, hit.kind)).collect::<Vec<_>>(), vec![(1, crate::types::Chain::Igk, crate::types::SegmentKind::C)]);
+     }
+ 
+     #[test]
+     fn nested_tra_trd_segments_can_route_to_both_loci() {
+         let router = BamLocusRouter {
+             by_tid: vec![vec![
+-                SegmentInterval { start: 100, end: 160, chain: crate::types::Chain::Tra },
+-                SegmentInterval { start: 130, end: 180, chain: crate::types::Chain::Trd },
++                SegmentInterval { start: 100, end: 160, segment_index: 0, chain: crate::types::Chain::Tra, kind: crate::types::SegmentKind::C },
++                SegmentInterval { start: 130, end: 180, segment_index: 1, chain: crate::types::Chain::Trd, kind: crate::types::SegmentKind::C },
+             ]],
+         };
+         assert_eq!(
+-            router.matching_chains_for_blocks(0, &[(140, 150)]),
+-            vec![crate::types::Chain::Tra, crate::types::Chain::Trd]
++            router.matching_segments_for_blocks(0, &[(140, 150)]).iter().map(|hit| (hit.chain, hit.kind)).collect::<Vec<_>>(),
++            vec![(crate::types::Chain::Tra, crate::types::SegmentKind::C), (crate::types::Chain::Trd, crate::types::SegmentKind::C)]
+         );
+     }
+ 

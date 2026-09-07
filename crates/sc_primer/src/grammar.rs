@@ -4,6 +4,15 @@ use crate::single_cell_systems::*;
 
 use int_to_str::IntToStr;
 
+const MOLECULE_KEY_BASES: usize = 32;
+const UNBARCODED_BASES_PER_MATE: usize = MOLECULE_KEY_BASES / 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MoleculeIdentity {
+    pub cell_id: u64,
+    pub molecule_id: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Grammar {
     pub name: String,
@@ -91,6 +100,84 @@ impl Grammar {
         self.umi_len
     }
 
+    /// True when the grammar contains neither a cell barcode nor a UMI.
+    ///
+    /// This includes the explicit `NONE` grammar and INSERT-only grammars.
+    pub fn is_unbarcoded(&self) -> bool {
+        self.cell_len == 0 && self.umi_len == 0
+    }
+
+    /// Construct the compact molecule identity dictated by this grammar.
+    ///
+    /// Barcoded grammars intentionally preserve the existing Lumrik rule:
+    /// cell = 2-bit CELL; molecule = UMI followed by enough R2 bases to fill
+    /// the 32-base `u64` key.
+    ///
+    /// Unbarcoded (NONE / INSERT-only) grammars use 16 bases from R1 and 16
+    /// bases from R2.  The synthetic cell id is constant so all molecules are
+    /// quantified as one sample/cell while the sequence-derived molecule id
+    /// provides PCR deduplication.
+    pub fn molecule_identity(
+        &self,
+        cell: Option<&[u8]>,
+        umi: Option<&[u8]>,
+        r1: &[u8],
+        r2: &[u8],
+    ) -> PrimerResult<MoleculeIdentity> {
+        if self.is_unbarcoded() {
+            if r1.len() < UNBARCODED_BASES_PER_MATE || r2.len() < UNBARCODED_BASES_PER_MATE {
+                return Err(PrimerError::invalid_coordinates(format!(
+                    "unbarcoded molecule identity requires at least {UNBARCODED_BASES_PER_MATE} bases in both R1 and R2"
+                )));
+            }
+
+            let mut hard_key = Vec::with_capacity(MOLECULE_KEY_BASES);
+            hard_key.extend_from_slice(&r1[..UNBARCODED_BASES_PER_MATE]);
+            hard_key.extend_from_slice(&r2[..UNBARCODED_BASES_PER_MATE]);
+
+            return Ok(MoleculeIdentity {
+                cell_id: 1,
+                molecule_id: Self::encode_molecule_key(&hard_key)?,
+            });
+        }
+
+        if self.cell_len == 0 || self.umi_len == 0 {
+            return Err(PrimerError::invalid_grammar(
+                "molecule identity requires both CELL and UMI, or neither",
+            ));
+        }
+
+        let cell = cell.ok_or_else(|| PrimerError::invalid_coordinates("missing CELL sequence"))?;
+        let umi = umi.ok_or_else(|| PrimerError::invalid_coordinates("missing UMI sequence"))?;
+
+        let cell_id = Self::encode_molecule_key(cell)?;
+
+        let mut hard_key = Vec::with_capacity(MOLECULE_KEY_BASES);
+        hard_key.extend_from_slice(umi);
+        let remaining = MOLECULE_KEY_BASES.saturating_sub(umi.len());
+        hard_key.extend_from_slice(&r2[..remaining.min(r2.len())]);
+
+        Ok(MoleculeIdentity {
+            cell_id,
+            molecule_id: Self::encode_molecule_key(&hard_key)?,
+        })
+    }
+
+    fn encode_molecule_key(seq: &[u8]) -> PrimerResult<u64> {
+        if seq.len() > MOLECULE_KEY_BASES {
+            return Err(PrimerError::invalid_coordinates(format!(
+                "molecule identity sequence exceeds {MOLECULE_KEY_BASES} bases"
+            )));
+        }
+        if !seq.iter().all(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T')) {
+            return Err(PrimerError::invalid_coordinates(
+                "molecule identity sequence contains a non-ACGT base",
+            ));
+        }
+
+        Ok(IntToStr::new(seq).into_u64())
+    }
+
     pub fn umi_from_u64(&self, id: u64) -> Vec<u8> {
         IntToStr::from_u64(id).to_string(self.umi_len).into_bytes()
     }
@@ -104,6 +191,12 @@ impl Grammar {
     }
 
     pub fn parse(name: impl Into<String>, structure: &str) -> PrimerResult<Self> {
+        let name = name.into();
+
+        if structure.trim().eq_ignore_ascii_case("NONE") {
+            return Self::new(name, Vec::new());
+        }
+
         let mut ops = Vec::new();
 
         for raw in structure.split('+') {

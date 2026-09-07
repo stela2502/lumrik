@@ -1,6 +1,6 @@
 use std::io::{BufRead, Write};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RmskConversionSummary {
@@ -38,16 +38,17 @@ pub fn convert_ucsc_rmsk_to_gtf<R: BufRead, W: Write>(
         }
 
         let chrom = fields[5];
-        let start0: u64 = fields[6]
-            .parse()
-            .with_context(|| format!("UCSC rmsk line {line_no}: invalid genoStart {:?}", fields[6]))?;
-        let end0: u64 = fields[7]
-            .parse()
-            .with_context(|| format!("UCSC rmsk line {line_no}: invalid genoEnd {:?}", fields[7]))?;
+        let start0: u64 = fields[6].parse().with_context(|| {
+            format!(
+                "UCSC rmsk line {line_no}: invalid genoStart {:?}",
+                fields[6]
+            )
+        })?;
+        let end0: u64 = fields[7].parse().with_context(|| {
+            format!("UCSC rmsk line {line_no}: invalid genoEnd {:?}", fields[7])
+        })?;
         if end0 <= start0 {
-            bail!(
-                "UCSC rmsk line {line_no}: invalid half-open interval {chrom}:{start0}-{end0}"
-            );
+            bail!("UCSC rmsk line {line_no}: invalid half-open interval {chrom}:{start0}-{end0}");
         }
 
         let strand = match fields[9] {
@@ -113,8 +114,8 @@ mod tests {
     #[test]
     fn rejects_wrong_table_shape() {
         let mut output = Vec::new();
-        let err = convert_ucsc_rmsk_to_gtf(Cursor::new(b"too\tfew\tcolumns\n"), &mut output)
-            .unwrap_err();
+        let err =
+            convert_ucsc_rmsk_to_gtf(Cursor::new(b"too\tfew\tcolumns\n"), &mut output).unwrap_err();
         assert!(err.to_string().contains("expected at least 17"));
     }
 

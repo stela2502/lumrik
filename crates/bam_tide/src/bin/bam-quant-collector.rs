@@ -17,7 +17,11 @@ use bam_tide::quantification::{
 use gtf_splice_index::SpliceIndex;
 
 #[derive(Debug, Parser)]
-#[command(author, version, about = "Quantify one or more BAM files with bam-tide BamCollector")]
+#[command(
+    author,
+    version,
+    about = "Quantify one or more BAM files with bam-tide BamCollector"
+)]
 struct Cli {
     #[command(flatten)]
     quant: QuantCli,

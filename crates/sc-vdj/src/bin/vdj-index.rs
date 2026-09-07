@@ -1,42 +1,31 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use sc_vdj::{VdjMapper, VdjMapperConfig, VdjReferenceBuilder};
+use sc_vdj::VdjIndexBuilder;
 use std::path::PathBuf;
-
-
 #[derive(Debug, Parser)]
 #[command(
     author,
     version,
     name = "vdj-index",
-    about = "Compile a reusable Lumrik V(D)J germline + seed index",
-    after_help = "The resulting .vdjidx is the preferred reference input for nelrune-vdj and
-vdj-summary; it avoids rebuilding the germline and seed indices for every run."
+    about = "Build a compact V/D/J/C index for sc-vdj"
 )]
 struct Cli {
-    /// Genome annotation containing antigen-receptor segments.
-    #[arg(long, value_name = "GTF")]
+    #[arg(long)]
     gtf: PathBuf,
-
-    /// Genome FASTA matching the annotation.
-    #[arg(long, value_name = "FASTA")]
+    #[arg(long)]
     genome: PathBuf,
-
-    /// Output compiled V(D)J index.
-    #[arg(long, value_name = "FILE.vdjidx")]
+    #[arg(long)]
     out: PathBuf,
 }
-
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let gtf = cli.gtf;
-    let genome = cli.genome;
-    let out = cli.out;
-    eprintln!("building V(D)J germline reference...");
-    let reference = VdjReferenceBuilder::default().build(&gtf, &genome)?;
-    eprintln!("building ambiguity-aware coverage + identity seed indices for {} segments...", reference.len());
-    let mapper = VdjMapper::new(reference, VdjMapperConfig::default());
-    mapper.save_index(&out).with_context(|| format!("writing {}", out.display()))?;
-    println!("VDJ index v4 written to {}", out.display());
+    let c = Cli::parse();
+    let idx = VdjIndexBuilder::default()
+        .build(&c.gtf, &c.genome)
+        .context("building VDJ index")?;
+    idx.save(&c.out)?;
+    println!("VDJ index: {} segments -> {}", idx.len(), c.out.display());
+    for ((chain, kind), n) in idx.counts() {
+        println!("  {chain} {kind:?}: {n}")
+    }
     Ok(())
 }

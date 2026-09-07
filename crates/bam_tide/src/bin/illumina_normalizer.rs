@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use clap::Parser;
 use bam_tide::illumina_normalizer::{IlluminaNormalizer, cli::Cli};
+use clap::Parser;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();

@@ -2,8 +2,8 @@ use crate::{Factor, factor::FactorJson};
 use anyhow::Result;
 use csv::WriterBuilder;
 use ndarray::{Array2, Axis, concatenate, s};
-use rand::seq::SliceRandom;
 use rand::rng;
+use rand::seq::SliceRandom;
 use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -159,10 +159,11 @@ impl DataTable {
                     }
                     Err(_) => {
                         if (trimmed.is_empty() || trimmed.eq_ignore_ascii_case("NA"))
-                            && !ret.factors.contains_key(&headers[i + expanded]) {
-                                row.push(f64::NAN);
-                                continue;
-                            }
+                            && !ret.factors.contains_key(&headers[i + expanded])
+                        {
+                            row.push(f64::NAN);
+                            continue;
+                        }
                         let factor = ret
                             .factors
                             .entry(headers[i + expanded].clone())
@@ -472,7 +473,6 @@ Each level will be represented as a separate binary column (0/1) if one-hot enco
         (make_subset(train_data), make_subset(test_data))
     }
 
-
     pub fn data_summary(&self) {
         println!(
             "Shape: {} rows x {} columns",
@@ -501,10 +501,8 @@ Each level will be represented as a separate binary column (0/1) if one-hot enco
         }
     }
 
-
-
     /// Remove all rows that contain any NaN in numeric_data
-    pub fn filter_all_na_rows(&mut self, usable: &[String] ) {
+    pub fn filter_all_na_rows(&mut self, usable: &[String]) {
         let n_rows = self.numeric_data.nrows();
         let n_cols = self.numeric_data.ncols();
         println!(
@@ -867,8 +865,7 @@ Each level will be represented as a separate binary column (0/1) if one-hot enco
     /// Return a single column as Vec<u8>
     pub fn as_vec_u8(&self, column: &str) -> Vec<u8> {
         let idx = self.headers.iter().position(|h| h == column)
-            .unwrap_or_else(|| 
-                panic!("Column '{}' not found in the dataset; all columns: \n{}\nColumn '{}' not found in the dataset", 
+            .unwrap_or_else(|| panic!("Column '{}' not found in the dataset; all columns: \n{}\nColumn '{}' not found in the dataset", 
                     column, self.headers(20).join("\n") ,column ));
         self.numeric_data
             .column(idx)
@@ -962,10 +959,8 @@ Each level will be represented as a separate binary column (0/1) if one-hot enco
     }
 }
 
-
-
 #[cfg(test)]
-mod tests{
+mod tests {
     use std::collections::HashSet;
     use std::fs::File;
     use std::io::Write;

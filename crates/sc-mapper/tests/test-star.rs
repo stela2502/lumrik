@@ -248,7 +248,6 @@ fn star_from_cli_maps_after_input_is_closed() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn star_relative_index_survives_private_mapper_workdir() -> Result<()> {
     if !star_available() {
@@ -266,8 +265,8 @@ fn star_relative_index_survives_private_mapper_workdir() -> Result<()> {
      * a caller-relative index must remain usable after mapper spawn.
      */
     let cwd = std::env::current_dir().context("failed to get test working directory")?;
-    let tmpdir = tempfile::tempdir_in(&cwd)
-        .context("failed to create relative-path STAR test directory")?;
+    let tmpdir =
+        tempfile::tempdir_in(&cwd).context("failed to create relative-path STAR test directory")?;
 
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/tiny.fa");
     let fasta = tmpdir.path().join("tiny.fa");

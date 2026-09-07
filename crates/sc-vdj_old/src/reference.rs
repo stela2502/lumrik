@@ -1,10 +1,11 @@
 use crate::sequence::{normalize_reference_dna, reverse_complement};
 use crate::types::{Chain, SegmentKind, VdjSegment};
 use anyhow::{anyhow, bail, Context, Result};
+use flate2::read::MultiGzDecoder;
 use gtf_splice_index::{IdNameKeys, SpliceIndex, Strand};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 #[derive(Debug, Clone, Default)]
@@ -211,10 +212,18 @@ fn annotate_geometry(segments: &mut [VdjSegment]) {
     }
 }
 
+
+fn open_maybe_gz(path: &Path, kind: &str) -> Result<Box<dyn Read>> {
+    let file = File::open(path).with_context(|| format!("opening {kind} {}", path.display()))?;
+    if path.extension().and_then(|ext| ext.to_str()) == Some("gz") {
+        Ok(Box::new(MultiGzDecoder::new(file)))
+    } else {
+        Ok(Box::new(file))
+    }
+}
+
 fn discover_immune_transcripts(path: &Path) -> Result<HashMap<String, ImmuneTranscript>> {
-    let reader = BufReader::new(
-        File::open(path).with_context(|| format!("opening GTF {}", path.display()))?,
-    );
+    let reader = BufReader::new(open_maybe_gz(path, "GTF")?);
     let mut found = HashMap::new();
     for line in reader.lines() {
         let line = line?;
@@ -323,9 +332,7 @@ fn exact_or_numbered_family(n: &str, prefix: &str) -> bool {
 }
 
 fn read_fasta(path: &Path) -> Result<HashMap<String, Vec<u8>>> {
-    let reader = BufReader::new(
-        File::open(path).with_context(|| format!("opening genome FASTA {}", path.display()))?,
-    );
+    let reader = BufReader::new(open_maybe_gz(path, "genome FASTA")?);
     let mut genome = HashMap::new();
     let mut name: Option<String> = None;
     let mut seq = Vec::new();

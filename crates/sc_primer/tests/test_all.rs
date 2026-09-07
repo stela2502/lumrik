@@ -727,3 +727,74 @@ fn bd_v2_384_detect_all_does_not_repeat_search_window_hits() {
 
     assert_eq!(hits[0].insert_end, hits[1].primer_start);
 }
+
+#[test]
+fn molecule_identity_preserves_barcoded_hard_umi_rule() {
+    use int_to_str::IntToStr;
+
+    let grammar = Grammar::parse("identity", "CELL:4+UMI:4").unwrap();
+    let cell = b"ACGT";
+    let umi = b"TGCA";
+    let r2 = b"AACCGGTTAACCGGTTAACCGGTTAACCGGTT";
+
+    let identity = grammar
+        .molecule_identity(Some(cell), Some(umi), b"IGNORED_R1", r2)
+        .unwrap();
+
+    let old_cell = IntToStr::new(cell).into_u64();
+    let mut old_hard = umi.to_vec();
+    old_hard.extend_from_slice(&r2[..28]);
+    let old_hard = IntToStr::new(&old_hard).into_u64();
+
+    assert_eq!(identity.cell_id, old_cell);
+    assert_eq!(identity.molecule_id, old_hard);
+}
+
+#[test]
+fn none_and_insert_only_grammars_use_r1_and_r2_for_molecule_identity() {
+    let none = Grammar::parse("none", "NONE").unwrap();
+    let insert_only = Grammar::parse("insert", "INSERT:ACGT").unwrap();
+
+    assert!(none.is_unbarcoded());
+    assert!(insert_only.is_unbarcoded());
+
+    let r1 = b"AAAACCCCGGGGTTTTAAAA";
+    let r2 = b"TTTTGGGGCCCCAAAATTTT";
+
+    let none_id = none.molecule_identity(None, None, r1, r2).unwrap();
+    let insert_id = insert_only.molecule_identity(None, None, r1, r2).unwrap();
+    assert_eq!(none_id, insert_id);
+
+    let changed_r1 = b"CAAACCCCGGGGTTTTAAAA";
+    assert_ne!(
+        none_id.molecule_id,
+        none.molecule_identity(None, None, changed_r1, r2)
+            .unwrap()
+            .molecule_id
+    );
+
+    let changed_r2 = b"CTTTGGGGCCCCAAAATTTT";
+    assert_ne!(
+        none_id.molecule_id,
+        none.molecule_identity(None, None, r1, changed_r2)
+            .unwrap()
+            .molecule_id
+    );
+}
+
+#[test]
+fn none_grammar_treats_the_whole_read_as_insert() {
+    let grammar = Grammar::parse("none", "NONE").unwrap();
+    let detector = PrimerDetector::from_grammar(grammar).unwrap();
+    let seq = b"ACGTACGTACGTACGTACGT";
+    let qual = vec![b'I'; seq.len()];
+
+    let hit = detector.detect_first(seq, &qual).unwrap().unwrap();
+    let insert = hit.get_insert(seq, &qual).unwrap();
+
+    assert_eq!(insert.seq, seq);
+    assert_eq!(hit.primer_start, 0);
+    assert_eq!(hit.primer_end, 0);
+    assert_eq!(hit.insert_start, 0);
+    assert_eq!(hit.insert_end, seq.len());
+}

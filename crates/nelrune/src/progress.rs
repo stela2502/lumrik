@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use lumrik_status::{memory_status, ServerContent, ServerSnapshot, StatusMetric, StatusSection};
+use lumrik_status::{ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status};
 use mapping_info::MappingInfo;
 
 #[derive(Debug)]
@@ -339,7 +339,6 @@ impl RunProgress {
         }
     }
 }
-
 
 impl ServerContent for RunStatus {
     fn server_snapshot(&self) -> ServerSnapshot {

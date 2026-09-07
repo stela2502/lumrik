@@ -1,9 +1,9 @@
 // generate_json.rs
 
 use clap::{Arg, Command};
+use data_table::DataTable;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use data_table::DataTable;
 
 fn main() -> anyhow::Result<()> {
     let matches = Command::new("generate_json")
@@ -111,7 +111,6 @@ NOTES:
         Ok(_) => println!("This is strange - this should actually fail here!"),
         Err(e) => {
             println!("The hoefully expected error from the lib: {:?}", e);
-            
         }
     }
 

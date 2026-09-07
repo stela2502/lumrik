@@ -67,7 +67,12 @@ impl TeIndex {
     pub fn feature_coordinates(&self, feature_id: u64) -> Option<(&str, u64, u64, &str)> {
         let (chr_id, bin_id, gene_id) = self.feature_key(feature_id)?;
         let chrom = self.splice.chr_names.get(chr_id)?.as_str();
-        let gene = self.splice.genes.get(gene_id)?.primary_name().unwrap_or("TE");
+        let gene = self
+            .splice
+            .genes
+            .get(gene_id)?
+            .primary_name()
+            .unwrap_or("TE");
         let start = (bin_id as u64).saturating_mul(self.splice.bin_width as u64);
         let end = start.saturating_add(self.splice.bin_width as u64);
         Some((chrom, start, end, gene))
@@ -192,7 +197,8 @@ mod tests {
 
     #[test]
     fn creates_spatial_gene_features_lazily() {
-        let gtf = b"chr1\tx\texon\t101\t200\t.\t+\t.\tgene_id \"L1HS\"; transcript_id \"L1HS_1\";\n";
+        let gtf =
+            b"chr1\tx\texon\t101\t200\t.\t+\t.\tgene_id \"L1HS\"; transcript_id \"L1HS_1\";\n";
         let index = test_index(gtf);
 
         assert_eq!(index.annotation_gene_count(), 1);
@@ -203,7 +209,8 @@ mod tests {
 
     #[test]
     fn reports_position_and_gene() {
-        let gtf = b"chr1\tx\texon\t101\t200\t.\t+\t.\tgene_id \"L1HS\"; transcript_id \"L1HS_1\";\n";
+        let gtf =
+            b"chr1\tx\texon\t101\t200\t.\t+\t.\tgene_id \"L1HS\"; transcript_id \"L1HS_1\";\n";
         let mut index = test_index(gtf);
         let feature = index.feature_for_key((0, 0, 0));
 

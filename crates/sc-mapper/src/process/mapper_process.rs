@@ -28,10 +28,16 @@ fn mapper_tempdir() -> Result<TempDir> {
         Some(root) => {
             let root = PathBuf::from(root);
             fs::create_dir_all(&root).with_context(|| {
-                format!("failed to create Lumrik temporary directory `{}`", root.display())
+                format!(
+                    "failed to create Lumrik temporary directory `{}`",
+                    root.display()
+                )
             })?;
             tempfile::tempdir_in(&root).with_context(|| {
-                format!("failed to create temporary directory in `{}`", root.display())
+                format!(
+                    "failed to create temporary directory in `{}`",
+                    root.display()
+                )
             })
         }
         None => tempfile::tempdir().context("failed to create temporary directory"),
@@ -238,8 +244,8 @@ impl MapperProcess {
         base_args: &[String],
         header: Option<Header>,
     ) -> Result<Self> {
-        let input_tmpdir = mapper_tempdir()
-            .context("failed to create temporary paired FASTQ FIFO directory")?;
+        let input_tmpdir =
+            mapper_tempdir().context("failed to create temporary paired FASTQ FIFO directory")?;
 
         let work_tmpdir =
             mapper_tempdir().context("failed to create temporary mapper working directory")?;

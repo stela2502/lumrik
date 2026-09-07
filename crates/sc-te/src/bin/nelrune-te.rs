@@ -15,30 +15,45 @@ use scdata::Scdata;
 
 #[derive(Debug, Parser)]
 #[command(
-    name="nelrune-te",
-    about="Posterior TE rescue from a queryname-sorted 10x BAM"
+    name = "nelrune-te",
+    about = "Posterior TE rescue from a queryname-sorted 10x BAM"
 )]
 struct Cli {
-    #[arg(long)] bam: PathBuf,
-    #[arg(long="te-index")] te_index: PathBuf,
-    #[arg(long="mapper-index")] mapper_index: PathBuf,
-    #[arg(long="mapper-bin", default_value="STAR")] mapper_bin: PathBuf,
-    #[arg(long, default_value_t=4)] threads: usize,
-    #[arg(long, default_value_t=100)] max_multimap: usize,
+    #[arg(long)]
+    bam: PathBuf,
+    #[arg(long = "te-index")]
+    te_index: PathBuf,
+    #[arg(long = "mapper-index")]
+    mapper_index: PathBuf,
+    #[arg(long = "mapper-bin", default_value = "STAR")]
+    mapper_bin: PathBuf,
+    #[arg(long, default_value_t = 4)]
+    threads: usize,
+    #[arg(long, default_value_t = 100)]
+    max_multimap: usize,
     /// Reuse complete source-BAM mapping groups up to this NH value. Higher-NH
     /// groups, incomplete groups, and unmapped reads are remapped once with STAR.
-    #[arg(long, default_value_t=5)] remap_nh_above: usize,
-    #[arg(long, default_value_t=100)] em_iterations: usize,
-    #[arg(long, default_value_t=1e-7)] em_epsilon: f64,
-    #[arg(long, default_value="CB")] cell_tag: String,
-    #[arg(long, default_value="UB")] umi_tag: String,
-    #[arg(long, default_value_t=16)] cell_barcode_len: usize,
-    #[arg(long)] out: PathBuf,
+    #[arg(long, default_value_t = 5)]
+    remap_nh_above: usize,
+    #[arg(long, default_value_t = 100)]
+    em_iterations: usize,
+    #[arg(long, default_value_t = 1e-7)]
+    em_epsilon: f64,
+    #[arg(long, default_value = "CB")]
+    cell_tag: String,
+    #[arg(long, default_value = "UB")]
+    umi_tag: String,
+    #[arg(long, default_value_t = 16)]
+    cell_barcode_len: usize,
+    #[arg(long)]
+    out: PathBuf,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    if cli.cell_tag.len()!=2 || cli.umi_tag.len()!=2 { bail!("--cell-tag and --umi-tag must be exactly two characters"); }
+    if cli.cell_tag.len() != 2 || cli.umi_tag.len() != 2 {
+        bail!("--cell-tag and --umi-tag must be exactly two characters");
+    }
     fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
     let mut index = TeIndex::load(&cli.te_index)?;
     eprintln!(
@@ -52,18 +67,23 @@ fn main() -> Result<()> {
         mapper: MapperKind::Star,
         mapper_bin: Some(cli.mapper_bin.clone()),
         mapper_index: cli.mapper_index.clone(),
-        mapper_options: Some(format!("--outFilterMultimapNmax {} --winAnchorMultimapNmax {}", cli.max_multimap, cli.max_multimap.saturating_mul(2))),
+        mapper_options: Some(format!(
+            "--outFilterMultimapNmax {} --winAnchorMultimapNmax {}",
+            cli.max_multimap,
+            cli.max_multimap.saturating_mul(2)
+        )),
         mapper_threads: cli.threads.max(1),
         mapper_paired: false,
         mapper_keep_multimappers: true,
     };
     let mut mapper = mapper_cli.from_cli()?;
     let mut collector = TeCollector::new(cli.threads);
-    let mut bam = bam::Reader::from_path(&cli.bam).with_context(|| format!("opening {}", cli.bam.display()))?;
+    let mut bam = bam::Reader::from_path(&cli.bam)
+        .with_context(|| format!("opening {}", cli.bam.display()))?;
     let header = bam.header().to_owned();
     require_queryname_sorted(&header)?;
-    let cell_tag: [u8;2] = cli.cell_tag.as_bytes().try_into().unwrap();
-    let umi_tag: [u8;2] = cli.umi_tag.as_bytes().try_into().unwrap();
+    let cell_tag: [u8; 2] = cli.cell_tag.as_bytes().try_into().unwrap();
+    let umi_tag: [u8; 2] = cli.umi_tag.as_bytes().try_into().unwrap();
 
     let mut original_records = 0usize;
     let mut read_groups = 0usize;
@@ -147,16 +167,46 @@ fn main() -> Result<()> {
     }
 
     let mut result = collector.finish(&index, cli.em_iterations, cli.em_epsilon);
-    write_matrix(&cli.out.join("anchor"), &mut result.anchor, &index, cli.cell_barcode_len)?;
-    write_matrix(&cli.out.join("rescued_unique"), &mut result.rescued_unique, &index, cli.cell_barcode_len)?;
-    write_matrix(&cli.out.join("multi_em"), &mut result.multi_em, &index, cli.cell_barcode_len)?;
-    write_matrix(&cli.out.join("multi_anchored_em"), &mut result.multi_anchored_em, &index, cli.cell_barcode_len)?;
-    write_matrix(&cli.out.join("multi_unanchored_em"), &mut result.multi_unanchored_em, &index, cli.cell_barcode_len)?;
-    let mut f=File::create(cli.out.join("mapping_info.txt"))?;
+    write_matrix(
+        &cli.out.join("anchor"),
+        &mut result.anchor,
+        &index,
+        cli.cell_barcode_len,
+    )?;
+    write_matrix(
+        &cli.out.join("rescued_unique"),
+        &mut result.rescued_unique,
+        &index,
+        cli.cell_barcode_len,
+    )?;
+    write_matrix(
+        &cli.out.join("multi_em"),
+        &mut result.multi_em,
+        &index,
+        cli.cell_barcode_len,
+    )?;
+    write_matrix(
+        &cli.out.join("multi_anchored_em"),
+        &mut result.multi_anchored_em,
+        &index,
+        cli.cell_barcode_len,
+    )?;
+    write_matrix(
+        &cli.out.join("multi_unanchored_em"),
+        &mut result.multi_unanchored_em,
+        &index,
+        cli.cell_barcode_len,
+    )?;
+    let mut f = File::create(cli.out.join("mapping_info.txt"))?;
     write!(f, "{}", result.report)?;
     drop(f);
     let mut combined = result.combined();
-    write_matrix(&cli.out.join("combined_em"), &mut combined, &index, cli.cell_barcode_len)?;
+    write_matrix(
+        &cli.out.join("combined_em"),
+        &mut combined,
+        &index,
+        cli.cell_barcode_len,
+    )?;
     eprintln!("[nelrune-te] wrote {}", cli.out.display());
     Ok(())
 }
@@ -194,9 +244,8 @@ fn process_read_group(
     // We can trust/reuse a low-NH source group only when the BAM actually contains
     // all alignments it says belong to the read. Otherwise remap once rather than
     // silently treating a truncated candidate set as complete.
-    let complete_low_nh = !mapped.is_empty()
-        && reported_nh <= remap_nh_above
-        && mapped.len() >= reported_nh;
+    let complete_low_nh =
+        !mapped.is_empty() && reported_nh <= remap_nh_above && mapped.len() >= reported_nh;
 
     if complete_low_nh {
         let mut candidates = HashSet::new();
@@ -267,8 +316,11 @@ fn representative_with_sequence(group: &[bam::Record]) -> Option<&bam::Record> {
         .or_else(|| group.iter().find(|rec| rec.seq_len() > 0))
 }
 
-fn aux_string(rec: &bam::Record, tag: &[u8;2]) -> Option<String> {
-    match rec.aux(tag).ok()? { Aux::String(s) => Some(s.to_string()), _ => None }
+fn aux_string(rec: &bam::Record, tag: &[u8; 2]) -> Option<String> {
+    match rec.aux(tag).ok()? {
+        Aux::String(s) => Some(s.to_string()),
+        _ => None,
+    }
 }
 
 fn aux_u32(rec: &bam::Record, tag: &[u8; 2]) -> Option<u32> {
@@ -285,9 +337,9 @@ fn aux_u32(rec: &bam::Record, tag: &[u8; 2]) -> Option<u32> {
 
 fn require_queryname_sorted(header: &bam::HeaderView) -> Result<()> {
     let text = String::from_utf8_lossy(header.as_bytes());
-    let queryname = text.lines().any(|l| {
-        l.starts_with("@HD") && l.split('\t').any(|x| x == "SO:queryname")
-    });
+    let queryname = text
+        .lines()
+        .any(|l| l.starts_with("@HD") && l.split('\t').any(|x| x == "SO:queryname"));
     if !queryname {
         bail!(
             "nelrune-te requires a queryname-sorted BAM (@HD SO:queryname); use `samtools sort -n` first"
@@ -310,7 +362,12 @@ mod tests {
 
     fn record(qname: &[u8], flags: u16, nh: Option<u32>) -> bam::Record {
         let mut rec = bam::Record::new();
-        rec.set(qname, Some(&CigarString(vec![Cigar::Match(10)])), b"AAAAAAAAAA", &[30; 10]);
+        rec.set(
+            qname,
+            Some(&CigarString(vec![Cigar::Match(10)])),
+            b"AAAAAAAAAA",
+            &[30; 10],
+        );
         rec.set_flags(flags);
         if let Some(nh) = nh {
             rec.push_aux(b"NH", Aux::U32(nh)).unwrap();

@@ -10,7 +10,10 @@ use flate2::write::GzEncoder;
 use sc_te::convert_ucsc_rmsk_to_gtf;
 
 #[derive(Debug, Parser)]
-#[command(name = "sc-te", about = "Utilities for single-cell transposable-element analysis")]
+#[command(
+    name = "sc-te",
+    about = "Utilities for single-cell transposable-element analysis"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -61,7 +64,8 @@ fn open_reader(path: &Path) -> Result<BufReader<Box<dyn Read>>> {
 }
 
 fn open_writer(path: &Path) -> Result<BufWriter<Box<dyn Write>>> {
-    let file = File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
+    let file =
+        File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
     let writer: Box<dyn Write> = if path.extension().is_some_and(|ext| ext == "gz") {
         Box::new(GzEncoder::new(file, Compression::default()))
     } else {

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use clap::Parser;
 use bam_tide::ont_normalizer::{OntNormalizer, cli::Cli};
+use clap::Parser;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();

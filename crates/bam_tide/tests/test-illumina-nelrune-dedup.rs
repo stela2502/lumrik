@@ -140,3 +140,63 @@ IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
 
     Ok(())
 }
+
+#[test]
+fn nelrune_run_none_grammar_dedups_by_r1_and_r2_sequence() -> Result<()> {
+    let dir = tempdir()?;
+    let r1_path = dir.path().join("R1.none.fastq");
+    let r2_path = dir.path().join("R2.none.fastq");
+
+    // pair 1 + pair 2: identical sequences, different QNAME => PCR duplicate
+    // pair 3: same R1 but changed R2 prefix => distinct molecule
+    std::fs::write(
+        &r1_path,
+        "\
+@read1\nAAAACCCCGGGGTTTTACGTACGTACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n@read2\nAAAACCCCGGGGTTTTACGTACGTACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n@read3\nAAAACCCCGGGGTTTTACGTACGTACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n",
+    )?;
+
+    std::fs::write(
+        &r2_path,
+        "\
+@read1\nTTTTGGGGCCCCAAAAACGTACGTACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n@read2\nTTTTGGGGCCCCAAAAACGTACGTACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n@read3\nCTTTGGGGCCCCAAAAACGTACGTACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n",
+    )?;
+
+    let grammar = Grammar::parse("none", "NONE").map_err(anyhow::Error::msg)?;
+    let primer = PrimerDetector::from_grammar(grammar).map_err(anyhow::Error::msg)?;
+
+    let config = IlluminaNormalizerConfig {
+        out: dir.path().join("unused.fastq"),
+        read_tags: dir.path().join("unused.tags"),
+        primer_read: PrimerRead::R1,
+        insert_read: InsertRead::R2,
+        primer,
+        additional_features: Vec::new(),
+        additional_feature_min_hits: 4,
+        min_insert_len: 20,
+        threads: 1,
+        gzip_level: 1,
+        max_reads: Some(10),
+        gzip: false,
+    };
+
+    let mut normalizer = IlluminaNormalizer::new(config)?;
+    let mut emitted = Vec::new();
+
+    normalizer.nelrune_run(
+        &r1_path,
+        &r2_path,
+        |batch| {
+            emitted.extend(batch.iter().map(|(_, r2)| r2.id.clone()));
+            Ok(true)
+        },
+        |_| {},
+    )?;
+
+    assert_eq!(
+        emitted.len(),
+        2,
+        "NONE grammar must collapse identical R1+R2 pairs but retain a pair whose R2 sequence differs"
+    );
+
+    Ok(())
+}

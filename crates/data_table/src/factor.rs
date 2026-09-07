@@ -359,7 +359,6 @@ impl Factor {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
 
@@ -371,7 +370,6 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::{DataTable, Factor};
-    
 
     #[test]
     fn test_save_and_load_factors() -> Result<(), Box<dyn std::error::Error>> {
@@ -419,7 +417,6 @@ mod tests {
 
         Ok(())
     }
-
 
     #[test]
     fn test_modify_levels() {
