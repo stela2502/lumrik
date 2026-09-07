@@ -12,6 +12,7 @@ pub mod cli;
 pub mod fast_mapper;
 pub mod feature_entry;
 pub mod feature_index;
+pub mod locus_mapper;
 pub mod tag_entry;
 
 pub use builtin_tags::{BuiltinTagSet, HUMAN_SAMPLE_TAGS, MOUSE_SAMPLE_TAGS};
@@ -19,4 +20,5 @@ pub use cli::FastMapperCli;
 pub use fast_mapper::{encode_seq_positions_with_int_to_str, FastTagMapper, MapStatus, Slot};
 pub use feature_entry::FeatureEntry;
 pub use feature_index::FastTagFeatureIndex;
+pub use locus_mapper::FastLocusMapper;
 pub use tag_entry::TagEntry;

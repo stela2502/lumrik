@@ -1,5 +1,6 @@
 use crate::{Recombination, VdjIndex};
 use anyhow::{Context, Result};
+use mapping_info::MappingInfo;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -19,13 +20,13 @@ impl ReportWriter {
         fs::create_dir_all(dir)?;
 
         let mut calls = writer(dir.join("vdj_calls.tsv"))?;
-        writeln!(calls, "cell\trecombination_id\tchain\tstage\tv\td\tj\tc\tsupport_features\tv_del_3\tp_v3_len\tp_v3\tn1_len\tn1\tp_d5_len\tp_d5\td_del_5\td_retained_len\td_retained\td_del_3\tp_d3_len\tp_d3\tn2_len\tn2\tp_j5_len\tp_j5\tj_del_5\tpn_alternative\tobserved_rearrangement\tnaive_recombination\tobserved_receptor_sequence")?;
+        writeln!(calls, "cell\trecombination_id\tchain\tstage\tv\td\tj\tc\tsupport_features\treceptor_rediscovery_reads\tconstant_link_fragments\tconstant_spanning_reads\tconstant_link_call\tv_del_3\tp_v3_len\tp_v3\tn1_len\tn1\tp_d5_len\tp_d5\td_del_5\td_retained_len\td_retained\td_del_3\tp_d3_len\tp_d3\tn2_len\tn2\tp_j5_len\tp_j5\tj_del_5\tpn_alternative\tobserved_rearrangement\tnaive_recombination\tobserved_receptor_sequence")?;
 
         let mut airr = writer(dir.join("airr_rearrangements.tsv"))?;
-        writeln!(airr, "sequence_id\tsequence\tproductive\tvj_in_frame\tstop_codon\tcomplete_vdj\tlocus\tv_call\td_call\tj_call\tc_call\tjunction\tnp1\tnp2\tnp1_length\tnp2_length\tcell_id\tlumrik_recombination_id\tlumrik_supporting_features")?;
+        writeln!(airr, "sequence_id\tsequence\tproductive\tvj_in_frame\tstop_codon\tcomplete_vdj\tlocus\tv_call\td_call\tj_call\tc_call\tjunction\tnp1\tnp2\tnp1_length\tnp2_length\tcell_id\tlumrik_recombination_id\tlumrik_supporting_features\tlumrik_receptor_rediscovery_reads\tlumrik_constant_link_fragments\tlumrik_constant_spanning_reads\tlumrik_constant_link_call")?;
 
         let mut receptors = writer(dir.join("vdj_receptors.tsv"))?;
-        writeln!(receptors, "cell\theavy_recombination_id\tlight_recombination_id\theavy_chain\theavy_v\theavy_d\theavy_j\theavy_c\theavy_support_features\theavy_naive_recombination\tlight_chain\tlight_v\tlight_j\tlight_c\tlight_support_features\tlight_naive_recombination")?;
+        writeln!(receptors, "cell\theavy_recombination_id\tlight_recombination_id\theavy_chain\theavy_v\theavy_d\theavy_j\theavy_c\theavy_support_features\theavy_receptor_rediscovery_reads\theavy_constant_link_fragments\theavy_constant_spanning_reads\theavy_naive_recombination\tlight_chain\tlight_v\tlight_j\tlight_c\tlight_support_features\tlight_receptor_rediscovery_reads\tlight_constant_link_fragments\tlight_constant_spanning_reads\tlight_naive_recombination")?;
 
         let observed = write_sequences
             .then(|| writer(dir.join("vdj_observed.fasta")))
@@ -77,6 +78,13 @@ impl ReportWriter {
                 j,
                 c,
                 r.supporting_features.to_string(),
+                r.receptor_linkage.rediscovery_reads.to_string(),
+                r.receptor_linkage.constant_link_fragments.to_string(),
+                r.receptor_linkage.constant_spanning_reads.to_string(),
+                r.receptor_linkage
+                    .constant_segment
+                    .map(|segment| seg(index, Some(segment)))
+                    .unwrap_or_default(),
                 x.v_del_3.to_string(),
                 x.p_v3_len().to_string(),
                 dna(&x.p_v3),
@@ -145,6 +153,13 @@ impl ReportWriter {
                 cell.to_string(),
                 r.stable_id.to_string(),
                 r.supporting_features.to_string(),
+                r.receptor_linkage.rediscovery_reads.to_string(),
+                r.receptor_linkage.constant_link_fragments.to_string(),
+                r.receptor_linkage.constant_spanning_reads.to_string(),
+                r.receptor_linkage
+                    .constant_segment
+                    .map(|segment| seg(index, Some(segment)))
+                    .unwrap_or_default(),
             ];
             writeln!(self.airr, "{}", airr.join("\t"))?;
 
@@ -187,22 +202,20 @@ pub fn write_mapping_info<P: AsRef<Path>>(
     recombinations: usize,
     by_chain: &HashMap<String, usize>,
 ) -> Result<()> {
-    let mut w = writer(path.as_ref().to_path_buf())?;
-    writeln!(w, "MappingInfo")?;
-    writeln!(w, "\nRead types (n={receptor_records})")?;
-    writeln!(w, "  vdj.receptor_overlap_records: {receptor_records}")?;
-    writeln!(w, "  vdj.cells_with_evidence: {cells}")?;
-    writeln!(w, "  vdj.recombinations: {recombinations}")?;
-    let mut keys: Vec<_> = by_chain.keys().collect();
-    keys.sort();
-    for chain in keys {
-        writeln!(
-            w,
-            "  vdj.calls.{}: {}",
-            chain.to_ascii_lowercase(),
-            by_chain[chain]
-        )?;
+    let mut info = MappingInfo::new(None, 0.0, 0);
+    info.total = receptor_records;
+    info.report_n("vdj.receptor_overlap_records", receptor_records);
+    info.report_n("vdj.cells_with_evidence", cells);
+    info.report_n("vdj.recombinations", recombinations);
+    for (chain, count) in by_chain {
+        info.report_n(format!("vdj.calls.{}", chain.to_ascii_lowercase()), *count);
     }
+    write_mapping_info_report(path, &info)
+}
+
+pub fn write_mapping_info_report<P: AsRef<Path>>(path: P, info: &MappingInfo) -> Result<()> {
+    let mut w = writer(path.as_ref().to_path_buf())?;
+    write!(w, "{info}")?;
     w.flush()?;
     Ok(())
 }
@@ -233,7 +246,7 @@ fn receptor_row(
 }
 fn role_details(r: Option<&Recombination>, index: &VdjIndex, heavy: bool) -> Vec<String> {
     match r {
-        None => vec![String::new(); if heavy { 7 } else { 6 }],
+        None => vec![String::new(); if heavy { 10 } else { 9 }],
         Some(r) => {
             let c = r
                 .constant
@@ -248,6 +261,9 @@ fn role_details(r: Option<&Recombination>, index: &VdjIndex, heavy: bool) -> Vec
                     seg(index, Some(r.j)),
                     c,
                     r.supporting_features.to_string(),
+                    r.receptor_linkage.rediscovery_reads.to_string(),
+                    r.receptor_linkage.constant_link_fragments.to_string(),
+                    r.receptor_linkage.constant_spanning_reads.to_string(),
                     dna(&r.naive_recombination),
                 ]
             } else {
@@ -257,6 +273,9 @@ fn role_details(r: Option<&Recombination>, index: &VdjIndex, heavy: bool) -> Vec
                     seg(index, Some(r.j)),
                     c,
                     r.supporting_features.to_string(),
+                    r.receptor_linkage.rediscovery_reads.to_string(),
+                    r.receptor_linkage.constant_link_fragments.to_string(),
+                    r.receptor_linkage.constant_spanning_reads.to_string(),
                     dna(&r.naive_recombination),
                 ]
             }

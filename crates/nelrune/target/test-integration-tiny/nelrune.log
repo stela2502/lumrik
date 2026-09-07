@@ -4,12 +4,12 @@
 [+     0.000s] stage: starting mapper
 [+     0.014s] stage: waiting for mapper / first batch
 [+     0.015s] input: /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
-[+     0.015s] stage: normalizing /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
-[+     0.015s]            2 reads |        131 reads/s | no cell/UMI          0 | duplicate          0 | genomic          2 | feature          0
-[+     0.015s] Illumina normalization: /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
+[+     0.016s] stage: normalizing /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
+[+     0.016s]            2 reads |        125 reads/s | no cell/UMI          0 | duplicate          0 | genomic          2 | feature          0
+[+     0.016s] Illumina normalization: /home/med-sal/git_Projects/lumrik/crates/nelrune/tests/data/tiny_R1.fastq
 -------------------------------------------------------------------------------------------------
 MappingInfo
-  started: 2026-09-03 06:30:54.908605760 UTC
+  started: 2026-09-07 14:09:51.543186475 UTC
 
 Read types (n=1)
   Type                             Count           Fraction total [%]
@@ -32,31 +32,31 @@ Timings
 Named timings
   bam_tide/multi_cpu/illumina_normalize_chunk: 0 h 0 min 0 sec 0 ms
 
-[+     0.016s] stage: finishing mapper
-[+     0.152s] stage: quantifying mapper BAM
-[+     0.152s] stage: writing quantification
-[+     0.153s] Nelrune timings
+[+     0.017s] stage: finishing mapper
+[+     0.158s] stage: quantifying mapper BAM
+[+     0.159s] stage: writing quantification
+[+     0.160s] Nelrune timings
 ---------------
 MappingInfo
-  started: 2026-09-03 06:30:54.893831727 UTC
+  started: 2026-09-07 14:09:51.527795962 UTC
 
 Timings
-  overall     : 0 h 0 min 0 sec 153 ms
+  overall     : 0 h 0 min 0 sec 159 ms
   file I/O    : 0 h 0 min 0 sec 0 ms
   single-cpu  : 0 h 0 min 0 sec 0 ms
   multi-cpu   : 0 h 0 min 0 sec 0 ms
 
 Named timings
   nelrune/input_and_mapper:        0 h 0 min 0 sec 2 ms
-  nelrune/mapper_finish:           0 h 0 min 0 sec 135 ms
+  nelrune/mapper_finish:           0 h 0 min 0 sec 141 ms
   nelrune/quantification:          0 h 0 min 0 sec 0 ms
-  nelrune/startup:                 0 h 0 min 0 sec 13 ms
+  nelrune/startup:                 0 h 0 min 0 sec 14 ms
   nelrune/writing:                 0 h 0 min 0 sec 0 ms
 
-[+     0.153s] Quantification report
+[+     0.160s] Quantification report
 ---------------------
 MappingInfo
-  started: 2026-09-03 06:30:55.045624836 UTC
+  started: 2026-09-07 14:09:51.686130252 UTC
 
 Read types (n=1)
   Type                             Count           Fraction total [%]
@@ -75,10 +75,10 @@ Named timings
   bam_tide/multi_cpu/quantify_chunk: 0 h 0 min 0 sec 0 ms
   bam_tide/single_cpu/merge_quantification: 0 h 0 min 0 sec 0 ms
   nelrune/input_and_mapper:        0 h 0 min 0 sec 2 ms
-  nelrune/mapper_finish:           0 h 0 min 0 sec 135 ms
+  nelrune/mapper_finish:           0 h 0 min 0 sec 141 ms
   nelrune/quantification:          0 h 0 min 0 sec 0 ms
-  nelrune/startup:                 0 h 0 min 0 sec 13 ms
+  nelrune/startup:                 0 h 0 min 0 sec 14 ms
   nelrune/writing:                 0 h 0 min 0 sec 0 ms
 
-[+     0.153s] stage: mapper BAM retained at /home/med-sal/git_Projects/lumrik/crates/nelrune/target/test-integration-tiny/nelrune.mapper.bam
-[+     0.153s] finished: 2 reads in 0.2s (13 reads/s average)
+[+     0.160s] stage: mapper BAM retained at /home/med-sal/git_Projects/lumrik/crates/nelrune/target/test-integration-tiny/nelrune.mapper.bam
+[+     0.160s] finished: 2 reads in 0.2s (13 reads/s average)

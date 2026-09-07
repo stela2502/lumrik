@@ -1870,9 +1870,12 @@ version = "0.1.4"
 dependencies = [
  "anyhow",
  "clap",
+ "fast_tag_mapper",
  "flate2",
  "gtf_splice_index",
  "int-to-str",
+ "mapping_info",
+ "rayon",
  "rust-htslib",
  "scdata",
  "tempfile",

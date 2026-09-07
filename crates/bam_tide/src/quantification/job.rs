@@ -89,23 +89,7 @@ impl<'a> JobBuilder<'a> {
     }
 
     pub fn build(&self, rec: &Record, report: &mut MappingInfo) -> Result<Option<Job>> {
-        if rec.is_unmapped() {
-            report.report("unmapped");
-            return Ok(None);
-        }
-
-        if rec.mapq() < self.min_mapq {
-            report.report("mapq failed");
-            return Ok(None);
-        }
-
-        if rec.is_secondary() || rec.is_supplementary() {
-            report.report("secondary or supplementary");
-            return Ok(None);
-        }
-
-        if self.read1_only && !rec.is_first_in_template() {
-            report.report("read!=1");
+        if !self.passes_initial_filters(rec, report) {
             return Ok(None);
         }
 
@@ -168,6 +152,52 @@ impl<'a> JobBuilder<'a> {
             }
         };
 
+        self.build_filtered_with_identity(rec, report, cell, umi)
+    }
+
+    /// Build a quantification job with an identity that has already been
+    /// resolved by the read grammar. This is used for unbarcoded/NONE BAM
+    /// fragments, where CELL/UMI aux tags do not exist by definition.
+    pub fn build_with_identity(
+        &self,
+        rec: &Record,
+        report: &mut MappingInfo,
+        cell: u64,
+        umi: u64,
+    ) -> Result<Option<Job>> {
+        if !self.passes_initial_filters(rec, report) {
+            return Ok(None);
+        }
+        self.build_filtered_with_identity(rec, report, cell, umi)
+    }
+
+    fn passes_initial_filters(&self, rec: &Record, report: &mut MappingInfo) -> bool {
+        if rec.is_unmapped() {
+            report.report("unmapped");
+            return false;
+        }
+        if rec.mapq() < self.min_mapq {
+            report.report("mapq failed");
+            return false;
+        }
+        if rec.is_secondary() || rec.is_supplementary() {
+            report.report("secondary or supplementary");
+            return false;
+        }
+        if self.read1_only && !rec.is_first_in_template() {
+            report.report("read!=1");
+            return false;
+        }
+        true
+    }
+
+    fn build_filtered_with_identity(
+        &self,
+        rec: &Record,
+        report: &mut MappingInfo,
+        cell: u64,
+        umi: u64,
+    ) -> Result<Option<Job>> {
         let tid = rec.tid();
 
         if tid < 0 {

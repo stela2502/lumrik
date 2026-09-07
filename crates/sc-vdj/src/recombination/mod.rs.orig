@@ -4,18 +4,8 @@ use crate::index::{
 };
 use anyhow::{bail, Result};
 
-mod constant_region_linkage;
 mod identifier;
-mod recombination_evidence_rescan;
 pub use identifier::{ReceptorRole, RecombinationId};
-pub use recombination_evidence_rescan::{
-    RecombinationEvidenceRescanReport, RecombinationRescanCall, RecombinationRescanCandidate,
-};
-pub(crate) use recombination_evidence_rescan::{
-    rescue_missing_constants_from_bam, rescue_missing_constants_from_bam_with_report,
-};
-
-use constant_region_linkage::rescue_missing_constant_regions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalAlignment {
@@ -155,18 +145,6 @@ pub struct ConstantRegionEvidence {
     pub sequence: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ReceptorLinkageSupport {
-    /// BAM records that independently rediscover this cell-specific CDR3/J bait.
-    pub rediscovery_reads: u32,
-    /// Physical fragments that link the receptor bait to a constant region.
-    pub constant_link_fragments: u32,
-    /// BAM records that contain both receptor-bait and constant-region support.
-    pub constant_spanning_reads: u32,
-    /// Constant segment supported by the linkage evidence, if any.
-    pub constant_segment: Option<SegmentId>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recombination {
     pub chain: Chain,
@@ -182,7 +160,6 @@ pub struct Recombination {
     pub in_frame: bool,
     pub stop_codon: bool,
     pub supporting_features: u32,
-    pub receptor_linkage: ReceptorLinkageSupport,
     pub stable_id: RecombinationId,
 }
 
@@ -239,8 +216,6 @@ pub fn process_chain_work(work: ChainWork<'_>) -> Vec<Recombination> {
     let mut seen_sequences = std::collections::HashSet::<Vec<u8>>::new();
     calls.retain(|r| seen_sequences.insert(r.observed_rearrangement.clone()));
     calls.truncate(MAX_FINAL_RECOMBINATIONS_PER_LOCUS);
-
-    rescue_missing_constant_regions(&mut calls, work.cell, work.index, work.chain);
     calls
 }
 
@@ -315,7 +290,6 @@ fn identify_summary(
         in_frame,
         stop_codon: stop,
         supporting_features: assembled.support_features,
-        receptor_linkage: ReceptorLinkageSupport::default(),
         stable_id: RecombinationId::placeholder(chain),
     };
     recomb.stable_id = RecombinationId::from_recombination(&recomb, index).ok()?;

@@ -133,8 +133,10 @@ impl CellEvidence {
     }
 }
 
+mod evidence;
 mod summary;
 
+pub use evidence::{RawEvidenceDisplay, SummarizedEvidenceDisplay};
 pub use summary::{
     summarize_chain_work, ChainSummaryWork, GermlineAnchor, ReceptorSequenceEvidence,
 };

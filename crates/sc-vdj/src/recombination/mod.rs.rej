@@ -1,0 +1,87 @@
+--- crates/sc-vdj/src/recombination/mod.rs
++++ crates/sc-vdj/src/recombination/mod.rs
+@@ -230,9 +230,84 @@
+     let mut seen_sequences = std::collections::HashSet::<Vec<u8>>::new();
+     calls.retain(|r| seen_sequences.insert(r.observed_rearrangement.clone()));
+     calls.truncate(MAX_FINAL_RECOMBINATIONS_PER_LOCUS);
++
++    // Constant exons can be transcript-spliced away from the compact V(D)J
++    // sequence.  Rescue a missing constant call only from direct fragment
++    // linkage: the same EvidenceId must support this call's V or J and a C
++    // segment.  EvidenceId is shared by paired mates and same-QNAME
++    // primary/secondary/supplementary BAM records during ingestion.
++    rescue_direct_fragment_constants(&mut calls, work.cell, work.index, work.chain);
++
+     (summaries, calls)
+ }
+ 
++fn rescue_direct_fragment_constants(
++    calls: &mut [Recombination],
++    cell: &CellEvidence,
++    index: &VdjIndex,
++    chain: Chain,
++) {
++    use std::collections::{HashMap, HashSet};
++
++    #[derive(Default)]
++    struct FragmentSupport {
++        receptor_segments: HashSet<SegmentId>,
++        constants: HashSet<SegmentId>,
++    }
++
++    let mut by_fragment = HashMap::<crate::cellrep::EvidenceId, FragmentSupport>::new();
++    for feature in cell.features_for_chain(index, chain) {
++        let support = by_fragment.entry(feature.id).or_default();
++        for mapping in &feature.mappings {
++            let Some(segment) = index.segment(mapping.segment_id) else {
++                continue;
++            };
++            if segment.chain != chain {
++                continue;
++            }
++            match segment.kind {
++                SegmentKind::V | SegmentKind::J => {
++                    support.receptor_segments.insert(mapping.segment_id);
++                }
++                SegmentKind::C => {
++                    support.constants.insert(mapping.segment_id);
++                }
++                SegmentKind::D => {}
++            }
++        }
++    }
++
++    for call in calls.iter_mut().filter(|call| call.constant.is_none()) {
++        let mut constant_support = HashMap::<SegmentId, u32>::new();
++        for support in by_fragment.values() {
++            if !support.receptor_segments.contains(&call.v)
++                && !support.receptor_segments.contains(&call.j)
++            {
++                continue;
++            }
++            for &constant in &support.constants {
++                let count = constant_support.entry(constant).or_default();
++                *count = count.saturating_add(1);
++            }
++        }
++
++        let Some((constant_id, supporting_features)) = constant_support
++            .into_iter()
++            .max_by_key(|(id, n)| (*n, std::cmp::Reverse(*id)))
++        else {
++            continue;
++        };
++        let Some(segment) = index.segment(constant_id) else {
++            continue;
++        };
++        call.constant = Some(ConstantRegionEvidence {
++            segment: constant_id,
++            supporting_features,
++            sequence: segment.sequence.clone(),
++        });
++    }
++}
++
+ fn identify_summary(
+     assembled: &ReceptorSequenceEvidence,
+     index: &VdjIndex,

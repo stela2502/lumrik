@@ -26,9 +26,6 @@ struct Cli {
     out: PathBuf,
     #[arg(long, default_value_t = 12)]
     min_sequence_overlap: usize,
-    /// CPU threads for BAM decoding and independent V(D)J chain reconstruction.
-    #[arg(long, default_value_t = 8)]
-    threads: usize,
     #[arg(long)]
     exonic: Option<PathBuf>,
     #[arg(long)]
@@ -46,8 +43,6 @@ fn main() -> Result<()> {
     let c = Cli::parse();
     let mut mapping_info = MappingInfo::new(None, 0.0, 0);
 
-    let loading_prebuilt_index = c.index.is_some();
-    mapping_info.start_counter();
     mapping_info.start_timer("vdj.index_load_or_build");
     let index = match (&c.index, &c.gtf, &c.genome) {
         (Some(p), None, None) => {
@@ -57,11 +52,6 @@ fn main() -> Result<()> {
         _ => bail!("provide either --index or --gtf + --genome"),
     };
     mapping_info.stop_timer("vdj.index_load_or_build");
-    if loading_prebuilt_index {
-        mapping_info.stop_file_io_time();
-    } else {
-        mapping_info.stop_single_processor_time();
-    }
 
     let mut runner = VdjRunner::new(
         index,
@@ -69,21 +59,15 @@ fn main() -> Result<()> {
             min_sequence_overlap: c.min_sequence_overlap,
         },
     );
-    runner.set_threads(c.threads);
 
-    mapping_info.start_counter();
     mapping_info.start_timer("vdj.bam_read");
     let n = runner.read_bam(&c.bam, &NelruneIdentityResolver)?;
     mapping_info.stop_timer("vdj.bam_read");
-    mapping_info.stop_file_io_time();
 
-    mapping_info.start_counter();
     mapping_info.start_timer("vdj.recombination_calling");
     let mut calls = runner.identify();
     mapping_info.stop_timer("vdj.recombination_calling");
-    mapping_info.stop_multi_processor_time();
 
-    mapping_info.start_counter();
     mapping_info.start_timer("vdj.receptor_rediscovery");
     let rediscovered_constants = runner.rediscover_receptor_linkage_from_bam(
         &c.bam,
@@ -91,12 +75,7 @@ fn main() -> Result<()> {
         &mut calls,
     )?;
     mapping_info.stop_timer("vdj.receptor_rediscovery");
-    // The fast receptor mapper is currently serial. HTSlib may decompress BGZF
-    // blocks on helper threads, but this stage is classified by its dominant
-    // sc-vdj processing model rather than double-counted as file I/O.
-    mapping_info.stop_single_processor_time();
 
-    mapping_info.start_counter();
     mapping_info.start_timer("vdj.output_write");
     let mut writer = ReportWriter::create(&c.out, c.write_sequences)?;
     let mut by_chain = HashMap::<String, usize>::new();
@@ -115,10 +94,8 @@ fn main() -> Result<()> {
     }
     writer.finish()?;
     mapping_info.stop_timer("vdj.output_write");
-    mapping_info.stop_file_io_time();
 
     mapping_info.total = n;
-    mapping_info.report_n("vdj.threads", c.threads.max(1));
     mapping_info.report_n("vdj.receptor_overlap_records", n);
     mapping_info.report_n("vdj.cells_with_evidence", calls.len());
     mapping_info.report_n("vdj.recombinations", nr);
@@ -127,8 +104,6 @@ fn main() -> Result<()> {
         mapping_info.report_n(format!("vdj.calls.{}", chain.to_ascii_lowercase()), *count);
     }
     write_mapping_info_report(c.out.join("vdj-mapping-info.txt"), &mapping_info)?;
-
-    eprintln!("{mapping_info}");
 
     if !c.no_health_server {
         eprintln!("nelrune-vdj: health-server CLI retained, but live status wiring is not restored yet (requested port {})", c.health_port);

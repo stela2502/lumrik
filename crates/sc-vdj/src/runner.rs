@@ -1,13 +1,18 @@
 use crate::cellrep::{
-    AlignmentGeometry, BamFeatureEvidence, BamFeatureSequenceParts, CellEvidenceVdj, EvidenceId,
+    AlignmentGeometry, BamFeatureEvidence, BamFeatureSequenceParts, CellEvidenceVdj, CellEvidence, EvidenceId,
     MapperEvidence, SequencePart,
 };
 use crate::index::VdjIndex;
-use crate::recombination::{process_chain_work, ChainWork, Recombination};
+use crate::recombination::{
+    process_chain_work, rescue_missing_constants_from_bam,
+    rescue_missing_constants_from_bam_with_report, ChainWork, Recombination,
+    RecombinationEvidenceRescanReport,
+};
 use anyhow::{Context, Result};
 use int_to_str::IntToStr;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -45,6 +50,7 @@ pub struct VdjRunner {
     pub cell_names: HashMap<u64, String>,
     pub config: VdjRunnerConfig,
     flush_id: u32,
+    threads: usize,
 }
 impl VdjRunner {
     pub fn new(index: VdjIndex, config: VdjRunnerConfig) -> Self {
@@ -54,8 +60,13 @@ impl VdjRunner {
             cell_names: HashMap::new(),
             config,
             flush_id: 0,
+            threads: 1,
         }
     }
+    pub fn set_threads(&mut self, threads: usize) {
+        self.threads = threads.max(1);
+    }
+
     pub fn read_bam<P: AsRef<Path>, R: BamIdentityResolver>(
         &mut self,
         path: P,
@@ -63,9 +74,15 @@ impl VdjRunner {
     ) -> Result<usize> {
         let mut reader = bam::Reader::from_path(path.as_ref())
             .with_context(|| format!("opening {}", path.as_ref().display()))?;
+        if self.threads > 1 {
+            reader
+                .set_threads(self.threads)
+                .context("configuring multithreaded BAM decoding")?;
+        }
         let header = reader.header().to_owned();
         let mut n = 0usize;
         let mut entry = 0u32;
+        let mut evidence_ids = HashMap::<(u64, Vec<u8>), EvidenceId>::new();
         for rec in reader.records() {
             let rec = rec?;
             if rec.is_unmapped() {
@@ -112,58 +129,149 @@ impl VdjRunner {
             } else {
                 sequence.r1 = Some(part)
             };
+            let qname_key = (cell_id, rec.qname().to_vec());
+            let id = *evidence_ids.entry(qname_key).or_insert_with(|| {
+                let id = EvidenceId {
+                    flush: self.flush_id,
+                    entry,
+                };
+                entry = entry.wrapping_add(1);
+                id
+            });
             self.evidence.push(
                 cell_id,
                 BamFeatureEvidence {
-                    id: EvidenceId {
-                        flush: self.flush_id,
-                        entry,
-                    },
+                    id,
                     sequence,
                     mappings,
                 },
             );
             self.cell_names.entry(cell_id).or_insert(cell);
-            entry = entry.wrapping_add(1);
             n += 1;
         }
         self.flush_id = self.flush_id.wrapping_add(1);
         Ok(n)
     }
+    /// Re-scan the retained BAM with cell-specific reconstructed receptor baits.
+    ///
+    /// This independently rediscovers receptor reads and records direct
+    /// receptor-to-constant linkage support. Missing constant calls may be
+    /// filled when one constant segment has uniquely stronger direct support.
+    pub fn rediscover_receptor_linkage_from_bam<P: AsRef<Path>, R: BamIdentityResolver>(
+        &self,
+        path: P,
+        resolver: &R,
+        calls: &mut [(u64, Vec<Recombination>)],
+    ) -> Result<usize> {
+        rescue_missing_constants_from_bam(
+            path,
+            resolver,
+            &self.index,
+            calls,
+            self.threads,
+        )
+    }
+
+    pub fn rediscover_receptor_linkage_from_bam_with_report<
+        P: AsRef<Path>,
+        R: BamIdentityResolver,
+    >(
+        &self,
+        path: P,
+        resolver: &R,
+        calls: &mut [(u64, Vec<Recombination>)],
+    ) -> Result<RecombinationEvidenceRescanReport> {
+        rescue_missing_constants_from_bam_with_report(
+            path,
+            resolver,
+            &self.index,
+            calls,
+            self.threads,
+        )
+    }
+
+    pub fn rescue_missing_constants_from_bam<P: AsRef<Path>, R: BamIdentityResolver>(
+        &self,
+        path: P,
+        resolver: &R,
+        calls: &mut [(u64, Vec<Recombination>)],
+    ) -> Result<usize> {
+        rescue_missing_constants_from_bam(
+            path,
+            resolver,
+            &self.index,
+            calls,
+            self.threads,
+        )
+    }
+
+    pub fn rescue_missing_constants_from_bam_with_report<
+        P: AsRef<Path>,
+        R: BamIdentityResolver,
+    >(
+        &self,
+        path: P,
+        resolver: &R,
+        calls: &mut [(u64, Vec<Recombination>)],
+    ) -> Result<RecombinationEvidenceRescanReport> {
+        rescue_missing_constants_from_bam_with_report(
+            path,
+            resolver,
+            &self.index,
+            calls,
+            self.threads,
+        )
+    }
     pub fn identify(&self) -> Vec<(u64, Vec<Recombination>)> {
-        // Materialize independent cell/locus work units first.  The execution
-        // line below is intentionally serial today; this Vec is the future
-        // Rayon boundary (into_par_iter) without changing assembly internals.
-        let work: Vec<_> = self
-            .evidence
-            .cells()
-            .flat_map(|(cell_id, cell)| {
-                cell.chains(&self.index).into_iter().map(move |chain| {
-                    (
-                        cell_id,
-                        ChainWork {
-                            cell,
-                            index: &self.index,
-                            chain,
-                            min_overlap: self.config.min_sequence_overlap,
-                        },
-                    )
+        // Cells are the natural production-scale Rayon boundary.  Keep the
+        // chains within one cell serial: there are normally many more cells
+        // than worker threads, this preserves cell-local cache locality, and
+        // it avoids scheduling tiny nested Rayon jobs.
+        //
+        // `cell` and `&self.index` are shared immutable references.  Neither
+        // CellEvidence nor VdjIndex is cloned into a worker.
+        let cells: Vec<_> = self.evidence.cells().collect();
+        let process_cell = |(cell_id, cell): (u64, &CellEvidence)| {
+            let recombinations = cell
+                .chains(&self.index)
+                .into_iter()
+                .flat_map(|chain| {
+                    process_chain_work(ChainWork {
+                        cell,
+                        index: &self.index,
+                        chain,
+                        min_overlap: self.config.min_sequence_overlap,
+                    })
                 })
-            })
-            .collect();
+                .collect::<Vec<_>>();
 
-        let mut by_cell = HashMap::<u64, Vec<Recombination>>::new();
-        for (cell_id, chain_work) in work {
-            by_cell
-                .entry(cell_id)
-                .or_default()
-                .extend(process_chain_work(chain_work));
-        }
+            (cell_id, recombinations)
+        };
 
-        let mut out: Vec<_> = by_cell.into_iter().collect();
+        // Use a private Rayon pool for real parallel work, but make
+        // `--threads 1` genuinely serial rather than falling back to the
+        // process-global Rayon pool.
+        let mut out = if self.threads > 1 {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(self.threads)
+                .build()
+                .expect("building sc-vdj Rayon pool")
+                .install(|| {
+                    cells
+                        .into_par_iter()
+                        .map(process_cell)
+                        .collect::<Vec<_>>()
+                })
+        } else {
+            cells.into_iter().map(process_cell).collect::<Vec<_>>()
+        };
+
+        // Each worker returns one complete result vector for one cell, so
+        // there is no shared mutable result map and no cross-thread merge.
         out.sort_by_key(|x| x.0);
         out
     }
+
 }
 
 fn aligned_blocks(record: &bam::Record) -> Vec<(u32, u32)> {

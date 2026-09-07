@@ -512,7 +512,7 @@ fn overlap_is_compatible(a: &[u8], b: &[u8], off: isize, min_overlap: usize) -> 
     informative >= min_overlap && matches * 100 >= informative * 90
 }
 
-fn fast_anchor_offset(reference: &[u8], query: &[u8], seed_len: usize) -> Option<isize> {
+pub(super) fn fast_anchor_offset(reference: &[u8], query: &[u8], seed_len: usize) -> Option<isize> {
     let k = seed_len.min(reference.len()).min(query.len());
     if k < 4 {
         return None;
@@ -556,7 +556,7 @@ fn fast_anchor_offset(reference: &[u8], query: &[u8], seed_len: usize) -> Option
 /// Find a high-confidence observed overlap.  This remains as a bridge fallback
 /// for components carrying different germline identities, but it is no longer
 /// run as an all-reads-vs-all-reads greedy assembler.
-fn best_offset(a: &[u8], b: &[u8], min_overlap: usize) -> Option<(isize, usize)> {
+pub(super) fn best_offset(a: &[u8], b: &[u8], min_overlap: usize) -> Option<(isize, usize)> {
     if a.len() < min_overlap || b.len() < min_overlap {
         return None;
     }

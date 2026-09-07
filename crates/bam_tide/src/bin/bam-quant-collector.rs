@@ -65,6 +65,10 @@ fn run(args: QuantCli) -> Result<()> {
 
         snp_min_anchor: args.snp_min_anchor,
 
+        read_tags: args.read_tags.clone(),
+        cell_tag: args.cell_tag,
+        umi_tag: args.umi_tag,
+
         /*
          * bam-quant consumes existing BAM files.
          * It does not need to emit another BAM.
@@ -72,7 +76,13 @@ fn run(args: QuantCli) -> Result<()> {
         bam_out: None,
     };
 
-    let collector = BamCollector::from_cli(config)?;
+    let mut collector = BamCollector::from_cli(config)?;
+    if let Some(structure) = args.primer_structure.as_deref() {
+        let grammar = sc_primer::Grammar::parse("bam-quant", structure)
+            .map_err(anyhow::Error::msg)
+            .context("parsing --primer-structure")?;
+        collector = collector.with_grammar(grammar);
+    }
 
     let result = collector
         .run_paths(&args.bam)

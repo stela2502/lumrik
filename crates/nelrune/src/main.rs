@@ -131,8 +131,9 @@ fn run(args: Cli) -> Result<()> {
     progress.stage("quantifying mapper BAM");
     progress.start_timer("nelrune/quantification");
 
-    let collector =
-        BamCollector::from_cli(args.bam_collector.clone()).context("configuring BAM collector")?;
+    let collector = BamCollector::from_cli(args.bam_collector.clone())
+        .context("configuring BAM collector")?
+        .with_grammar(primer.grammar().clone());
     let result = collector
         .run_paths(std::slice::from_ref(&mapper_bam))
         .context("collecting BAM quantification")?;

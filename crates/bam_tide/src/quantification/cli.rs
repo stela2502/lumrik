@@ -131,6 +131,15 @@ pub struct QuantCli {
     #[arg(long, default_value_t = 5)]
     pub allowed_intronic_gap_size: u32,
 
+    /// Optional read grammar for BAMs without cell/UMI metadata.
+    ///
+    /// `NONE` or another grammar without CELL/UMI enables sequence-based
+    /// paired-fragment deduplication and therefore requires query-name sorted
+    /// BAM input. If omitted, Lumrik-encoded QNAMEs, read-tag tables, or BAM
+    /// CB/UB tags are used as before.
+    #[arg(long)]
+    pub primer_structure: Option<String>,
+
     /// BAM aux tag containing the cell barcode.
     ///
     /// Examples:

@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use clap::Args;
 
-use crate::quantification::cli::QuantMode;
+use crate::quantification::cli::{BamAuxTag, QuantMode};
+use read_tag_table::ReadTagTableCli;
 
 #[derive(Debug, Clone, Args)]
 pub struct BamCollectorConfig {
@@ -89,6 +90,16 @@ pub struct BamCollectorConfig {
         help = "Minimum aligned anchor length required for SNP support."
     )]
     pub snp_min_anchor: u8,
+
+
+    #[command(flatten)]
+    pub read_tags: ReadTagTableCli,
+
+    #[arg(long, default_value = "CB", help = "BAM aux tag containing the cell barcode.")]
+    pub cell_tag: BamAuxTag,
+
+    #[arg(long, default_value = "UB", help = "BAM aux tag containing the UMI.")]
+    pub umi_tag: BamAuxTag,
 
     #[arg(long, help = "Optional BAM output for a streamed mapper input.")]
     pub bam_out: Option<PathBuf>,

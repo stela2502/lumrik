@@ -19,7 +19,7 @@ use gtf_splice_index::SpliceIndex;
 
 
 
-pub const CHUNK: usize = 2_000_000;
+pub const CHUNK: usize = 200_000;
 
 pub fn configure_rayon(
     threads: usize,

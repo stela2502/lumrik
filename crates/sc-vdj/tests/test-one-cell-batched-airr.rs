@@ -41,7 +41,11 @@ fn one_cell_real_fixture_detects_expected_recombinations() {
         "real fixture produced no receptor-overlapping BAM evidence"
     );
 
-    let calls = runner.identify();
+    let mut calls = runner.identify();
+    let rescued_constants = runner
+        .rescue_missing_constants_from_bam(&bam, &NelruneIdentityResolver, &mut calls)
+        .unwrap_or_else(|e| panic!("rescanning {} for constant-region evidence: {e:#}", bam.display()));
+    eprintln!("rescued constant-region calls from BAM rescan: {rescued_constants}");
 
     // Always write the current caller output before making biological assertions.
     // This makes a failed integration test useful for diagnosis instead of leaving
