@@ -9,10 +9,12 @@ mod identifier;
 mod recombination_evidence_rescan;
 pub use identifier::{ReceptorRole, RecombinationId};
 pub use recombination_evidence_rescan::{
-    RecombinationEvidenceRescanReport, RecombinationRescanCall, RecombinationRescanCandidate,
+    RecombinationEvidenceRescanProgress, RecombinationEvidenceRescanReport,
+    RecombinationRescanCall, RecombinationRescanCandidate,
 };
 pub(crate) use recombination_evidence_rescan::{
     rescue_missing_constants_from_bam, rescue_missing_constants_from_bam_with_report,
+    rescue_missing_constants_from_bam_with_report_and_progress,
 };
 
 use constant_region_linkage::rescue_missing_constant_regions;

@@ -5,8 +5,9 @@ use crate::cellrep::{
 use crate::index::VdjIndex;
 use crate::recombination::{
     process_chain_work, rescue_missing_constants_from_bam,
-    rescue_missing_constants_from_bam_with_report, ChainWork, Recombination,
-    RecombinationEvidenceRescanReport,
+    rescue_missing_constants_from_bam_with_report,
+    rescue_missing_constants_from_bam_with_report_and_progress, ChainWork, Recombination,
+    RecombinationEvidenceRescanProgress, RecombinationEvidenceRescanReport,
 };
 use anyhow::{Context, Result};
 use int_to_str::IntToStr;
@@ -74,6 +75,20 @@ impl VdjRunner {
         path: P,
         resolver: &R,
     ) -> Result<usize> {
+        self.read_bam_with_progress(path, resolver, |_, _, _| {})
+    }
+
+    pub fn read_bam_with_progress<P, R, F>(
+        &mut self,
+        path: P,
+        resolver: &R,
+        mut progress: F,
+    ) -> Result<usize>
+    where
+        P: AsRef<Path>,
+        R: BamIdentityResolver,
+        F: FnMut(usize, &CellEvidenceVdj, &VdjIndex),
+    {
         let mut reader = bam::Reader::from_path(path.as_ref())
             .with_context(|| format!("opening {}", path.as_ref().display()))?;
         if self.threads > 1 {
@@ -116,6 +131,7 @@ impl VdjRunner {
                         &self.index,
                         self.config.min_sequence_overlap,
                     );
+                    progress(n, &self.evidence, &self.index);
                 }
                 last_query = Some(query_key);
                 current_evidence_id = None;
@@ -187,6 +203,7 @@ impl VdjRunner {
                 &self.index,
                 self.config.min_sequence_overlap,
             );
+            progress(n, &self.evidence, &self.index);
         }
         self.flush_id = self.flush_id.wrapping_add(1);
         Ok(n)
@@ -226,6 +243,28 @@ impl VdjRunner {
             &self.index,
             calls,
             self.threads,
+        )
+    }
+
+    pub fn rediscover_receptor_linkage_from_bam_with_report_and_progress<P, R, F>(
+        &self,
+        path: P,
+        resolver: &R,
+        calls: &mut [(u64, Vec<Recombination>)],
+        progress: F,
+    ) -> Result<RecombinationEvidenceRescanReport>
+    where
+        P: AsRef<Path>,
+        R: BamIdentityResolver,
+        F: FnMut(RecombinationEvidenceRescanProgress),
+    {
+        rescue_missing_constants_from_bam_with_report_and_progress(
+            path,
+            resolver,
+            &self.index,
+            calls,
+            self.threads,
+            progress,
         )
     }
 

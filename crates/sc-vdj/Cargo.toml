@@ -12,6 +12,7 @@ flate2 = "1"
 fast_tag_mapper = { path = "../fast_tag_mapper" }
 gtf_splice_index = { path = "../gtf_splice_index" }
 mapping_info = { path = "../mapping_info" }
+lumrik-status = { path = "../lumrik-status" }
 rayon = "1"
 rust-htslib = { path = "../rust-htslib" }
 scdata = { path = "../scdata" }

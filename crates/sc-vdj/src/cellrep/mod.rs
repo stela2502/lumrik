@@ -200,6 +200,10 @@ impl CellEvidence {
         self.summaries.get(&chain).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    pub fn summary_count(&self) -> usize {
+        self.summaries.values().map(Vec::len).sum()
+    }
+
     pub fn fragment_link_support(&self) -> &HashMap<FragmentLinkSignature, u32> {
         &self.fragment_link_support
     }

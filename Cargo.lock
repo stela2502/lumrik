@@ -1874,6 +1874,7 @@ dependencies = [
  "flate2",
  "gtf_splice_index",
  "int-to-str",
+ "lumrik-status",
  "mapping_info",
  "rayon",
  "rust-htslib",
