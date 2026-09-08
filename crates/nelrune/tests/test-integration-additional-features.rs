@@ -126,14 +126,38 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
     let splice_index = test_path("tiny.gtf.dat");
     let star_index = test_path("star_index");
 
-    for path in [&fasta, &gtf] {
-        assert!(
-            path.is_file(),
-            "required test input is missing: {}",
-            path.display()
-        );
-    }
+    let current_exe =
+        std::env::current_exe().expect("failed to locate current test executable");
 
+    let target_release = current_exe
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("failed to locate target/release");
+
+    let splice_index_bin = target_release.join("gtf-splice-index");
+
+    assert!(
+        splice_index_bin.is_file(),
+        "gtf-splice-index binary is missing: {}",
+        splice_index_bin.display()
+    );
+
+
+    let status = Command::new( &splice_index_bin )
+        .args([
+            "build",
+            "--annotation",
+            gtf.to_str().unwrap(),
+            "--index",
+            splice_index.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to run gtf-splice-index");
+
+    assert!(
+        status.success(),
+        "gtf-splice-index failed with status {status}"
+    );
     ensure_star_index(&fasta, &gtf, &star_index);
     ensure_splice_index(&gtf, &splice_index);
 
