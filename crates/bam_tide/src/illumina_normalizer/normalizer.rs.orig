@@ -120,8 +120,8 @@ impl IlluminaPartial {
             Some(
                 primer_match
                     .cell_seq
-                    .clone()
-                    .unwrap_or_else(|| cell.as_ref().expect("barcoded grammar must have CELL").seq.clone()),
+                    .as_deref()
+                    .unwrap_or_else(|| cell.as_ref().expect("barcoded grammar must have CELL").seq.as_slice()),
             )
         };
 
@@ -129,7 +129,7 @@ impl IlluminaPartial {
             .primer
             .grammar()
             .molecule_identity(
-                normalized_cell_seq.as_deref(),
+                normalized_cell_seq,
                 umi.as_ref().map(|x| x.seq.as_slice()),
                 &r1.seq,
                 &r2.seq,
@@ -183,7 +183,7 @@ impl IlluminaPartial {
         let umi = umi.expect("barcoded grammar must have UMI");
 
         let cell_seq = normalized_cell_seq.expect("barcoded grammar must have CELL");
-        let cell_id = IntToStr::new(&cell_seq).into_u64();
+        let cell_id = IntToStr::new(cell_seq).into_u64();
         let umi_id = IntToStr::new(&umi.seq).into_u64();
 
         if let Some(id) = feature_tag_mapper.map_feature_id(&r2.seq, &mut self.stats) {
