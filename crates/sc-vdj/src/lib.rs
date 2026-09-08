@@ -19,6 +19,9 @@ pub use cellrep::{
 };
 pub use index::{Chain, SegmentId, SegmentKind, Strand, VdjIndex, VdjIndexBuilder, VdjSegment};
 pub use recombination::{
-    ConstantRegionEvidence, JunctionStructure, ReceptorRole, Recombination, RecombinationId,
+    ConstantRegionEvidence, JunctionStructure, ProductivityStatus, ReceptorRole, Recombination,
+    RecombinationId,
 };
-pub use runner::{BamIdentityResolver, NelruneIdentityResolver, VdjRunner, VdjRunnerConfig};
+pub use runner::{
+    BamIdentityResolver, BamIngestProgress, NelruneIdentityResolver, VdjRunner, VdjRunnerConfig,
+};

@@ -401,6 +401,19 @@ impl RhapsodyWhitelist {
         Some((c1_idx, c2_idx, c3_idx))
     }
 
+    /// Convert a canonical 27-base (C1+C2+C3) barcode sequence to the official
+    /// one-based positional BD/Rustody cell id. This is intentionally exact:
+    /// upstream primer calling is responsible for barcode correction.
+    pub fn cell_id_for_seq(&self, seq: &[u8]) -> Option<u64> {
+        if seq.len() != 27 {
+            return None;
+        }
+        let c1 = *self.c1_exact.get(&seq[0..9])?;
+        let c2 = *self.c2_exact.get(&seq[9..18])?;
+        let c3 = *self.c3_exact.get(&seq[18..27])?;
+        Some(c1 * self.block_size * self.block_size + c2 * self.block_size + c3 + 1)
+    }
+
     pub fn cell_id_to_seq(&self, cell_id: u64) -> Option<Vec<u8>> {
         let (c1_idx, c2_idx, c3_idx) = self.cell_id_to_parts_ids(cell_id)?;
 
@@ -869,4 +882,13 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn canonical_sequence_roundtrips_to_positional_cell_id() {
+        let wl = RhapsodyWhitelist::bd_v2_384();
+        for id in [1u64, 384, 385, 147_457] {
+            let seq = wl.cell_id_to_seq(id).unwrap();
+            assert_eq!(wl.cell_id_for_seq(&seq), Some(id));
+        }
+    }
+
 }

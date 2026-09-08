@@ -1878,6 +1878,7 @@ dependencies = [
  "mapping_info",
  "rayon",
  "rust-htslib",
+ "sc_primer",
  "scdata",
  "tempfile",
 ]

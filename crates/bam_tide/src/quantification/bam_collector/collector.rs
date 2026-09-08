@@ -181,7 +181,9 @@ impl BamCollector {
                     self.config
                         .read_tags
                         .load_for_id(path_id)
-                        .with_context(|| format!("reading read-tag table for {}", path.display()))?,
+                        .with_context(|| {
+                            format!("reading read-tag table for {}", path.display())
+                        })?,
                 )
             };
 
@@ -256,11 +258,11 @@ impl BamCollector {
             self.config.cell_tag.0,
             self.config.umi_tag.0,
         )
-            .with_genome(self.genome.as_ref(), !self.config.no_genome_refine)
-            .with_snp_index(snp.as_ref().map(|s| &s.index))
-            .with_read_tag_table(read_tag_table)
-            .with_min_mapq(self.config.min_mapq)
-            .read1_only(self.config.read1_only);
+        .with_genome(self.genome.as_ref(), !self.config.no_genome_refine)
+        .with_snp_index(snp.as_ref().map(|s| &s.index))
+        .with_read_tag_table(read_tag_table)
+        .with_min_mapq(self.config.min_mapq)
+        .read1_only(self.config.read1_only);
 
         let mut jobs = Vec::<Job>::with_capacity(CHUNK);
         let mut current: Option<ReadGroup> = None;
@@ -491,7 +493,6 @@ impl BamCollectorHandle {
             .map_err(|_| anyhow!("BAM collector thread panicked"))?
     }
 }
-
 
 #[cfg(test)]
 mod tests {

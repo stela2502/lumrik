@@ -45,9 +45,10 @@ fn best_direct_constant_link(
         if signature.chain != chain || count == 0 {
             continue;
         }
-        let supports_call = signature.receptor_segments.contains(&call.v)
-            || signature.receptor_segments.contains(&call.j);
-        if !supports_call {
+        // A constant call must be physically linked to the reconstructed J.
+        // V-only -> C linkage is too permissive for RNA data because abundant
+        // constant/sterile transcription can otherwise dominate assignment.
+        if !signature.receptor_segments.contains(&call.j) {
             continue;
         }
         for &constant_id in &signature.constant_segments {

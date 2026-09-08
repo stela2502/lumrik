@@ -134,11 +134,7 @@ mod tests {
         let mut group = ReadGroup::new(record(b"frag1", b"ACGTACGTACGTACGT", 0x1 | 0x40));
         // supplementary R1 must remain in the group but not replace primary R1
         group
-            .push(record(
-                b"frag1",
-                b"TTTTTTTTTTTTTTTT",
-                0x1 | 0x40 | 0x800,
-            ))
+            .push(record(b"frag1", b"TTTTTTTTTTTTTTTT", 0x1 | 0x40 | 0x800))
             .unwrap();
         // paired + second
         group
@@ -207,5 +203,4 @@ mod tests {
             grammar.molecule_identity(None, None, &b1, &b2).unwrap(),
         );
     }
-
 }

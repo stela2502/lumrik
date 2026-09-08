@@ -83,14 +83,12 @@ impl FastLocusMapper {
         }
     }
 
-    pub fn add_feature(
-        &mut self,
-        locus_id: u64,
-        seq: &[u8],
-        feature: FeatureEntry,
-    ) -> usize {
+    pub fn add_feature(&mut self, locus_id: u64, seq: &[u8], feature: FeatureEntry) -> usize {
         let feature_index = self.features.len();
-        assert!(feature_index <= u32::MAX as usize, "too many locus-mapper features");
+        assert!(
+            feature_index <= u32::MAX as usize,
+            "too many locus-mapper features"
+        );
         self.features.push(LocusFeature {
             locus_ids: vec![locus_id],
             feature,
@@ -101,7 +99,10 @@ impl FastLocusMapper {
                 continue;
             };
             assert!(tag_pos <= u32::MAX as usize, "feature sequence is too long");
-            assert!(self.entries.len() < u32::MAX as usize, "too many locus-mapper 8-mers");
+            assert!(
+                self.entries.len() < u32::MAX as usize,
+                "too many locus-mapper 8-mers"
+            );
 
             let slot = kmer as usize;
             let entry_index = self.entries.len() as u32;
@@ -136,7 +137,9 @@ impl FastLocusMapper {
                     .is_ok()
                 {
                     let key = (feature_index, query_pos as isize - entry.tag_pos as isize);
-                    if let Some((_, count)) = votes.iter_mut().find(|(candidate, _)| *candidate == key) {
+                    if let Some((_, count)) =
+                        votes.iter_mut().find(|(candidate, _)| *candidate == key)
+                    {
                         *count += 1;
                     } else {
                         votes.push((key, 1));
@@ -180,7 +183,6 @@ impl FastLocusMapper {
             hits,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -214,7 +216,11 @@ mod tests {
     #[test]
     fn one_sequence_can_have_multiple_locus_aliases() {
         let mut mapper = FastLocusMapper::new().with_min_hits(3);
-        let feature = mapper.add_feature(11, b"AACCGGTTAACCGGTT", FeatureEntry::new(1, "clone", "test"));
+        let feature = mapper.add_feature(
+            11,
+            b"AACCGGTTAACCGGTT",
+            FeatureEntry::new(1, "clone", "test"),
+        );
         mapper.add_locus_alias(feature, 22);
 
         assert!(matches!(
@@ -227,5 +233,4 @@ mod tests {
         ));
         assert_eq!(mapper.map_status(33, b"AACCGGTTAACCGGTT"), MapStatus::NoHit);
     }
-
 }

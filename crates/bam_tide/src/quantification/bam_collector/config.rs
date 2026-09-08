@@ -91,11 +91,14 @@ pub struct BamCollectorConfig {
     )]
     pub snp_min_anchor: u8,
 
-
     #[command(flatten)]
     pub read_tags: ReadTagTableCli,
 
-    #[arg(long, default_value = "CB", help = "BAM aux tag containing the cell barcode.")]
+    #[arg(
+        long,
+        default_value = "CB",
+        help = "BAM aux tag containing the cell barcode."
+    )]
     pub cell_tag: BamAuxTag,
 
     #[arg(long, default_value = "UB", help = "BAM aux tag containing the UMI.")]

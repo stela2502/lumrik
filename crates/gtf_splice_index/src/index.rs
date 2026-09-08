@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
-const MAGIC: &[u8; 4] = b"SPX1";
+const MAGIC: &[u8; 4] = b"SPX2";
 const VERSION_STR: &str = env!("CARGO_PKG_VERSION");
 
 /// Configure which attribute keys are used to extract:
@@ -528,9 +528,31 @@ impl SpliceIndex {
 
         // transcript internal id -> gene internal id (best-effort)
         let mut tx_to_gene: HashMap<TranscriptId, GeneId> = HashMap::new();
+        // CDS records may occur before their exon records. Keep their genomic
+        // bounds by transcript key and attach them after all exons have created
+        // the transcript objects.
+        let mut cds_by_tx: HashMap<String, (u32, u32)> = HashMap::new();
 
         for rec in AnnotationReader::new(reader).records() {
             let rec = rec?;
+
+            if rec.feature_type == "CDS" {
+                if let Some(tx_key_raw) = rec
+                    .pick_first_attr(&keys.transcript_id_keys)
+                    .or_else(|| rec.pick_first_attr(&keys.parent_keys))
+                {
+                    for tx_key in split_gff3_parent_list(&tx_key_raw) {
+                        cds_by_tx
+                            .entry(tx_key)
+                            .and_modify(|span| {
+                                span.0 = span.0.min(rec.start0);
+                                span.1 = span.1.max(rec.end0);
+                            })
+                            .or_insert((rec.start0, rec.end0));
+                    }
+                }
+                continue;
+            }
 
             if !rec.is_exon_feature(&keys.exon_feature_types) {
                 continue;
@@ -580,6 +602,12 @@ impl SpliceIndex {
                     start: rec.start0,
                     end: rec.end0,
                 });
+            }
+        }
+
+        for (tx_key, (start, end)) in cds_by_tx {
+            if let Some(&tx_id) = tx_key_to_id.get(&tx_key) {
+                self.transcripts[tx_id].add_cds(RefBlock { start, end });
             }
         }
 

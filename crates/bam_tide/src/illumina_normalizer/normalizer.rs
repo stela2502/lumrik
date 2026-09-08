@@ -109,11 +109,27 @@ impl IlluminaPartial {
             })?)
         };
 
+        // PrimerMatch::cell_seq is the normalized cell barcode. For chemistries
+        // such as BD Rhapsody this contains the whitelist-corrected barcode,
+        // while get_cell() above is the observed sequence sliced from R1.
+        // Cell identity must use the normalized sequence or sequencing errors
+        // would split one biological cell into multiple molecule/cell IDs.
+        let normalized_cell_seq = if unbarcoded {
+            None
+        } else {
+            Some(
+                primer_match
+                    .cell_seq
+                    .as_deref()
+                    .unwrap_or_else(|| cell.as_ref().expect("barcoded grammar must have CELL").seq.as_slice()),
+            )
+        };
+
         let identity = config
             .primer
             .grammar()
             .molecule_identity(
-                cell.as_ref().map(|x| x.seq.as_slice()),
+                normalized_cell_seq,
                 umi.as_ref().map(|x| x.seq.as_slice()),
                 &r1.seq,
                 &r2.seq,
@@ -166,7 +182,8 @@ impl IlluminaPartial {
         let cell = cell.expect("barcoded grammar must have CELL");
         let umi = umi.expect("barcoded grammar must have UMI");
 
-        let cell_id = IntToStr::new(&cell.seq).into_u64();
+        let cell_seq = normalized_cell_seq.expect("barcoded grammar must have CELL");
+        let cell_id = IntToStr::new(cell_seq).into_u64();
         let umi_id = IntToStr::new(&umi.seq).into_u64();
 
         if let Some(id) = feature_tag_mapper.map_feature_id(&r2.seq, &mut self.stats) {
@@ -202,7 +219,7 @@ impl IlluminaPartial {
         let read_tag = ReadTagRecord::new(
             emitted_r2.id.clone(),
             Some(r2.id.clone()),
-            &cell.seq,
+            cell_seq,
             &cell.qual,
             &umi.seq,
             &umi.qual,

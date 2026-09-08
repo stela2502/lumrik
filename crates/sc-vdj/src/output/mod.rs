@@ -1,6 +1,7 @@
 use crate::{Recombination, VdjIndex};
 use anyhow::{Context, Result};
 use mapping_info::MappingInfo;
+use sc_primer::{BdCellVersion, RhapsodyWhitelist};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -12,6 +13,7 @@ pub struct ReportWriter {
     receptors: BufWriter<File>,
     observed: Option<BufWriter<File>>,
     naive: Option<BufWriter<File>>,
+    rhapsody: Option<RhapsodyWhitelist>,
 }
 
 impl ReportWriter {
@@ -20,10 +22,10 @@ impl ReportWriter {
         fs::create_dir_all(dir)?;
 
         let mut calls = writer(dir.join("vdj_calls.tsv"))?;
-        writeln!(calls, "cell\trecombination_id\tchain\tstage\tv\td\tj\tc\tsupport_features\treceptor_rediscovery_reads\tconstant_link_fragments\tconstant_spanning_reads\tconstant_link_call\tv_del_3\tp_v3_len\tp_v3\tn1_len\tn1\tp_d5_len\tp_d5\td_del_5\td_retained_len\td_retained\td_del_3\tp_d3_len\tp_d3\tn2_len\tn2\tp_j5_len\tp_j5\tj_del_5\tpn_alternative\tobserved_rearrangement\tnaive_recombination\tobserved_receptor_sequence")?;
+        writeln!(calls, "cell\trustody_cell_id\trecombination_id\tchain\tstage\tv\td\tj\tc\tproductivity_status\tsupport_features\treceptor_rediscovery_reads\tjunction_support_reads\tjunction_spanning_reads\tjunction_conflicting_reads\tjunction_refined_bases\tconstant_link_fragments\tconstant_spanning_reads\tconstant_link_call\tv_del_3\tp_v3_len\tp_v3\tn1_len\tn1\tp_d5_len\tp_d5\td_del_5\td_retained_len\td_retained\td_del_3\tp_d3_len\tp_d3\tn2_len\tn2\tp_j5_len\tp_j5\tj_del_5\tpn_alternative\tobserved_rearrangement\tnaive_recombination\tobserved_receptor_sequence")?;
 
         let mut airr = writer(dir.join("airr_rearrangements.tsv"))?;
-        writeln!(airr, "sequence_id\tsequence\tproductive\tvj_in_frame\tstop_codon\tcomplete_vdj\tlocus\tv_call\td_call\tj_call\tc_call\tjunction\tnp1\tnp2\tnp1_length\tnp2_length\tcell_id\tlumrik_recombination_id\tlumrik_supporting_features\tlumrik_receptor_rediscovery_reads\tlumrik_constant_link_fragments\tlumrik_constant_spanning_reads\tlumrik_constant_link_call")?;
+        writeln!(airr, "sequence_id\tsequence\tproductive\tvj_in_frame\tstop_codon\tcomplete_vdj\tlocus\tv_call\td_call\tj_call\tc_call\tjunction\tjunction_aa\tcdr3\tcdr3_aa\tnp1\tnp2\tnp1_length\tnp2_length\tcell_id\tlumrik_rustody_cell_id\tlumrik_productivity_status\tlumrik_recombination_id\tlumrik_supporting_features\tlumrik_receptor_rediscovery_reads\tlumrik_junction_support_reads\tlumrik_junction_spanning_reads\tlumrik_junction_conflicting_reads\tlumrik_junction_refined_bases\tlumrik_constant_link_fragments\tlumrik_constant_spanning_reads\tlumrik_constant_link_call")?;
 
         let mut receptors = writer(dir.join("vdj_receptors.tsv"))?;
         writeln!(receptors, "cell\theavy_recombination_id\tlight_recombination_id\theavy_chain\theavy_v\theavy_d\theavy_j\theavy_c\theavy_support_features\theavy_receptor_rediscovery_reads\theavy_constant_link_fragments\theavy_constant_spanning_reads\theavy_naive_recombination\tlight_chain\tlight_v\tlight_j\tlight_c\tlight_support_features\tlight_receptor_rediscovery_reads\tlight_constant_link_fragments\tlight_constant_spanning_reads\tlight_naive_recombination")?;
@@ -40,7 +42,13 @@ impl ReportWriter {
             receptors,
             observed,
             naive,
+            rhapsody: None,
         })
+    }
+
+    pub fn with_bd_cell_version(mut self, version: BdCellVersion) -> Self {
+        self.rhapsody = Some(RhapsodyWhitelist::builtin(version));
+        self
     }
 
     pub fn write_cell(
@@ -70,6 +78,11 @@ impl ReportWriter {
             let x = &r.junction;
             let fields = vec![
                 cell.to_string(),
+                self.rhapsody
+                    .as_ref()
+                    .and_then(|wl| wl.cell_id_for_seq(cell.as_bytes()))
+                    .map(|x| x.to_string())
+                    .unwrap_or_default(),
                 r.stable_id.to_string(),
                 r.chain.to_string(),
                 stage.into(),
@@ -77,8 +90,13 @@ impl ReportWriter {
                 d,
                 j,
                 c,
+                r.productivity_status.as_str().to_string(),
                 r.supporting_features.to_string(),
                 r.receptor_linkage.rediscovery_reads.to_string(),
+                r.receptor_linkage.junction_support_reads.to_string(),
+                r.receptor_linkage.junction_spanning_reads.to_string(),
+                r.receptor_linkage.junction_conflicting_reads.to_string(),
+                r.receptor_linkage.junction_refined_bases.to_string(),
                 r.receptor_linkage.constant_link_fragments.to_string(),
                 r.receptor_linkage.constant_spanning_reads.to_string(),
                 r.receptor_linkage
@@ -110,16 +128,6 @@ impl ReportWriter {
             ];
             writeln!(self.calls, "{}", fields.join("\t"))?;
 
-            let junction = [
-                x.p_v3.as_slice(),
-                x.n1.as_slice(),
-                x.p_d5.as_slice(),
-                x.d_retained.as_slice(),
-                x.p_d3.as_slice(),
-                x.n2.as_slice(),
-                x.p_j5.as_slice(),
-            ]
-            .concat();
             let np1 = if r.chain.has_d() {
                 [x.p_v3.as_slice(), x.n1.as_slice(), x.p_d5.as_slice()].concat()
             } else {
@@ -133,9 +141,9 @@ impl ReportWriter {
             let airr = vec![
                 format!("{}|{}", cell, r.stable_id),
                 dna(&r.observed_receptor_sequence),
-                tf(r.productive),
-                tf(r.in_frame),
-                tf(r.stop_codon),
+                airr_tf(r.productive, r.productivity_status.is_unknown()),
+                airr_tf(r.in_frame, r.productivity_status.is_unknown()),
+                airr_tf(r.stop_codon, r.productivity_status.is_unknown()),
                 "T".into(),
                 r.chain.to_string(),
                 seg(index, Some(r.v)),
@@ -145,15 +153,28 @@ impl ReportWriter {
                     .as_ref()
                     .map(|q| seg(index, Some(q.segment)))
                     .unwrap_or_default(),
-                dna(&junction),
+                dna(&r.airr_junction),
+                String::from_utf8_lossy(&r.airr_junction_aa).into_owned(),
+                dna(&r.cdr3),
+                String::from_utf8_lossy(&r.cdr3_aa).into_owned(),
                 dna(&np1),
                 dna(&np2),
                 np1.len().to_string(),
                 np2.len().to_string(),
                 cell.to_string(),
+                self.rhapsody
+                    .as_ref()
+                    .and_then(|wl| wl.cell_id_for_seq(cell.as_bytes()))
+                    .map(|x| x.to_string())
+                    .unwrap_or_default(),
+                r.productivity_status.as_str().to_string(),
                 r.stable_id.to_string(),
                 r.supporting_features.to_string(),
                 r.receptor_linkage.rediscovery_reads.to_string(),
+                r.receptor_linkage.junction_support_reads.to_string(),
+                r.receptor_linkage.junction_spanning_reads.to_string(),
+                r.receptor_linkage.junction_conflicting_reads.to_string(),
+                r.receptor_linkage.junction_refined_bases.to_string(),
                 r.receptor_linkage.constant_link_fragments.to_string(),
                 r.receptor_linkage.constant_spanning_reads.to_string(),
                 r.receptor_linkage
@@ -301,8 +322,14 @@ fn dna(x: &[u8]) -> String {
 fn opt(x: Option<u16>) -> String {
     x.map(|x| x.to_string()).unwrap_or_default()
 }
-fn tf(x: bool) -> String {
-    if x { "T" } else { "F" }.into()
+fn airr_tf(x: bool, unknown: bool) -> String {
+    if unknown {
+        String::new()
+    } else if x {
+        "T".into()
+    } else {
+        "F".into()
+    }
 }
 fn fasta_token(x: &str) -> String {
     x.chars()

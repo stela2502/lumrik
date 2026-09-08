@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use flate2::read::MultiGzDecoder;
 use gtf_splice_index::{IdNameKeys, SpliceIndex, Strand as GtfStrand};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -105,8 +105,25 @@ pub struct VdjSegment {
     pub start: u32,
     pub end: u32,
     pub strand: Strand,
+    /// Genomic exon blocks for this transcript. `start..end` is the full
+    /// transcript span and may contain large introns, especially for constant
+    /// genes; only these blocks are bona-fide exonic segment sequence.
+    pub exon_blocks: Vec<(u32, u32)>,
+    /// Zero-based coding start in `sequence` for V segments, projected from the
+    /// transcript CDS annotation. Other segment kinds do not need to carry the
+    /// full CDS geometry.
+    pub coding_start: Option<u32>,
     /// Mature transcript-oriented sequence.
     pub sequence: Vec<u8>,
+}
+
+impl VdjSegment {
+    /// Zero-based coding start in the mature transcript-oriented segment
+    /// sequence. `None` is a legitimate property of a V annotation without a
+    /// usable CDS anchor; callers must not invent a frame in that case.
+    pub fn coding_start(&self) -> Option<usize> {
+        self.coding_start.map(|x| x as usize)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -114,10 +131,18 @@ pub struct VdjIndex {
     pub segments: Vec<VdjSegment>,
     by_chromosome: HashMap<String, Vec<SegmentId>>,
     local_ordinals: HashMap<(Chain, SegmentKind), Vec<SegmentId>>,
+    precise_exon_blocks: bool,
 }
 
 impl VdjIndex {
-    pub fn from_segments(mut segments: Vec<VdjSegment>) -> Result<Self> {
+    pub fn from_segments(segments: Vec<VdjSegment>) -> Result<Self> {
+        Self::from_segments_with_exon_precision(segments, true)
+    }
+
+    pub(crate) fn from_segments_with_exon_precision(
+        mut segments: Vec<VdjSegment>,
+        precise_exon_blocks: bool,
+    ) -> Result<Self> {
         segments.sort_by(|a, b| {
             (a.chain, a.kind, &a.name, &a.transcript_id, a.start, a.end).cmp(&(
                 b.chain,
@@ -144,6 +169,7 @@ impl VdjIndex {
             segments,
             by_chromosome: HashMap::new(),
             local_ordinals: HashMap::new(),
+            precise_exon_blocks,
         };
         out.rebuild_lookups();
         Ok(out)
@@ -174,6 +200,15 @@ impl VdjIndex {
     pub fn is_empty(&self) -> bool {
         self.segments.is_empty()
     }
+    pub fn has_precise_exon_blocks(&self) -> bool {
+        self.precise_exon_blocks
+    }
+    pub fn has_v_coding_starts(&self) -> bool {
+        self.segments
+            .iter()
+            .filter(|s| s.kind == SegmentKind::V)
+            .all(|s| s.coding_start.is_some())
+    }
     pub fn segment(&self, id: SegmentId) -> Option<&VdjSegment> {
         self.segments.get(id as usize)
     }
@@ -202,7 +237,55 @@ impl VdjIndex {
         let mut out = Vec::new();
         for id in ids {
             let s = &self.segments[*id as usize];
-            if blocks.iter().any(|&(a, b)| a < s.end && b > s.start) {
+            if blocks.iter().any(|&(a, b)| {
+                s.exon_blocks
+                    .iter()
+                    .any(|&(x, y)| a < y && b > x)
+            }) {
+                out.push(*id);
+            }
+        }
+        out
+    }
+
+    /// Constant-gene spans overlapped by aligned reference sequence that does
+    /// not overlap any annotated exon of that constant transcript. This is
+    /// genuine intronic evidence, not ordinary C-exon coverage.
+    pub fn intronic_constant_overlapping(
+        &self,
+        chromosome: &str,
+        blocks: &[(u32, u32)],
+        min_bases: u32,
+    ) -> Vec<SegmentId> {
+        let Some(ids) = self.by_chromosome.get(chromosome) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for id in ids {
+            let s = &self.segments[*id as usize];
+            if s.kind != SegmentKind::C {
+                continue;
+            }
+            let mut intronic = 0u32;
+            for &(a, b) in blocks {
+                let lo = a.max(s.start);
+                let hi = b.min(s.end);
+                if lo >= hi {
+                    continue;
+                }
+                let span_overlap = hi - lo;
+                let exonic_overlap: u32 = s
+                    .exon_blocks
+                    .iter()
+                    .map(|&(x, y)| {
+                        let ex_lo = lo.max(x);
+                        let ex_hi = hi.min(y);
+                        ex_hi.saturating_sub(ex_lo)
+                    })
+                    .sum();
+                intronic = intronic.saturating_add(span_overlap.saturating_sub(exonic_overlap));
+            }
+            if intronic >= min_bases {
                 out.push(*id);
             }
         }
@@ -238,17 +321,34 @@ impl VdjIndex {
 #[derive(Debug, Clone)]
 pub struct VdjIndexBuilder {
     max_feature_span: u32,
+    gene_names: Option<HashSet<String>>,
 }
 impl Default for VdjIndexBuilder {
     fn default() -> Self {
         Self {
             max_feature_span: 1_000_000,
+            gene_names: None,
         }
     }
 }
 impl VdjIndexBuilder {
     pub fn new(max_feature_span: u32) -> Self {
-        Self { max_feature_span }
+        Self {
+            max_feature_span,
+            gene_names: None,
+        }
+    }
+
+    /// Restrict index construction to these gene names. This changes only
+    /// which normal V/D/J/C segments are retained; retained genes follow the
+    /// exact same construction path as an unrestricted VDJ index.
+    pub fn with_gene_names<I, S>(mut self, gene_names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.gene_names = Some(gene_names.into_iter().map(Into::into).collect());
+        self
     }
     pub fn build<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
@@ -263,6 +363,13 @@ impl VdjIndexBuilder {
         let genome = read_fasta(genome_fasta)?;
         let mut segments = Vec::with_capacity(immune.len());
         for entry in immune.values() {
+            if self
+                .gene_names
+                .as_ref()
+                .is_some_and(|wanted| !wanted.contains(&entry.gene_name))
+            {
+                continue;
+            }
             let tx = splice
                 .transcript_by_name(&entry.transcript_id)
                 .map_err(|e| {
@@ -284,11 +391,13 @@ impl VdjIndexBuilder {
                 )
             })?;
             let mut sequence = Vec::new();
+            let mut exon_blocks = Vec::new();
             let mut start = u32::MAX;
             let mut end = 0;
             for exon in tx.exons() {
                 start = start.min(exon.start);
                 end = end.max(exon.end);
+                exon_blocks.push((exon.start, exon.end));
                 let a = exon.start as usize;
                 let b = exon.end as usize;
                 sequence.extend_from_slice(chr.get(a..b).ok_or_else(|| {
@@ -322,14 +431,50 @@ impl VdjIndexBuilder {
                     start,
                     end,
                     strand,
+                    coding_start: if entry.kind == SegmentKind::V {
+                        tx.cds_span().map(|span| project_cds_start(tx.exons(), tx.strand, span))
+                    } else {
+                        None
+                    },
+                    exon_blocks,
                     sequence: normalize_reference_dna(&sequence)?,
                 });
+            }
+        }
+        if let Some(wanted) = &self.gene_names {
+            let found: HashSet<_> = segments.iter().map(|s| s.name.as_str()).collect();
+            let mut missing: Vec<_> = wanted
+                .iter()
+                .filter(|name| !found.contains(name.as_str()))
+                .cloned()
+                .collect();
+            missing.sort();
+            if !missing.is_empty() {
+                bail!("requested VDJ gene(s) not found in annotation: {}", missing.join(", "));
             }
         }
         if segments.is_empty() {
             bail!("no IG/TR V(D)J segments recovered from {}", gtf.display())
         }
         VdjIndex::from_segments(segments)
+    }
+}
+
+fn project_cds_start(
+    exons: &[gtf_splice_index::RefBlock],
+    strand: GtfStrand,
+    cds: (u32, u32),
+) -> u32 {
+    match strand {
+        GtfStrand::Plus => exons
+            .iter()
+            .map(|e| e.end.min(cds.0).saturating_sub(e.start))
+            .sum(),
+        GtfStrand::Minus => exons
+            .iter()
+            .map(|e| e.end.saturating_sub(e.start.max(cds.1)))
+            .sum(),
+        _ => 0,
     }
 }
 
@@ -538,5 +683,83 @@ pub(crate) fn reference_base_matches(r: u8, q: u8) -> bool {
         b'V' => matches!(q, b'A' | b'C' | b'G'),
         b'N' => matches!(q, b'A' | b'C' | b'G' | b'T'),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod index_contract_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn write_reference() -> Result<(tempfile::TempDir, std::path::PathBuf, std::path::PathBuf)> {
+        let dir = tempdir()?;
+        let gtf = dir.path().join("tiny.gtf");
+        let fasta = dir.path().join("tiny.fa");
+
+        let mut genome = vec![b'A'; 240];
+        // Give the V transcript an explicit coding start at genomic position 3
+        // (GTF position 4), so the projected mature-transcript coding start is 3.
+        genome[3..6].copy_from_slice(b"ATG");
+        fs::write(&fasta, format!(">chr1\n{}\n", String::from_utf8(genome).unwrap()))?;
+        fs::write(
+            &gtf,
+            concat!(
+                "chr1\ttest\texon\t1\t90\t.\t+\t.\tgene_id \"IGHV1\"; gene_name \"Ighv1-64\"; transcript_id \"IGHV1-T1\";\n",
+                "chr1\ttest\tCDS\t4\t90\t.\t+\t0\tgene_id \"IGHV1\"; gene_name \"Ighv1-64\"; transcript_id \"IGHV1-T1\";\n",
+                "chr1\ttest\texon\t121\t150\t.\t+\t.\tgene_id \"IGHJ3\"; gene_name \"Ighj3\"; transcript_id \"IGHJ3-T1\";\n",
+            ),
+        )?;
+        Ok((dir, gtf, fasta))
+    }
+
+    #[test]
+    fn filtered_builder_is_the_same_index_contract_as_full_builder() -> Result<()> {
+        let (dir, gtf, fasta) = write_reference()?;
+        let full = VdjIndexBuilder::default().build(&gtf, &fasta)?;
+        let filtered = VdjIndexBuilder::default()
+            .with_gene_names(["Ighv1-64"])
+            .build(&gtf, &fasta)?;
+
+        let full_v = full.segments.iter().find(|s| s.name == "Ighv1-64").unwrap();
+        let tiny_v = filtered.segments.iter().find(|s| s.name == "Ighv1-64").unwrap();
+        assert_eq!(tiny_v.sequence, full_v.sequence);
+        assert_eq!(tiny_v.exon_blocks, full_v.exon_blocks);
+        assert_eq!(tiny_v.coding_start(), full_v.coding_start());
+        assert_eq!(tiny_v.coding_start(), Some(3));
+
+        let path = dir.path().join("filtered.vdjidx");
+        filtered.save(&path)?;
+        let loaded = VdjIndex::load(&path)?;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded.segments[0].name, "Ighv1-64");
+        assert_eq!(loaded.segments[0].coding_start(), Some(3));
+        assert!(loaded.has_precise_exon_blocks());
+        Ok(())
+    }
+
+    #[test]
+    fn vdj_index_roundtrip_allows_v_without_cds() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("no-cds.vdjidx");
+        let index = VdjIndex::from_segments(vec![VdjSegment {
+            id: 0,
+            name: "IghvPseudo".into(),
+            transcript_id: "tx".into(),
+            gene_id: "gene".into(),
+            chain: Chain::Igh,
+            kind: SegmentKind::V,
+            chromosome: "chr1".into(),
+            start: 0,
+            end: 9,
+            strand: Strand::Plus,
+            exon_blocks: vec![(0, 9)],
+            coding_start: None,
+            sequence: b"ACGTACGTA".to_vec(),
+        }])?;
+        index.save(&path)?;
+        let loaded = VdjIndex::load(&path)?;
+        assert_eq!(loaded.segments[0].coding_start(), None);
+        Ok(())
     }
 }

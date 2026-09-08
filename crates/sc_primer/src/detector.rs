@@ -53,6 +53,19 @@ impl PrimerDetector {
             None => self.grammar.cell_len(),
         }
     }
+    /// 	Convert a normalized cell-barcode sequence into the chemistry-specific
+    /// 	numeric cell ID.
+    /// 	Returns `Some(cell_id)` when the configured single-cell system supports
+    /// 	sequence-to-ID translation and the barcode is recognized. Returns `None`
+    /// 	otherwise.
+    pub fn cell_id_for_seq(&self, seq: &[u8]) -> Option<u64> {
+        match &self.single_cell_system {
+            Some(SingleCellSystem::Rhapsody(rhapsody)) => {
+                rhapsody.cell_id_for_seq(seq)
+            }
+            _ => None,
+        }
+    }
 
     pub fn detect(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Vec<PrimerMatch>> {
         self.detect_all(seq, qual)

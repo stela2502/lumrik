@@ -22,6 +22,8 @@ fn seg(name: &str, kind: SegmentKind, start: u32, seq: &[u8]) -> VdjSegment {
         start,
         end: start + seq.len() as u32,
         strand: Strand::Plus,
+        exon_blocks: vec![(start, start + seq.len() as u32)],
+        coding_start: (kind == SegmentKind::V).then_some(0),
         sequence: seq.to_vec(),
     }
 }
@@ -78,13 +80,21 @@ fn complex_fragmented_vdj_with_pn_d_and_constant_is_detected_from_bam() {
     receptor.extend_from_slice(&c[..30]);
 
     // Four overlapping fragments: no BAM record contains the whole VDJ event.
-    // Their genomic mapper coordinates nominate V, D, J and C respectively;
-    // sequence overlap must reconstruct the receptor before junction inference.
+    // The final fragment is a biologically coherent J -> C splice: 16 bp of
+    // J anchor, the genomic J/C intron skipped with N, then 30 bp of C.
+    // This both exceeds the reconstruction overlap threshold and proves
+    // physical J/C linkage instead of treating a C-only read as receptor
+    // evidence.
     let ranges = [
-        (0, 52, 110u32),
-        (34, 72, 302u32),
-        (55, 96, 503u32),
-        (80, receptor.len(), 702u32),
+        (0, 52, 110u32, CigarString(vec![Cigar::Match(52)])),
+        (34, 72, 302u32, CigarString(vec![Cigar::Match(38)])),
+        (55, rearr_len, 503u32, CigarString(vec![Cigar::Match((rearr_len - 55) as u32)])),
+        (
+            68,
+            receptor.len(),
+            512u32,
+            CigarString(vec![Cigar::Match(16), Cigar::RefSkip(172), Cigar::Match(30)]),
+        ),
     ];
     let tmp = tempfile::tempdir().unwrap();
     let bam_path = tmp.path().join("complex.bam");
@@ -95,10 +105,9 @@ fn complex_fragmented_vdj_with_pn_d_and_constant_is_detected_from_bam() {
             .push_tag(b"LN", 2000),
     );
     let mut writer = Writer::from_path(&bam_path, &header, bam::Format::Bam).unwrap();
-    for (i, (a, b, pos)) in ranges.into_iter().enumerate() {
+    for (i, (a, b, pos, cigar)) in ranges.into_iter().enumerate() {
         let seq = &receptor[a..b];
         let qual = vec![40u8; seq.len()];
-        let cigar = CigarString(vec![Cigar::Match(seq.len() as u32)]);
         let mut rec = bam::Record::new();
         rec.set(format!("fragment{i}").as_bytes(), Some(&cigar), seq, &qual);
         // Synthetic mapper output: bam::Record::new() starts as unmapped.

@@ -53,8 +53,15 @@ pub fn describe_vdj_run<P: AsRef<Path>>(
     writeln!(out, "single-segment BAM records:  {single_segment_records}")?;
     writeln!(out, "multi-segment BAM records:   {multi_segment_records}")?;
     writeln!(out, "multi-segment fragments:     {linked_fragments}")?;
-    writeln!(out, "cells with VDJ evidence:     {}", runner.evidence.cell_count())?;
-    writeln!(out, "raw read-level evidence:     discarded after each 20,000-record batch")?;
+    writeln!(
+        out,
+        "cells with VDJ evidence:     {}",
+        runner.evidence.cell_count()
+    )?;
+    writeln!(
+        out,
+        "raw read-level evidence:     discarded after each 20,000-record batch"
+    )?;
 
     for (cell_id, cell) in runner.evidence.cells() {
         let cell_name = runner
@@ -168,8 +175,7 @@ fn describe_chain(
         writeln!(
             out,
             "      {}: V={v} D={d} J={j} C={c} support={}",
-            call.stable_id,
-            call.supporting_features
+            call.stable_id, call.supporting_features
         )?;
     }
 
@@ -199,11 +205,31 @@ pub fn describe_recombination_rescan(
     let mut out = String::new();
     writeln!(out, "RECOMBINATION EVIDENCE RESCAN")?;
     writeln!(out, "===========================")?;
-    writeln!(out, "BAM records scanned:        {}", report.bam_records_scanned)?;
-    writeln!(out, "records from wanted cells:  {}", report.wanted_cell_records)?;
-    writeln!(out, "CDR3/J bait-hit records:    {}", report.receptor_hit_records)?;
-    writeln!(out, "constant-region hit records:{}", report.constant_hit_records)?;
-    writeln!(out, "linked physical fragments:  {}", report.linked_fragments)?;
+    writeln!(
+        out,
+        "BAM records scanned:        {}",
+        report.bam_records_scanned
+    )?;
+    writeln!(
+        out,
+        "records from wanted cells:  {}",
+        report.wanted_cell_records
+    )?;
+    writeln!(
+        out,
+        "CDR3/J bait-hit records:    {}",
+        report.receptor_hit_records
+    )?;
+    writeln!(
+        out,
+        "constant-region hit records:{}",
+        report.constant_hit_records
+    )?;
+    writeln!(
+        out,
+        "linked physical fragments:  {}",
+        report.linked_fragments
+    )?;
     writeln!(out, "rescued constant calls:     {}", report.rescued)?;
 
     for call_report in &report.calls {

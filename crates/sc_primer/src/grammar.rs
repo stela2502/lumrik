@@ -169,7 +169,10 @@ impl Grammar {
                 "molecule identity sequence exceeds {MOLECULE_KEY_BASES} bases"
             )));
         }
-        if !seq.iter().all(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T')) {
+        if !seq
+            .iter()
+            .all(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
+        {
             return Err(PrimerError::invalid_coordinates(
                 "molecule identity sequence contains a non-ACGT base",
             ));

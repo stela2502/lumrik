@@ -1,8 +1,8 @@
 use crate::cellrep::{
-    AlignmentGeometry, BamFeatureEvidence, BamFeatureSequenceParts, CellEvidence, CellEvidenceVdj,
-    EvidenceId, MapperEvidence, SequencePart,
+    AlignmentGeometry, BamFeatureEvidence, BamFeatureSequenceParts, CellEvidenceVdj, CellEvidence, EvidenceId,
+    MapperEvidence, SequencePart,
 };
-use crate::index::{SegmentKind, VdjIndex};
+use crate::index::VdjIndex;
 use crate::recombination::{
     process_chain_work, rescue_missing_constants_from_bam,
     rescue_missing_constants_from_bam_with_report,
@@ -11,9 +11,9 @@ use crate::recombination::{
 };
 use anyhow::{Context, Result};
 use int_to_str::IntToStr;
-use rayon::prelude::*;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -26,6 +26,7 @@ pub struct ChainKneeSelection {
     pub evidence_cells: usize,
     pub selected_cells: usize,
 }
+
 
 pub trait BamIdentityResolver {
     fn cell(&self, record: &bam::Record) -> Option<String>;
@@ -54,13 +55,7 @@ impl Default for VdjRunnerConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BamIngestProgress {
-    pub bam_records: usize,
-    pub allowed_cell_records: usize,
-    pub receptor_overlap_records: usize,
-}
-
+#[derive(Debug)]
 pub struct VdjRunner {
     pub index: VdjIndex,
     pub evidence: CellEvidenceVdj,
@@ -101,7 +96,7 @@ impl VdjRunner {
     where
         P: AsRef<Path>,
         R: BamIdentityResolver,
-        F: FnMut(BamIngestProgress, &CellEvidenceVdj, &VdjIndex),
+        F: FnMut(usize, &CellEvidenceVdj, &VdjIndex),
     {
         self.read_bam_with_progress_for_cells(path, resolver, None, progress)
     }
@@ -120,7 +115,7 @@ impl VdjRunner {
     where
         P: AsRef<Path>,
         R: BamIdentityResolver,
-        F: FnMut(BamIngestProgress, &CellEvidenceVdj, &VdjIndex),
+        F: FnMut(usize, &CellEvidenceVdj, &VdjIndex),
     {
         let mut reader = bam::Reader::from_path(path.as_ref())
             .with_context(|| format!("opening {}", path.as_ref().display()))?;
@@ -131,8 +126,6 @@ impl VdjRunner {
         }
         let header = reader.header().to_owned();
         let mut n = 0usize;
-        let mut bam_records = 0usize;
-        let mut allowed_cell_records = 0usize;
         let mut entry = 0u32;
         let mut batch = Vec::<(u64, BamFeatureEvidence)>::with_capacity(EVIDENCE_BATCH_SIZE);
 
@@ -146,7 +139,6 @@ impl VdjRunner {
 
         for rec in reader.records() {
             let rec = rec?;
-            bam_records = bam_records.saturating_add(1);
             if rec.is_unmapped() {
                 continue;
             }
@@ -157,27 +149,20 @@ impl VdjRunner {
             if allowed_cells.is_some_and(|allowed| !allowed.contains(&cell_id)) {
                 continue;
             }
-            allowed_cell_records = allowed_cell_records.saturating_add(1);
             let query_key = (cell_id, rec.qname().to_vec());
 
             if last_query.as_ref() != Some(&query_key) {
                 if batch.len() >= EVIDENCE_BATCH_SIZE {
-                    let full =
-                        std::mem::replace(&mut batch, Vec::with_capacity(EVIDENCE_BATCH_SIZE));
+                    let full = std::mem::replace(
+                        &mut batch,
+                        Vec::with_capacity(EVIDENCE_BATCH_SIZE),
+                    );
                     self.evidence.consume_batch(
                         full,
                         &self.index,
                         self.config.min_sequence_overlap,
                     );
-                    progress(
-                        BamIngestProgress {
-                            bam_records,
-                            allowed_cell_records,
-                            receptor_overlap_records: n,
-                        },
-                        &self.evidence,
-                        &self.index,
-                    );
+                    progress(n, &self.evidence, &self.index);
                 }
                 last_query = Some(query_key);
                 current_evidence_id = None;
@@ -190,17 +175,7 @@ impl VdjRunner {
             let chr = String::from_utf8_lossy(header.tid2name(tid as u32)).into_owned();
             let blocks = aligned_blocks(&rec);
             let segment_ids = self.index.overlapping(&chr, &blocks);
-            let intronic_constant_segments =
-                self.index.intronic_constant_overlapping(&chr, &blocks, 8);
-            let has_rearrangement_segment = segment_ids.iter().any(|id| {
-                self.index
-                    .segment(*id)
-                    .is_some_and(|segment| segment.kind != SegmentKind::C)
-            });
-            // C-exon-only reads are ambiguous: they may belong to a normal
-            // rearranged transcript whose fragment simply does not reach J.
-            // They neither classify biology nor seed expensive reconstruction.
-            if !has_rearrangement_segment && intronic_constant_segments.is_empty() {
+            if segment_ids.is_empty() {
                 continue;
             }
 
@@ -230,18 +205,16 @@ impl VdjRunner {
                     alignment: geometry.clone(),
                 })
                 .collect();
+            let part = SequencePart {
+                bases: rec.seq().as_bytes(),
+                qualities: rec.qual().to_vec(),
+            };
             let mut sequence = BamFeatureSequenceParts::default();
-            if has_rearrangement_segment {
-                let part = SequencePart {
-                    bases: rec.seq().as_bytes(),
-                    qualities: rec.qual().to_vec(),
-                };
-                if rec.is_last_in_template() {
-                    sequence.r2 = Some(part)
-                } else {
-                    sequence.r1 = Some(part)
-                };
-            }
+            if rec.is_last_in_template() {
+                sequence.r2 = Some(part)
+            } else {
+                sequence.r1 = Some(part)
+            };
 
             batch.push((
                 cell_id,
@@ -249,7 +222,6 @@ impl VdjRunner {
                     id,
                     sequence,
                     mappings,
-                    intronic_constant_segments,
                 },
             ));
             self.cell_names.entry(cell_id).or_insert(cell);
@@ -257,17 +229,12 @@ impl VdjRunner {
         }
 
         if !batch.is_empty() {
-            self.evidence
-                .consume_batch(batch, &self.index, self.config.min_sequence_overlap);
-            progress(
-                BamIngestProgress {
-                    bam_records,
-                    allowed_cell_records,
-                    receptor_overlap_records: n,
-                },
-                &self.evidence,
+            self.evidence.consume_batch(
+                batch,
                 &self.index,
+                self.config.min_sequence_overlap,
             );
+            progress(n, &self.evidence, &self.index);
         }
         self.flush_id = self.flush_id.wrapping_add(1);
         Ok(n)
@@ -283,7 +250,13 @@ impl VdjRunner {
         resolver: &R,
         calls: &mut [(u64, Vec<Recombination>)],
     ) -> Result<usize> {
-        rescue_missing_constants_from_bam(path, resolver, &self.index, calls, self.threads)
+        rescue_missing_constants_from_bam(
+            path,
+            resolver,
+            &self.index,
+            calls,
+            self.threads,
+        )
     }
 
     pub fn rediscover_receptor_linkage_from_bam_with_report<
@@ -332,10 +305,19 @@ impl VdjRunner {
         resolver: &R,
         calls: &mut [(u64, Vec<Recombination>)],
     ) -> Result<usize> {
-        rescue_missing_constants_from_bam(path, resolver, &self.index, calls, self.threads)
+        rescue_missing_constants_from_bam(
+            path,
+            resolver,
+            &self.index,
+            calls,
+            self.threads,
+        )
     }
 
-    pub fn rescue_missing_constants_from_bam_with_report<P: AsRef<Path>, R: BamIdentityResolver>(
+    pub fn rescue_missing_constants_from_bam_with_report<
+        P: AsRef<Path>,
+        R: BamIdentityResolver,
+    >(
         &self,
         path: P,
         resolver: &R,
@@ -356,12 +338,8 @@ impl VdjRunner {
                 let mut counts: Vec<usize> = self
                     .evidence
                     .cells()
-                    .filter_map(|(_, cell)| {
-                        let v_mappings = cell.segment_mappings(chain, SegmentKind::V);
-                        let j_mappings = cell.segment_mappings(chain, SegmentKind::J);
-                        qualifies_reconstruction_candidate(v_mappings, j_mappings)
-                            .then(|| cell.reconstruction_records(chain))
-                    })
+                    .map(|(_, cell)| cell.chain_records(chain))
+                    .filter(|count| *count > 0)
                     .collect();
                 counts.sort_unstable_by(|a, b| b.cmp(a));
 
@@ -385,14 +363,6 @@ impl VdjRunner {
         &self,
     ) -> (Vec<(u64, Vec<Recombination>)>, Vec<ChainKneeSelection>) {
         let selection = self.receptor_knee_selection();
-        let out = self.identify_with_receptor_knee_selection(&selection);
-        (out, selection)
-    }
-
-    pub fn identify_with_receptor_knee_selection(
-        &self,
-        selection: &[ChainKneeSelection],
-    ) -> Vec<(u64, Vec<Recombination>)> {
         let thresholds: HashMap<_, _> = selection
             .iter()
             .map(|x| (x.chain, x.threshold_records))
@@ -405,10 +375,7 @@ impl VdjRunner {
                 .into_iter()
                 .filter(|chain| {
                     let threshold = thresholds.get(chain).copied().unwrap_or(1);
-                    let v_mappings = cell.segment_mappings(*chain, SegmentKind::V);
-                    let j_mappings = cell.segment_mappings(*chain, SegmentKind::J);
-                    qualifies_reconstruction_candidate(v_mappings, j_mappings)
-                        && cell.reconstruction_records(*chain) >= threshold
+                    cell.chain_records(*chain) >= threshold
                 })
                 .flat_map(|chain| {
                     process_chain_work(ChainWork {
@@ -434,7 +401,7 @@ impl VdjRunner {
         };
 
         out.sort_by_key(|x| x.0);
-        out
+        (out, selection)
     }
 
     pub fn identify(&self) -> Vec<(u64, Vec<Recombination>)> {
@@ -469,15 +436,7 @@ impl VdjRunner {
         out.sort_by_key(|x| x.0);
         out
     }
-}
 
-fn qualifies_reconstruction_candidate(v_mappings: usize, j_mappings: usize) -> bool {
-    // Direct V+J evidence remains sufficient.  V-only cells are also allowed
-    // when V support is repeated, because fragmented receptor reconstruction can
-    // recover a J that was not directly mapped in the first pass.  Requiring at
-    // least two V mappings keeps singleton/ambient V hits out of the expensive
-    // reconstruction population.
-    v_mappings > 0 && (j_mappings > 0 || v_mappings >= 2)
 }
 
 fn receptor_knee_threshold(counts_desc: &[usize]) -> usize {
@@ -499,12 +458,7 @@ fn receptor_knee_threshold(counts_desc: &[usize]) -> usize {
 
     let mut best_idx = 0usize;
     let mut best_distance = 0.0f64;
-    for (i, count) in counts_desc
-        .iter()
-        .enumerate()
-        .skip(1)
-        .take(n.saturating_sub(2))
-    {
+    for (i, count) in counts_desc.iter().enumerate().skip(1).take(n.saturating_sub(2)) {
         let x = ((i + 1) as f64).ln() / x_max;
         let y = ((*count as f64).ln() - y_min) / y_span;
         let distance = (1.0 - x) - y;
@@ -526,17 +480,7 @@ fn receptor_knee_threshold(counts_desc: &[usize]) -> usize {
 
 #[cfg(test)]
 mod knee_tests {
-    use super::{qualifies_reconstruction_candidate, receptor_knee_threshold};
-
-    #[test]
-    fn reconstruction_candidate_accepts_vj_or_repeated_v_only() {
-        assert!(qualifies_reconstruction_candidate(1, 1));
-        assert!(qualifies_reconstruction_candidate(2, 0));
-        assert!(qualifies_reconstruction_candidate(56, 0));
-        assert!(!qualifies_reconstruction_candidate(1, 0));
-        assert!(!qualifies_reconstruction_candidate(0, 10));
-        assert!(!qualifies_reconstruction_candidate(0, 0));
-    }
+    use super::receptor_knee_threshold;
 
     #[test]
     fn knee_keeps_sparse_high_depth_head_and_drops_single_read_tail() {
@@ -556,6 +500,7 @@ mod knee_tests {
         assert_eq!(receptor_knee_threshold(&counts), 1);
     }
 }
+
 
 fn aligned_blocks(record: &bam::Record) -> Vec<(u32, u32)> {
     let mut ref_pos = record.pos().max(0) as u32;

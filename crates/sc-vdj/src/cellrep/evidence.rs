@@ -71,11 +71,8 @@ impl fmt::Display for SummarizedEvidenceDisplay<'_> {
 
             writeln!(f, "segment_support:")?;
             let mut support = summary.segment_support.clone();
-            support.sort_by_key(|(id, _)| {
-                self.index
-                    .segment(*id)
-                    .map(|s| (s.kind, s.name.clone()))
-            });
+            support
+                .sort_by_key(|(id, _)| self.index.segment(*id).map(|s| (s.kind, s.name.clone())));
             for (id, count) in support {
                 if let Some(segment) = self.index.segment(id) {
                     writeln!(
@@ -94,9 +91,9 @@ impl fmt::Display for SummarizedEvidenceDisplay<'_> {
             } else {
                 let mut anchors = summary.germline_anchors.clone();
                 anchors.sort_by_key(|anchor| {
-                    self.index.segment(anchor.segment_id).map(|segment| {
-                        (segment.kind, segment.name.clone(), anchor.summary_start)
-                    })
+                    self.index
+                        .segment(anchor.segment_id)
+                        .map(|segment| (segment.kind, segment.name.clone(), anchor.summary_start))
                 });
                 for anchor in anchors {
                     if let Some(segment) = self.index.segment(anchor.segment_id) {

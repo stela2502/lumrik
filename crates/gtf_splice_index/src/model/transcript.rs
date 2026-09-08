@@ -10,6 +10,11 @@ pub struct Transcript {
     pub chr_id: usize,
     pub strand: Strand,
     exons: Vec<RefBlock>,
+    /// Genomic 0-based half-open CDS span from the annotation.  This stays in
+    /// the same coordinate system as the exon blocks; consumers can project it
+    /// onto a spliced cDNA only when they actually materialize one.
+    cds_start: Option<u32>,
+    cds_end: Option<u32>,
     finalized: bool,
 }
 
@@ -28,6 +33,8 @@ impl Transcript {
             chr_id,
             strand,
             exons: Vec::new(),
+            cds_start: None,
+            cds_end: None,
             finalized: false,
         }
     }
@@ -53,6 +60,18 @@ impl Transcript {
 
     pub fn exons(&self) -> &[RefBlock] {
         &self.exons
+    }
+
+    pub fn add_cds(&mut self, block: RefBlock) {
+        self.cds_start = Some(self.cds_start.map_or(block.start, |x| x.min(block.start)));
+        self.cds_end = Some(self.cds_end.map_or(block.end, |x| x.max(block.end)));
+    }
+
+    /// Genomic 0-based half-open coding span.  The bounds deliberately remain
+    /// genomic; strand-aware projection onto spliced transcript coordinates is
+    /// a downstream operation.
+    pub fn cds_span(&self) -> Option<(u32, u32)> {
+        Some((self.cds_start?, self.cds_end?))
     }
 
     /// sorts the transcripts exons and returns (total start: u32, total end: u32)
@@ -610,6 +629,8 @@ mod tests {
                     end: 300,
                 },
             ],
+            cds_start: None,
+            cds_end: None,
             finalized: false,
         };
 

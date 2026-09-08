@@ -70,35 +70,29 @@ fn main() -> Result<()> {
                 .get(&cell_id)
                 .map(String::as_str)
                 .unwrap_or("unknown");
-            if c.visual_evidence_cell.as_deref().is_some_and(|wanted| wanted != name) {
+            if c.visual_evidence_cell
+                .as_deref()
+                .is_some_and(|wanted| wanted != name)
+            {
                 continue;
             }
             eprintln!("\nCELL {name} ({cell_id})");
             for chain in evidence.chains(&runner.index) {
                 eprintln!(
                     "{}",
-                    evidence.display_raw_chain(
-                        &runner.index,
-                        chain,
-                        c.min_sequence_overlap,
-                    )
+                    evidence.display_raw_chain(&runner.index, chain, c.min_sequence_overlap,)
                 );
                 eprintln!(
                     "{}",
-                    evidence.display_summarized_chain(
-                        &runner.index,
-                        chain,
-                        c.min_sequence_overlap,
-                    )
+                    evidence
+                        .display_summarized_chain(&runner.index, chain, c.min_sequence_overlap,)
                 );
             }
         }
     }
 
     let mut calls = runner.identify();
-    let initial_calls = c
-        .rescan_recombination_evidence
-        .then(|| calls.clone());
+    let initial_calls = c.rescan_recombination_evidence.then(|| calls.clone());
     let rescan_report = if c.rescan_recombination_evidence {
         Some(runner.rescue_missing_constants_from_bam_with_report(
             &c.bam,
@@ -110,7 +104,10 @@ fn main() -> Result<()> {
     };
 
     if c.evidence_report {
-        eprintln!("{}", evidence_report::describe_vdj_run(&c.bam, &runner, &calls)?);
+        eprintln!(
+            "{}",
+            evidence_report::describe_vdj_run(&c.bam, &runner, &calls)?
+        );
     }
     if let (Some(before), Some(report)) = (initial_calls.as_ref(), rescan_report.as_ref()) {
         eprintln!(

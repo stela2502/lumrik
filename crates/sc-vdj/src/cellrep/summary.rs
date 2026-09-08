@@ -159,7 +159,8 @@ impl ReceptorSequenceEvidence {
                 // A short D may not have enough sequence for a reliable anchor;
                 // in that case its identity is retained without a placement.
                 let anchor_overlap = min_overlap.min(8).max(4);
-                if let Some(read_start) = fast_anchor_offset(&segment.sequence, &bases, anchor_overlap)
+                if let Some(read_start) =
+                    fast_anchor_offset(&segment.sequence, &bases, anchor_overlap)
                 {
                     out.germline_anchors.push(GermlineAnchor {
                         segment_id: id,
@@ -172,8 +173,7 @@ impl ReceptorSequenceEvidence {
     }
 
     fn shares_segment(&self, other: &Self) -> bool {
-        self.segment_ids()
-            .any(|id| other.segment_support(id) > 0)
+        self.segment_ids().any(|id| other.segment_support(id) > 0)
     }
 
     fn has_hard_segment_conflict(&self, other: &Self, index: &VdjIndex) -> bool {
@@ -198,12 +198,7 @@ impl ReceptorSequenceEvidence {
         false
     }
 
-    fn try_consume(
-        &mut self,
-        other: &Self,
-        index: &VdjIndex,
-        min_overlap: usize,
-    ) -> bool {
+    fn try_consume(&mut self, other: &Self, index: &VdjIndex, min_overlap: usize) -> bool {
         if self.has_hard_segment_conflict(other, index) {
             return false;
         }
@@ -274,10 +269,10 @@ impl ReceptorSequenceEvidence {
         for b in 0..4 {
             for i in 0..other.base_counts[b].len() {
                 let dst = start + i;
-                self.base_counts[b][dst] = self.base_counts[b][dst]
-                    .saturating_add(other.base_counts[b][i]);
-                self.base_max_qual[b][dst] = self.base_max_qual[b][dst]
-                    .max(other.base_max_qual[b][i]);
+                self.base_counts[b][dst] =
+                    self.base_counts[b][dst].saturating_add(other.base_counts[b][i]);
+                self.base_max_qual[b][dst] =
+                    self.base_max_qual[b][dst].max(other.base_max_qual[b][i]);
             }
         }
         for &(id, n) in &other.segment_support {
@@ -292,9 +287,7 @@ impl ReceptorSequenceEvidence {
                 self.germline_anchors.push(shifted);
             }
         }
-        self.support_features = self
-            .support_features
-            .saturating_add(other.support_features);
+        self.support_features = self.support_features.saturating_add(other.support_features);
     }
 }
 
@@ -402,7 +395,7 @@ pub(crate) fn consume_chain_features(
             .filter_map(|m| {
                 index
                     .segment(m.segment_id)
-                    .filter(|s| s.chain == chain)
+                    .filter(|s| s.chain == chain && s.kind != crate::index::SegmentKind::C)
                     .map(|_| m.segment_id)
             })
             .collect();
@@ -421,8 +414,7 @@ pub(crate) fn consume_chain_features(
             .filter_map(|m| {
                 let s = index.segment(m.segment_id)?;
                 (s.chain == chain).then_some(
-                    m.alignment.is_reverse
-                        ^ matches!(s.strand, crate::index::Strand::Minus),
+                    m.alignment.is_reverse ^ matches!(s.strand, crate::index::Strand::Minus),
                 )
             })
             .reduce(|a, b| if a == b { a } else { false })
@@ -483,12 +475,7 @@ pub(crate) fn consume_chain_features(
             // Only the summary touched by this new evidence can have acquired a
             // new bridge to another existing component.  Re-test that one
             // component rather than rescanning every pair after every read.
-            collapse_from(
-                summaries,
-                target,
-                index,
-                min_overlap,
-            );
+            collapse_from(summaries, target, index, min_overlap);
         }
     }
 

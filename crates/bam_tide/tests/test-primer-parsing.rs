@@ -3,7 +3,7 @@ use anyhow::Result;
 use bam_tide::fastq::FastqRecord;
 use bam_tide::illumina_normalizer::cli::{InsertRead, PrimerRead};
 use bam_tide::illumina_normalizer::{IlluminaNormalizerConfig, IlluminaPartial};
-use sc_primer::{Grammar, PrimerDetector};
+use sc_primer::{Chemistry, Grammar, PrimerDetector};
 
 use std::path::PathBuf;
 
@@ -256,6 +256,67 @@ fn illumina_normalize_pair_preserves_cell_and_umi_qualities() -> Result<()> {
     assert_eq!(candidate.read_tag.cell_qual, vec![b'A'; 8]);
 
     assert_eq!(candidate.read_tag.umi_qual, vec![b'B'; 6]);
+
+    Ok(())
+}
+
+
+#[test]
+fn bd_rhapsody_normalizer_uses_corrected_cell_barcode() -> Result<()> {
+    let primer = PrimerDetector::from_chemistry(Chemistry::BdV2_384)
+        .map_err(anyhow::Error::msg)?;
+
+    let config = IlluminaNormalizerConfig {
+        out: PathBuf::from("unused-out.fastq"),
+        read_tags: PathBuf::from("unused-read-tags.tsv"),
+        primer_read: PrimerRead::R1,
+        insert_read: InsertRead::R2,
+        primer,
+        additional_features: Vec::new(),
+        additional_feature_min_hits: 4,
+        max_reads: Some(10),
+        min_insert_len: 30,
+        threads: 1,
+        gzip_level: 1,
+        gzip: false,
+    };
+
+    // Canonical BD v2.384 cell barcode for this primer is:
+    // CGGAGAGAT + GCGCCATAT + GCGGAGCAT
+    //
+    // Both R1 reads contain a different one-base sequencing error in C1.
+    // sc-primer corrects both to the same whitelist barcode. The normalizer
+    // must preserve that corrected barcode instead of re-slicing the raw R1.
+    let r1_a = fastq(
+        "read1",
+        b"TNAAGGAGAGATGTGAGCGCCATATGACAGCGGAGCATTGAACCTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    );
+    let r1_b = fastq(
+        "read2",
+        b"TNACAGAGAGATGTGAGCGCCATATGACAGCGGAGCATTGAACCTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    );
+    let r2 = fastq(
+        "read",
+        b"TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA",
+    );
+
+    let mut partial = IlluminaPartial::new();
+    let feature_mapper = fast_tag_mapper::FastTagMapper::new();
+
+    partial.normalize_pair(&r1_a, &r2, &config, &feature_mapper)?;
+    partial.normalize_pair(&r1_b, &r2, &config, &feature_mapper)?;
+
+    assert_eq!(partial.candidates.len(), 2);
+
+    let expected = b"CGGAGAGATGCGCCATATGCGGAGCAT";
+    assert_eq!(partial.candidates[0].read_tag.cell_seq, expected);
+    assert_eq!(partial.candidates[1].read_tag.cell_seq, expected);
+
+    assert_eq!(
+        partial.candidates[0].dedup_key,
+        partial.candidates[1].dedup_key,
+        "different observed errors in one corrected BD cell must not split molecule identity",
+    );
 
     Ok(())
 }

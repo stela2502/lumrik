@@ -262,6 +262,80 @@ fn escape_json(value: &str) -> String {
     out
 }
 
+
+pub fn snapshot_html(snapshot: &ServerSnapshot) -> String {
+    let elapsed_ms = snapshot
+        .finished_unix_ms
+        .unwrap_or(snapshot.started_unix_ms)
+        .saturating_sub(snapshot.started_unix_ms);
+    let elapsed = format_elapsed_ms(elapsed_ms);
+    let mut sections = String::new();
+    for section in &snapshot.sections {
+        sections.push_str("<section class=\"panel\"><h2>");
+        sections.push_str(&escape_html(&section.title));
+        sections.push_str("</h2><div class=\"rows\">");
+        for metric in &section.metrics {
+            sections.push_str("<div class=\"row\"><div class=\"label\">");
+            sections.push_str(&escape_html(&metric.label));
+            sections.push_str("</div><div class=\"metric\">");
+            sections.push_str(&escape_html(&metric.value));
+            sections.push_str("</div></div>");
+        }
+        sections.push_str("</div></section>");
+    }
+
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{}</title>
+<style>{}</style>
+</head>
+<body>
+<main>
+<header><div><h1>{}</h1><p class="subtitle">{}</p></div><div class="badge">final report</div></header>
+<div class="summary"><div><span>Stage</span><strong>{}</strong></div><div><span>Elapsed</span><strong>{}</strong></div></div>
+<div class="sections">{}</div>
+<footer>Static Lumrik run report</footer>
+</main>
+</body>
+</html>
+"#,
+        escape_html(&snapshot.title),
+        DASHBOARD_CSS,
+        escape_html(&snapshot.title),
+        escape_html(&snapshot.subtitle),
+        escape_html(&snapshot.stage),
+        elapsed,
+        sections,
+    )
+}
+
+fn format_elapsed_ms(ms: u128) -> String {
+    let total = ms / 1000;
+    let seconds = total % 60;
+    let minutes = (total / 60) % 60;
+    let hours = total / 3600;
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+fn escape_html(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct MemoryStatus {
     pub process_rss_mib: f64,
@@ -344,34 +418,32 @@ fn parse_proc_kib(line: &str, key: &str) -> Option<u64> {
         .ok()
 }
 
+const DASHBOARD_CSS: &str = r#"
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0e1116;color:#e8edf3;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1040px;margin:0 auto;padding:32px 22px 48px}header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:20px}h1{margin:0 0 5px;font-size:1.9rem;letter-spacing:-.025em}.subtitle{margin:0;color:#95a0ad}.badge{font-size:.78rem;color:#a9b4c0;border:1px solid #2a3440;border-radius:999px;padding:6px 10px;white-space:nowrap}.summary{display:grid;grid-template-columns:minmax(0,2fr) minmax(130px,1fr);gap:12px;margin:18px 0 20px}.summary>div,.panel{background:#151a21;border:1px solid #262e39;border-radius:10px}.summary>div{padding:13px 15px}.summary span{display:block;color:#8995a3;font-size:.76rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}.summary strong{font-size:1rem;font-weight:650}.sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.panel{overflow:hidden}.panel h2{font-size:.9rem;margin:0;padding:12px 14px;border-bottom:1px solid #252d37;color:#c7d0da;background:#171d25}.rows{padding:3px 0}.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:8px 14px;border-bottom:1px solid #202731;align-items:baseline}.row:last-child{border-bottom:0}.label{color:#909ba8;font-size:.84rem}.metric{font-variant-numeric:tabular-nums;text-align:right;font-weight:620;font-size:.88rem;overflow-wrap:anywhere}footer{margin-top:22px;color:#66717e;font-size:.78rem}@media(max-width:760px){main{padding:22px 14px 36px}.sections{grid-template-columns:1fr}.summary{grid-template-columns:1fr}header{display:block}.badge{display:inline-block;margin-top:10px}.row{grid-template-columns:1fr;gap:3px}.metric{text-align:left}}
+"#;
+
 const DASHBOARD_HTML: &str = r##"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Lumrik</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 24px;background:#111;color:#eee}
-h1{margin-bottom:4px}.subtitle{color:#999;margin-bottom:24px}.section-title{margin:28px 0 10px;color:#bbb;font-size:1rem;text-transform:uppercase;letter-spacing:.08em}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}.card{background:#1c1c1c;border:1px solid #333;border-radius:10px;padding:20px}
-.label{color:#999;font-size:.9rem;margin-bottom:8px}.value{font-size:1.5rem;font-weight:600;overflow-wrap:anywhere}.file{font-size:1rem;font-family:monospace}.footer{margin-top:32px;color:#666;font-size:.85rem}
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0e1116;color:#e8edf3;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1040px;margin:0 auto;padding:32px 22px 48px}header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:20px}h1{margin:0 0 5px;font-size:1.9rem;letter-spacing:-.025em}.subtitle{margin:0;color:#95a0ad}.badge{font-size:.78rem;color:#a9b4c0;border:1px solid #2a3440;border-radius:999px;padding:6px 10px;white-space:nowrap}.summary{display:grid;grid-template-columns:minmax(0,2fr) minmax(130px,1fr);gap:12px;margin:18px 0 20px}.summary>div,.panel{background:#151a21;border:1px solid #262e39;border-radius:10px}.summary>div{padding:13px 15px}.summary span{display:block;color:#8995a3;font-size:.76rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}.summary strong{font-size:1rem;font-weight:650}.sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.panel{overflow:hidden}.panel h2{font-size:.9rem;margin:0;padding:12px 14px;border-bottom:1px solid #252d37;color:#c7d0da;background:#171d25}.rows{padding:3px 0}.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:8px 14px;border-bottom:1px solid #202731;align-items:baseline}.row:last-child{border-bottom:0}.label{color:#909ba8;font-size:.84rem}.metric{font-variant-numeric:tabular-nums;text-align:right;font-weight:620;font-size:.88rem;overflow-wrap:anywhere}footer{margin-top:22px;color:#66717e;font-size:.78rem}@media(max-width:760px){main{padding:22px 14px 36px}.sections{grid-template-columns:1fr}.summary{grid-template-columns:1fr}header{display:block}.badge{display:inline-block;margin-top:10px}.row{grid-template-columns:1fr;gap:3px}.metric{text-align:left}}
 </style>
 </head>
 <body>
-<h1 id="title">Lumrik</h1>
-<div class="subtitle" id="subtitle">Live processing status</div>
-<div class="grid">
-<div class="card"><div class="label">Stage</div><div class="value" id="stage">startup</div></div>
-<div class="card"><div class="label">Elapsed</div><div class="value" id="elapsed">00:00:00</div></div>
-<div class="card"><div class="label">External URL</div><div class="value file" id="public_url">-</div></div>
-</div>
-<div id="sections"></div>
-<div class="footer" id="updated">Waiting for status...</div>
+<main>
+<header><div><h1 id="title">Lumrik</h1><p class="subtitle" id="subtitle">Live processing status</p></div><div class="badge">live</div></header>
+<div class="summary"><div><span>Stage</span><strong id="stage">startup</strong></div><div><span>Elapsed</span><strong id="elapsed">00:00:00</strong></div></div>
+<div class="sections" id="sections"></div>
+<footer id="updated">Waiting for status...</footer>
+</main>
 <script>
 let runStartedMs=null,runFinishedMs=null;
 function updateElapsed(){if(runStartedMs===null)return;const end=runFinishedMs??Date.now();const s=Math.floor(Math.max(0,end-runStartedMs)/1000);const sec=s%60,min=Math.floor(s/60)%60,h=Math.floor(s/3600);document.getElementById("elapsed").textContent=String(h).padStart(2,"0")+":"+String(min).padStart(2,"0")+":"+String(sec).padStart(2,"0")}
-function renderSections(sections){const root=document.getElementById("sections");root.replaceChildren();for(const section of sections){const heading=document.createElement("div");heading.className="section-title";heading.textContent=section.title;root.appendChild(heading);const grid=document.createElement("div");grid.className="grid";for(const metric of section.metrics){const card=document.createElement("div");card.className="card";const label=document.createElement("div");label.className="label";label.textContent=metric.label;const value=document.createElement("div");value.className="value";value.textContent=metric.value;card.append(label,value);grid.appendChild(card)}root.appendChild(grid)}}
-async function updateStatus(){try{const response=await fetch("/status",{cache:"no-store"});if(!response.ok)throw new Error("HTTP "+response.status);const s=await response.json();document.title=s.title;document.getElementById("title").textContent=s.title;document.getElementById("subtitle").textContent=s.subtitle;document.getElementById("stage").textContent=s.stage;document.getElementById("public_url").textContent=s.public_url??"-";runStartedMs=Number(s.started_unix_ms);runFinishedMs=s.finished_unix_ms===null?null:Number(s.finished_unix_ms);renderSections(s.sections);document.getElementById("updated").textContent="Updated "+new Date().toLocaleTimeString();updateElapsed()}catch(error){document.getElementById("updated").textContent="Status unavailable: "+error}}
+function renderSections(sections){const root=document.getElementById("sections");root.replaceChildren();for(const section of sections){const panel=document.createElement("section");panel.className="panel";const heading=document.createElement("h2");heading.textContent=section.title;panel.appendChild(heading);const rows=document.createElement("div");rows.className="rows";for(const item of section.metrics){const row=document.createElement("div");row.className="row";const label=document.createElement("div");label.className="label";label.textContent=item.label;const metric=document.createElement("div");metric.className="metric";metric.textContent=item.value;row.append(label,metric);rows.appendChild(row)}panel.appendChild(rows);root.appendChild(panel)}}
+async function updateStatus(){try{const response=await fetch("/status",{cache:"no-store"});if(!response.ok)throw new Error("HTTP "+response.status);const s=await response.json();document.title=s.title;document.getElementById("title").textContent=s.title;document.getElementById("subtitle").textContent=s.subtitle;document.getElementById("stage").textContent=s.stage;runStartedMs=Number(s.started_unix_ms);runFinishedMs=s.finished_unix_ms===null?null:Number(s.finished_unix_ms);renderSections(s.sections);document.getElementById("updated").textContent="Updated "+new Date().toLocaleTimeString();updateElapsed()}catch(error){document.getElementById("updated").textContent="Status unavailable: "+error}}
 setInterval(updateElapsed,1000);setInterval(updateStatus,2000);updateStatus();
 </script>
 </body>
@@ -401,4 +473,27 @@ mod tests {
         assert!(json.contains("\"value\":\"209\""));
         assert!(json.contains("\"finished_unix_ms\":null"));
     }
+
+    #[test]
+    fn static_html_preserves_sections_and_escapes_values() {
+        let snapshot = ServerSnapshot {
+            title: "Lumrik <test>".into(),
+            subtitle: "status & report".into(),
+            started_unix_ms: 1_000,
+            finished_unix_ms: Some(3_000),
+            stage: "finished".into(),
+            public_url: None,
+            sections: vec![StatusSection::new(
+                "Evidence",
+                vec![StatusMetric::new("J→C", "42 < 100")],
+            )],
+        };
+        let html = snapshot_html(&snapshot);
+        assert!(html.contains("Lumrik &lt;test&gt;"));
+        assert!(html.contains("status &amp; report"));
+        assert!(html.contains("J→C"));
+        assert!(html.contains("42 &lt; 100"));
+        assert!(html.contains("00:00:02"));
+    }
+
 }

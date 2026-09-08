@@ -14,10 +14,10 @@ mod evidence;
 mod summary;
 
 pub use evidence::{RawEvidenceDisplay, SummarizedEvidenceDisplay};
+use summary::merge_summary_batch;
 pub use summary::{
     summarize_chain_work, ChainSummaryWork, GermlineAnchor, ReceptorSequenceEvidence,
 };
-use summary::merge_summary_batch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EvidenceId {
@@ -71,6 +71,9 @@ pub struct BamFeatureEvidence {
     pub id: EvidenceId,
     pub sequence: BamFeatureSequenceParts,
     pub mappings: Vec<MapperEvidence>,
+    /// Constant-gene spans covered outside annotated exons. These are retained
+    /// only as compact intronic-state evidence and never seed reconstruction.
+    pub intronic_constant_segments: Vec<SegmentId>,
 }
 
 /// Compact aggregate of one kind of direct physical-fragment receptor -> C link.
@@ -90,6 +93,9 @@ pub struct CellEvidenceStats {
     multi_segment_records: usize,
     linked_fragments: usize,
     chain_records: HashMap<Chain, usize>,
+    reconstruction_records: HashMap<Chain, usize>,
+    intronic_constant_records: HashMap<Chain, usize>,
+    intronic_constant_segments: HashMap<SegmentId, usize>,
     segment_mappings: HashMap<(Chain, SegmentKind), usize>,
 }
 
@@ -138,7 +144,7 @@ impl CellEvidenceVdj {
                     let chain_features: Vec<_> = features
                         .iter()
                         .copied()
-                        .filter(|feature| feature_has_chain(feature, index, chain))
+                        .filter(|feature| feature_has_rearrangement_segment(feature, index, chain))
                         .collect();
                     if chain_features.is_empty() {
                         continue;
@@ -226,6 +232,50 @@ impl CellEvidence {
     pub fn chain_records(&self, chain: Chain) -> usize {
         self.stats.chain_records.get(&chain).copied().unwrap_or(0)
     }
+
+    /// Records carrying V or J evidence for this receptor class. Constant-only
+    /// transcription is deliberately excluded so noisy/sterile C-region signal
+    /// cannot decide which cell/locus combinations enter reconstruction.
+    pub fn reconstruction_records(&self, chain: Chain) -> usize {
+        self.stats
+            .reconstruction_records
+            .get(&chain)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn intronic_constant_records(&self, chain: Chain) -> usize {
+        self.stats
+            .intronic_constant_records
+            .get(&chain)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn intronic_constant_segment_records(&self, segment: SegmentId) -> usize {
+        self.stats
+            .intronic_constant_segments
+            .get(&segment)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Number of physical fragments with both J and constant-region evidence.
+    /// This is stronger evidence for an expressed rearranged receptor than an
+    /// unlinked pile of C-region mappings.
+    pub fn j_constant_linked_fragments(&self, index: &VdjIndex) -> usize {
+        self.fragment_link_support
+            .iter()
+            .filter_map(|(signature, &count)| {
+                let has_j = signature.receptor_segments.iter().any(|id| {
+                    index
+                        .segment(*id)
+                        .is_some_and(|segment| segment.kind == SegmentKind::J)
+                });
+                (has_j && !signature.constant_segments.is_empty()).then_some(count as usize)
+            })
+            .sum()
+    }
     pub fn segment_mappings(&self, chain: Chain, kind: SegmentKind) -> usize {
         self.stats
             .segment_mappings
@@ -275,6 +325,18 @@ impl CellEvidence {
             let n = self.stats.chain_records.entry(chain).or_default();
             *n = n.saturating_add(count);
         }
+        for (chain, count) in delta.stats.reconstruction_records.drain() {
+            let n = self.stats.reconstruction_records.entry(chain).or_default();
+            *n = n.saturating_add(count);
+        }
+        for (chain, count) in delta.stats.intronic_constant_records.drain() {
+            let n = self.stats.intronic_constant_records.entry(chain).or_default();
+            *n = n.saturating_add(count);
+        }
+        for (segment, count) in delta.stats.intronic_constant_segments.drain() {
+            let n = self.stats.intronic_constant_segments.entry(segment).or_default();
+            *n = n.saturating_add(count);
+        }
         for (key, count) in delta.stats.segment_mappings.drain() {
             let n = self.stats.segment_mappings.entry(key).or_default();
             *n = n.saturating_add(count);
@@ -295,11 +357,15 @@ impl CellEvidence {
             }
 
             let mut record_chains = HashSet::<Chain>::new();
+            let mut reconstruction_chains = HashSet::<Chain>::new();
             for mapping in &feature.mappings {
                 let Some(segment) = index.segment(mapping.segment_id) else {
                     continue;
                 };
                 record_chains.insert(segment.chain);
+                if matches!(segment.kind, SegmentKind::V | SegmentKind::J) {
+                    reconstruction_chains.insert(segment.chain);
+                }
                 *self
                     .stats
                     .segment_mappings
@@ -308,6 +374,33 @@ impl CellEvidence {
             }
             for chain in record_chains {
                 *self.stats.chain_records.entry(chain).or_default() += 1;
+            }
+            for chain in reconstruction_chains {
+                *self
+                    .stats
+                    .reconstruction_records
+                    .entry(chain)
+                    .or_default() += 1;
+            }
+
+            let mut intronic_chains = HashSet::<Chain>::new();
+            for &segment_id in &feature.intronic_constant_segments {
+                let Some(segment) = index.segment(segment_id) else {
+                    continue;
+                };
+                intronic_chains.insert(segment.chain);
+                *self
+                    .stats
+                    .intronic_constant_segments
+                    .entry(segment_id)
+                    .or_default() += 1;
+            }
+            for chain in intronic_chains {
+                *self
+                    .stats
+                    .intronic_constant_records
+                    .entry(chain)
+                    .or_default() += 1;
             }
 
             fragments.entry(feature.id).or_default().push(feature);
@@ -320,23 +413,22 @@ impl CellEvidence {
 
         for fragment in fragments.values() {
             let mut all_kinds = HashSet::<SegmentKind>::new();
-            let mut by_chain = HashMap::<Chain, (HashSet<SegmentId>, HashSet<SegmentId>)>::new();
+            let mut validated_links = HashSet::<FragmentLinkSignature>::new();
 
             for feature in fragment {
                 for mapping in &feature.mappings {
-                    let Some(segment) = index.segment(mapping.segment_id) else {
-                        continue;
-                    };
-                    all_kinds.insert(segment.kind);
-                    let (receptor, constant) = by_chain.entry(segment.chain).or_default();
-                    match segment.kind {
-                        SegmentKind::V | SegmentKind::J => {
-                            receptor.insert(mapping.segment_id);
-                        }
-                        SegmentKind::C => {
-                            constant.insert(mapping.segment_id);
-                        }
-                        SegmentKind::D => {}
+                    if let Some(segment) = index.segment(mapping.segment_id) {
+                        all_kinds.insert(segment.kind);
+                    }
+                }
+
+                for chain in Chain::ALL {
+                    for (j, c) in splice_supported_jc_links(feature, index, chain, 8) {
+                        validated_links.insert(FragmentLinkSignature {
+                            chain,
+                            receptor_segments: vec![j],
+                            constant_segments: vec![c],
+                        });
                     }
                 }
             }
@@ -345,19 +437,7 @@ impl CellEvidence {
                 self.stats.linked_fragments = self.stats.linked_fragments.saturating_add(1);
             }
 
-            for (chain, (receptor, constant)) in by_chain {
-                if receptor.is_empty() || constant.is_empty() {
-                    continue;
-                }
-                let mut receptor_segments: Vec<_> = receptor.into_iter().collect();
-                let mut constant_segments: Vec<_> = constant.into_iter().collect();
-                receptor_segments.sort_unstable();
-                constant_segments.sort_unstable();
-                let signature = FragmentLinkSignature {
-                    chain,
-                    receptor_segments,
-                    constant_segments,
-                };
+            for signature in validated_links {
                 let n = self.fragment_link_support.entry(signature).or_default();
                 *n = n.saturating_add(1);
             }
@@ -365,10 +445,94 @@ impl CellEvidence {
     }
 }
 
-fn feature_has_chain(feature: &BamFeatureEvidence, index: &VdjIndex, chain: Chain) -> bool {
+fn feature_has_rearrangement_segment(
+    feature: &BamFeatureEvidence,
+    index: &VdjIndex,
+    chain: Chain,
+) -> bool {
     feature.mappings.iter().any(|mapping| {
-        index
-            .segment(mapping.segment_id)
-            .is_some_and(|segment| segment.chain == chain)
+        index.segment(mapping.segment_id).is_some_and(|segment| {
+            segment.chain == chain && segment.kind != SegmentKind::C
+        })
     })
+}
+
+fn splice_supported_jc_links(
+    feature: &BamFeatureEvidence,
+    index: &VdjIndex,
+    chain: Chain,
+    min_anchor: u32,
+) -> Vec<(SegmentId, SegmentId)> {
+    let mut js = Vec::new();
+    let mut cs = Vec::new();
+    for mapping in &feature.mappings {
+        let Some(segment) = index.segment(mapping.segment_id) else {
+            continue;
+        };
+        if segment.chain != chain {
+            continue;
+        }
+        match segment.kind {
+            SegmentKind::J => js.push(mapping.segment_id),
+            SegmentKind::C => cs.push(mapping.segment_id),
+            _ => {}
+        }
+    }
+
+    let Some(geometry) = feature.mappings.first().map(|m| &m.alignment) else {
+        return Vec::new();
+    };
+    if geometry.ref_blocks.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for j in js {
+        let Some(jseg) = index.segment(j) else { continue };
+        for &c in &cs {
+            let Some(cseg) = index.segment(c) else { continue };
+            if jseg.chromosome != cseg.chromosome || jseg.strand != cseg.strand {
+                continue;
+            }
+            if has_splice_bridge(geometry, jseg, cseg, min_anchor) {
+                out.push((j, c));
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn has_splice_bridge(
+    geometry: &AlignmentGeometry,
+    j: &crate::index::VdjSegment,
+    c: &crate::index::VdjSegment,
+    min_anchor: u32,
+) -> bool {
+    let block_overlap = |block: (u32, u32), exons: &[(u32, u32)]| -> u32 {
+        exons
+            .iter()
+            .map(|&(a, b)| block.1.min(b).saturating_sub(block.0.max(a)))
+            .sum()
+    };
+
+    for (ji, &jb) in geometry.ref_blocks.iter().enumerate() {
+        if block_overlap(jb, &j.exon_blocks) < min_anchor {
+            continue;
+        }
+        for (ci, &cb) in geometry.ref_blocks.iter().enumerate() {
+            if ji == ci || block_overlap(cb, &c.exon_blocks) < min_anchor {
+                continue;
+            }
+            let transcript_order_ok = match j.strand {
+                crate::index::Strand::Plus => ji < ci,
+                crate::index::Strand::Minus => ji > ci,
+            };
+            if transcript_order_ok {
+                return true;
+            }
+        }
+    }
+    false
 }

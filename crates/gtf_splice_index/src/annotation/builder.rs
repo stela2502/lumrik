@@ -197,4 +197,23 @@ chr1\tsrc\tCDS\t201\t250\t.\t+\t0\tgene_id \"G1\"; transcript_id \"T1\";
         assert_eq!(idx.transcripts[0].exons()[0].start, 100);
         assert_eq!(idx.transcripts[0].exons()[0].end, 150);
     }
+    #[test]
+    fn builder_stores_genomic_cds_span_without_treating_cds_as_exon() {
+        let gtf = "\
+chr1\tsrc\tCDS\t121\t145\t.\t+\t0\tgene_id \"G1\"; transcript_id \"T1\";
+\
+chr1\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T1\";
+\
+chr1\tsrc\texon\t201\t260\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T1\";
+\
+chr1\tsrc\tCDS\t201\t240\t.\t+\t2\tgene_id \"G1\"; transcript_id \"T1\";
+";
+        let idx = AnnotationBuilder::new(100)
+            .build_from_reader(Cursor::new(gtf.as_bytes()))
+            .unwrap();
+        let tx = &idx.transcripts[0];
+        assert_eq!(tx.exons().len(), 2);
+        assert_eq!(tx.cds_span(), Some((120, 240)));
+    }
+
 }

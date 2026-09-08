@@ -4,14 +4,18 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-const MAGIC: &[u8; 8] = b"LVDJIDX5";
-const VERSION: u32 = 5;
+const MAGIC_V5: &[u8; 8] = b"LVDJIDX5";
+const MAGIC_V6: &[u8; 8] = b"LVDJIDX6";
+const MAGIC_V7: &[u8; 8] = b"LVDJIDX7";
+const VERSION_V5: u32 = 5;
+const VERSION_V6: u32 = 6;
+const VERSION_V7: u32 = 7;
 
 pub(super) fn save(index: &VdjIndex, path: &Path) -> Result<()> {
     let mut w =
         BufWriter::new(File::create(path).with_context(|| format!("creating {}", path.display()))?);
-    w.write_all(MAGIC)?;
-    write_u32(&mut w, VERSION)?;
+    w.write_all(MAGIC_V7)?;
+    write_u32(&mut w, VERSION_V7)?;
     write_u32(&mut w, index.segments.len() as u32)?;
     for s in &index.segments {
         write_str(&mut w, &s.name)?;
@@ -31,6 +35,15 @@ pub(super) fn save(index: &VdjIndex, path: &Path) -> Result<()> {
         write_u32(&mut w, s.start)?;
         write_u32(&mut w, s.end)?;
         write_u8(&mut w, if s.strand == Strand::Minus { 1 } else { 0 })?;
+        write_u32(&mut w, s.exon_blocks.len() as u32)?;
+        for &(start, end) in &s.exon_blocks {
+            write_u32(&mut w, start)?;
+            write_u32(&mut w, end)?;
+        }
+        match s.coding_start {
+            Some(x) => { write_u8(&mut w, 1)?; write_u32(&mut w, x)?; }
+            None => write_u8(&mut w, 0)?,
+        }
         write_bytes(&mut w, &s.sequence)?;
     }
     w.flush()?;
@@ -42,14 +55,18 @@ pub(super) fn load(path: &Path) -> Result<VdjIndex> {
         BufReader::new(File::open(path).with_context(|| format!("opening {}", path.display()))?);
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)?;
-    if &magic != MAGIC {
-        bail!(
-            "{} is not a clean sc-vdj v5 index; regenerate it with vdj-index",
+    let (precise_exon_blocks, has_coding_start) = match &magic {
+        m if m == MAGIC_V7 => (true, true),
+        m if m == MAGIC_V6 => (true, false),
+        m if m == MAGIC_V5 => (false, false),
+        _ => bail!(
+            "{} is not a recognized sc-vdj index; regenerate it with vdj-index",
             path.display()
-        )
-    }
+        ),
+    };
     let version = read_u32(&mut r)?;
-    if version != VERSION {
+    let expected = if has_coding_start { VERSION_V7 } else if precise_exon_blocks { VERSION_V6 } else { VERSION_V5 };
+    if version != expected {
         bail!("unsupported VDJ index version {version}")
     }
     let n = read_u32(&mut r)? as usize;
@@ -74,6 +91,25 @@ pub(super) fn load(path: &Path) -> Result<VdjIndex> {
         } else {
             Strand::Plus
         };
+        let exon_blocks = if precise_exon_blocks {
+            let exon_count = read_u32(&mut r)? as usize;
+            let mut blocks = Vec::with_capacity(exon_count);
+            for _ in 0..exon_count {
+                blocks.push((read_u32(&mut r)?, read_u32(&mut r)?));
+            }
+            blocks
+        } else {
+            // Legacy v5 indices stored only the transcript span. This keeps
+            // old library fixtures readable, but production nelrune-vdj
+            // rejects such indices because intronic/exonic C cannot be
+            // distinguished safely without the real exon blocks.
+            vec![(start, end)]
+        };
+        let coding_start = if has_coding_start && read_u8(&mut r)? != 0 {
+            Some(read_u32(&mut r)?)
+        } else {
+            None
+        };
         let sequence = read_bytes(&mut r)?;
         segments.push(VdjSegment {
             id: i as u16,
@@ -86,11 +122,14 @@ pub(super) fn load(path: &Path) -> Result<VdjIndex> {
             start,
             end,
             strand,
+            exon_blocks,
+            coding_start,
             sequence,
         });
     }
-    VdjIndex::from_segments(segments)
+    VdjIndex::from_segments_with_exon_precision(segments, precise_exon_blocks)
 }
+
 fn write_u8<W: Write>(w: &mut W, x: u8) -> Result<()> {
     w.write_all(&[x])?;
     Ok(())

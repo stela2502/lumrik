@@ -8,13 +8,13 @@ mod constant_region_linkage;
 mod identifier;
 mod recombination_evidence_rescan;
 pub use identifier::{ReceptorRole, RecombinationId};
-pub use recombination_evidence_rescan::{
-    RecombinationEvidenceRescanProgress, RecombinationEvidenceRescanReport,
-    RecombinationRescanCall, RecombinationRescanCandidate,
-};
 pub(crate) use recombination_evidence_rescan::{
     rescue_missing_constants_from_bam, rescue_missing_constants_from_bam_with_report,
     rescue_missing_constants_from_bam_with_report_and_progress,
+};
+pub use recombination_evidence_rescan::{
+    RecombinationEvidenceRescanProgress, RecombinationEvidenceRescanReport,
+    RecombinationRescanCall, RecombinationRescanCandidate,
 };
 
 use constant_region_linkage::rescue_missing_constant_regions;
@@ -161,12 +161,49 @@ pub struct ConstantRegionEvidence {
 pub struct ReceptorLinkageSupport {
     /// BAM records that independently rediscover this cell-specific CDR3/J bait.
     pub rediscovery_reads: u32,
+    /// Rescan reads with coordinate-safe overlap of the AIRR junction.
+    pub junction_support_reads: u32,
+    /// Rescan reads whose coordinate-safe alignment spans the complete AIRR junction.
+    pub junction_spanning_reads: u32,
+    /// Junction-supporting reads that disagree with the pre-rescan junction at >=1 base.
+    pub junction_conflicting_reads: u32,
+    /// Junction bases changed by the Stage-3 read consensus.
+    pub junction_refined_bases: u16,
     /// Physical fragments that link the receptor bait to a constant region.
     pub constant_link_fragments: u32,
     /// BAM records that contain both receptor-bait and constant-region support.
     pub constant_spanning_reads: u32,
     /// Constant segment supported by the linkage evidence, if any.
     pub constant_segment: Option<SegmentId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductivityStatus {
+    Productive,
+    StopCodon,
+    MissingVCodingStart,
+    MissingVAnchor,
+    MissingJAnchor,
+    InvalidAnchorOrder,
+    TooShort,
+}
+
+impl ProductivityStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Productive => "productive",
+            Self::StopCodon => "unproductive_stop_codon",
+            Self::MissingVCodingStart => "unknown_no_v_cds",
+            Self::MissingVAnchor => "unproductive_missing_v_anchor",
+            Self::MissingJAnchor => "unproductive_missing_j_anchor",
+            Self::InvalidAnchorOrder => "unproductive_invalid_anchor_order",
+            Self::TooShort => "unproductive_sequence_too_short",
+        }
+    }
+
+    pub fn is_unknown(self) -> bool {
+        matches!(self, Self::MissingVCodingStart)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +220,14 @@ pub struct Recombination {
     pub productive: bool,
     pub in_frame: bool,
     pub stop_codon: bool,
+    /// Why productivity could or could not be determined from the observed receptor.
+    pub productivity_status: ProductivityStatus,
+    /// AIRR junction: conserved V cysteine through conserved J F/W, inclusive.
+    pub airr_junction: Vec<u8>,
+    pub airr_junction_aa: Vec<u8>,
+    /// AIRR CDR3 excludes the conserved V cysteine and J F/W anchors.
+    pub cdr3: Vec<u8>,
+    pub cdr3_aa: Vec<u8>,
     pub supporting_features: u32,
     pub receptor_linkage: ReceptorLinkageSupport,
     pub stable_id: RecombinationId,
@@ -292,7 +337,12 @@ fn identify_summary(
     let rearr_end = j_aln.query_end.min(observed.len());
     let observed_rearrangement = observed[..rearr_end].to_vec();
     let observed_receptor_sequence = observed.clone();
-    let productivity = assess_productivity(&observed, v_aln, j_aln);
+    let productivity = assess_productivity(
+        &observed,
+        v_aln,
+        j_aln,
+        index.segment(v_id).and_then(|s| s.coding_start()),
+    );
     let in_frame = productivity.in_frame;
     let stop = productivity.stop_codon;
     let productive = productivity.productive;
@@ -310,12 +360,78 @@ fn identify_summary(
         productive,
         in_frame,
         stop_codon: stop,
+        productivity_status: productivity.status,
+        airr_junction: productivity.junction.clone(),
+        airr_junction_aa: productivity.junction_aa.clone(),
+        cdr3: productivity.cdr3.clone(),
+        cdr3_aa: productivity.cdr3_aa.clone(),
         supporting_features: assembled.support_features,
         receptor_linkage: ReceptorLinkageSupport::default(),
         stable_id: RecombinationId::placeholder(chain),
     };
     recomb.stable_id = RecombinationId::from_recombination(&recomb, index).ok()?;
     Some(recomb)
+}
+
+pub(crate) fn refresh_recombination_from_observed(
+    recomb: &mut Recombination,
+    index: &VdjIndex,
+) -> bool {
+    let observed = recomb.observed_rearrangement.clone();
+    let Some(v_seg) = index.segment(recomb.v) else { return false; };
+    let Some(j_seg) = index.segment(recomb.j) else { return false; };
+    let v_aln = local_alignment(&observed, &v_seg.sequence);
+    let j_aln = local_alignment(&observed, &j_seg.sequence);
+    if v_aln.score <= 0 || j_aln.score <= 0 || v_aln.query_end > j_aln.query_start {
+        return false;
+    }
+    let (d_seq, d_aln) = if let Some(d_id) = recomb.d {
+        let Some(d_seg) = index.segment(d_id) else { return false; };
+        let aln = local_alignment(
+            &observed[v_aln.query_end.min(observed.len())..j_aln.query_start.min(observed.len())],
+            &d_seg.sequence,
+        );
+        if aln.score <= 0 {
+            return false;
+        }
+        let mut shifted = aln;
+        shifted.query_start += v_aln.query_end;
+        shifted.query_end += v_aln.query_end;
+        (Some(d_seg.sequence.as_slice()), Some(shifted))
+    } else {
+        (None, None)
+    };
+    let Some(measured) = measure_junction(
+        &observed,
+        &v_seg.sequence,
+        v_aln,
+        d_seq,
+        d_aln,
+        &j_seg.sequence,
+        j_aln,
+    ) else {
+        return false;
+    };
+    let productivity = assess_productivity(
+        &observed,
+        v_aln,
+        j_aln,
+        v_seg.coding_start(),
+    );
+    recomb.junction = measured.junction;
+    recomb.naive_recombination = measured.naive;
+    recomb.productive = productivity.productive;
+    recomb.in_frame = productivity.in_frame;
+    recomb.stop_codon = productivity.stop_codon;
+    recomb.productivity_status = productivity.status;
+    recomb.airr_junction = productivity.junction;
+    recomb.airr_junction_aa = productivity.junction_aa;
+    recomb.cdr3 = productivity.cdr3;
+    recomb.cdr3_aa = productivity.cdr3_aa;
+    if let Ok(id) = RecombinationId::from_recombination(recomb, index) {
+        recomb.stable_id = id;
+    }
+    true
 }
 
 fn best_vj(
@@ -618,117 +734,125 @@ fn split_junction(junction: &[u8], left: &[u8], right: &[u8]) -> Split {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ProductivityAssessment {
     productive: bool,
     in_frame: bool,
     stop_codon: bool,
+    status: ProductivityStatus,
+    junction: Vec<u8>,
+    junction_aa: Vec<u8>,
+    cdr3: Vec<u8>,
+    cdr3_aa: Vec<u8>,
 }
 
-/// Determine receptor productivity from the observed V->J coding core.
-///
-/// The reconstructed sequence can start in 5' UTR (or in the middle of V), so
-/// sequence position zero is not a coding-frame origin.  Instead, evaluate all
-/// three possible frames and keep the one that contains both:
-///
-/// * a conserved V cysteine close to the 3' end of the V alignment, and
-/// * a J F/W-G-X-G motif close to the 5' end of the J alignment.
-///
-/// A stop codon is then assessed only in that selected coding frame from the
-/// conserved V cysteine through the observed J alignment.
+fn empty_productivity(status: ProductivityStatus) -> ProductivityAssessment {
+    ProductivityAssessment {
+        productive: false,
+        in_frame: false,
+        stop_codon: false,
+        status,
+        junction: Vec::new(),
+        junction_aa: Vec::new(),
+        cdr3: Vec::new(),
+        cdr3_aa: Vec::new(),
+    }
+}
+
+/// Determine receptor productivity in the coding frame fixed by the annotated
+/// V CDS start.  We no longer choose whichever of three frames happens to make
+/// conserved receptor motifs look plausible.
 fn assess_productivity(
     observed: &[u8],
     v_aln: LocalAlignment,
     j_aln: LocalAlignment,
+    v_coding_start: Option<usize>,
 ) -> ProductivityAssessment {
     const V_ANCHOR_WINDOW: usize = 90;
     const J_ANCHOR_WINDOW: usize = 120;
 
+    let Some(cds_start) = v_coding_start else {
+        return empty_productivity(ProductivityStatus::MissingVCodingStart);
+    };
     let rearr_end = j_aln.query_end.min(observed.len());
     if rearr_end < 3 {
-        return ProductivityAssessment {
-            productive: false,
-            in_frame: false,
-            stop_codon: false,
-        };
+        return empty_productivity(ProductivityStatus::TooShort);
     }
 
-    let v_start = v_aln
-        .query_start
-        .max(v_aln.query_end.saturating_sub(V_ANCHOR_WINDOW));
+    // Project the V reference coding origin through the local alignment. Only
+    // the residue modulo three matters, so this remains valid when the CDS
+    // start lies outside the aligned V fragment.
+    let delta = v_aln.reference_start as isize - cds_start as isize;
+    let frame = (v_aln.query_start as isize - delta).rem_euclid(3) as usize;
+
+    let v_start = v_aln.query_start.max(v_aln.query_end.saturating_sub(V_ANCHOR_WINDOW));
     let v_end = v_aln.query_end.min(rearr_end);
     let j_start = j_aln.query_start.min(rearr_end);
-    let j_end = j_aln
-        .query_end
-        .min(j_start.saturating_add(J_ANCHOR_WINDOW))
-        .min(rearr_end);
+    let j_end = j_aln.query_end.min(j_start.saturating_add(J_ANCHOR_WINDOW)).min(rearr_end);
 
-    // (distance from expected V/J ends, frame, V-C nucleotide position,
-    //  J-motif nucleotide position).  Smaller distance is better.
-    let mut best: Option<(usize, usize, usize, usize)> = None;
-
-    for frame in 0..3usize {
-        let mut v_c = None;
-        let mut q = frame;
-        while q + 3 <= v_end {
-            if q >= v_start && codon(observed[q], observed[q + 1], observed[q + 2]) == b'C' {
-                // The conserved V cysteine is expected toward the 3' end.
-                v_c = Some(q);
-            }
-            q += 3;
+    let mut v_c = None;
+    let mut q = frame;
+    while q + 3 <= v_end {
+        if q >= v_start && codon(observed[q], observed[q + 1], observed[q + 2]) == b'C' {
+            v_c = Some(q);
         }
-        let Some(v_c) = v_c else {
-            continue;
-        };
-
-        let mut j_anchor = None;
-        let mut q = frame;
-        while q + 12 <= j_end {
-            if q >= j_start {
-                let a0 = codon(observed[q], observed[q + 1], observed[q + 2]);
-                let a1 = codon(observed[q + 3], observed[q + 4], observed[q + 5]);
-                let a3 = codon(observed[q + 9], observed[q + 10], observed[q + 11]);
-                if matches!(a0, b'F' | b'W') && a1 == b'G' && a3 == b'G' {
-                    j_anchor = Some(q);
-                    break;
-                }
-            }
-            q += 3;
-        }
-        let Some(j_anchor) = j_anchor else {
-            continue;
-        };
-
-        if v_c >= j_anchor {
-            continue;
-        }
-
-        let v_distance = v_end.saturating_sub(v_c + 3);
-        let j_distance = j_anchor.saturating_sub(j_start);
-        let candidate = (v_distance + j_distance, frame, v_c, j_anchor);
-        if best.map_or(true, |current| candidate < current) {
-            best = Some(candidate);
-        }
+        q += 3;
     }
-
-    let Some((_, frame, v_c, _j_anchor)) = best else {
-        return ProductivityAssessment {
-            productive: false,
-            in_frame: false,
-            stop_codon: false,
-        };
+    let Some(v_c) = v_c else {
+        return empty_productivity(ProductivityStatus::MissingVAnchor);
     };
 
-    debug_assert_eq!(v_c % 3, frame);
+    let mut j_anchor = None;
+    let mut q = frame;
+    while q + 12 <= j_end {
+        if q >= j_start {
+            let a0 = codon(observed[q], observed[q + 1], observed[q + 2]);
+            let a1 = codon(observed[q + 3], observed[q + 4], observed[q + 5]);
+            let a3 = codon(observed[q + 9], observed[q + 10], observed[q + 11]);
+            if matches!(a0, b'F' | b'W') && a1 == b'G' && a3 == b'G' {
+                j_anchor = Some(q);
+                break;
+            }
+        }
+        q += 3;
+    }
+    let Some(j_anchor) = j_anchor else {
+        return empty_productivity(ProductivityStatus::MissingJAnchor);
+    };
+    if v_c >= j_anchor {
+        return empty_productivity(ProductivityStatus::InvalidAnchorOrder);
+    }
+
     let stop_codon = (v_c..rearr_end.saturating_sub(2))
         .step_by(3)
         .any(|q| codon(observed[q], observed[q + 1], observed[q + 2]) == b'*');
+
+    let junction_end = (j_anchor + 3).min(observed.len());
+    let junction = observed[v_c..junction_end].to_vec();
+    let junction_aa = translate(&junction);
+    let cdr3 = if junction.len() >= 6 { junction[3..junction.len() - 3].to_vec() } else { Vec::new() };
+    let cdr3_aa = translate(&cdr3);
 
     ProductivityAssessment {
         productive: !stop_codon,
         in_frame: true,
         stop_codon,
+        status: if stop_codon {
+            ProductivityStatus::StopCodon
+        } else {
+            ProductivityStatus::Productive
+        },
+        junction,
+        junction_aa,
+        cdr3,
+        cdr3_aa,
     }
+}
+
+fn translate(seq: &[u8]) -> Vec<u8> {
+    seq.chunks_exact(3)
+        .map(|x| codon(x[0], x[1], x[2]))
+        .collect()
 }
 
 fn codon(a: u8, b: u8, c: u8) -> u8 {
@@ -797,29 +921,20 @@ mod tests {
         // Coding frame starts at nucleotide 1: a one-base 5' UTR prefix must not
         // make an otherwise productive V-J sequence appear out of frame.
         let observed = b"AAAATGTGCCAAATGGGGTAAAGGTGCC";
-        let p = assess_productivity(observed, aln(1, 10), aln(13, 28));
-        assert_eq!(
-            p,
-            ProductivityAssessment {
-                productive: true,
-                in_frame: true,
-                stop_codon: false,
-            }
-        );
+        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), Some(0));
+        assert!(p.productive);
+        assert!(p.in_frame);
+        assert!(!p.stop_codon);
+        assert!(!p.junction_aa.is_empty());
     }
 
     #[test]
     fn productivity_reports_stop_in_selected_vj_frame() {
         let observed = b"AAAATGTGCCTAATGGGGTAAAGGTGCC";
-        let p = assess_productivity(observed, aln(1, 10), aln(13, 28));
-        assert_eq!(
-            p,
-            ProductivityAssessment {
-                productive: false,
-                in_frame: true,
-                stop_codon: true,
-            }
-        );
+        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), Some(0));
+        assert!(!p.productive);
+        assert!(p.in_frame);
+        assert!(p.stop_codon);
     }
 
     #[test]
@@ -827,10 +942,19 @@ mod tests {
         // V conserved C is in frame 1, while an inserted nucleotide shifts the
         // J F/W-G-X-G motif into frame 2.
         let observed = b"AAAATGTAAACTGGGGTAAAGGT";
-        let p = assess_productivity(observed, aln(1, 10), aln(11, 23));
+        let p = assess_productivity(observed, aln(1, 10), aln(11, 23), Some(0));
         assert!(!p.productive);
         assert!(!p.in_frame);
         assert!(!p.stop_codon);
+    }
+
+    #[test]
+    fn productivity_without_v_cds_is_explicitly_unknown() {
+        let observed = b"AAAATGTGCCAAATGGGGTAAAGGTGCC";
+        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), None);
+        assert!(!p.productive);
+        assert_eq!(p.status, ProductivityStatus::MissingVCodingStart);
+        assert!(p.status.is_unknown());
     }
 
     #[test]
