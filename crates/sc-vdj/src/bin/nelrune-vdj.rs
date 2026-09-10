@@ -82,6 +82,13 @@ struct VdjRunStatus {
     bam_records: usize,
     allowed_cell_records: usize,
     receptor_overlap_records: usize,
+    unmapped_candidates: usize,
+    unmapped_igh_admitted: usize,
+    unmapped_igh_rescued_cells: usize,
+    unmapped_igh_v_mappings: usize,
+    unmapped_igh_d_mappings: usize,
+    unmapped_igh_j_mappings: usize,
+    unmapped_igh_c_mappings: usize,
     preliminary_cells: Option<usize>,
     evidence_cells: usize,
     compact_summaries: usize,
@@ -136,6 +143,13 @@ impl VdjRunStatus {
             bam_records: 0,
             allowed_cell_records: 0,
             receptor_overlap_records: 0,
+            unmapped_candidates: 0,
+            unmapped_igh_admitted: 0,
+            unmapped_igh_rescued_cells: 0,
+            unmapped_igh_v_mappings: 0,
+            unmapped_igh_d_mappings: 0,
+            unmapped_igh_j_mappings: 0,
+            unmapped_igh_c_mappings: 0,
             preliminary_cells: None,
             evidence_cells: 0,
             compact_summaries: 0,
@@ -259,6 +273,36 @@ impl ServerContent for VdjRunStatus {
                         StatusMetric::new(
                             "Compact summaries / fragments",
                             format!("{} / {}", self.compact_summaries, self.physical_fragments),
+                        ),
+                    ],
+                ),
+                StatusSection::new(
+                    "Unmapped IGH rescue",
+                    vec![
+                        StatusMetric::new(
+                            "Candidates",
+                            self.unmapped_candidates.to_string(),
+                        ),
+                        StatusMetric::new(
+                            "JH-admitted records",
+                            format_count_pct(
+                                self.unmapped_igh_admitted,
+                                self.unmapped_candidates,
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "Rescued cells",
+                            self.unmapped_igh_rescued_cells.to_string(),
+                        ),
+                        StatusMetric::new(
+                            "V / D / J / C mappings",
+                            format!(
+                                "{} / {} / {} / {}",
+                                self.unmapped_igh_v_mappings,
+                                self.unmapped_igh_d_mappings,
+                                self.unmapped_igh_j_mappings,
+                                self.unmapped_igh_c_mappings,
+                            ),
                         ),
                     ],
                 ),
@@ -542,6 +586,13 @@ fn sync_evidence_status(
         state.bam_records = progress.bam_records;
         state.allowed_cell_records = progress.allowed_cell_records;
         state.receptor_overlap_records = progress.receptor_overlap_records;
+        state.unmapped_candidates = progress.unmapped_candidates;
+        state.unmapped_igh_admitted = progress.unmapped_igh_admitted;
+        state.unmapped_igh_rescued_cells = progress.unmapped_igh_rescued_cells;
+        state.unmapped_igh_v_mappings = progress.unmapped_igh_v_mappings;
+        state.unmapped_igh_d_mappings = progress.unmapped_igh_d_mappings;
+        state.unmapped_igh_j_mappings = progress.unmapped_igh_j_mappings;
+        state.unmapped_igh_c_mappings = progress.unmapped_igh_c_mappings;
         state.evidence_cells = cells;
         state.compact_summaries = summaries;
         state.physical_fragments = fragments;
@@ -615,6 +666,15 @@ fn write_run_summary_yaml(path: &Path, state: &VdjRunStatus) -> Result<()> {
         Some(value) => writeln!(w, "  preliminary_cells: {value}")?,
         None => writeln!(w, "  preliminary_cells: null")?,
     }
+
+    writeln!(w, "unmapped_igh_rescue:")?;
+    writeln!(w, "  candidates: {}", state.unmapped_candidates)?;
+    writeln!(w, "  admitted_records: {}", state.unmapped_igh_admitted)?;
+    writeln!(w, "  rescued_cells: {}", state.unmapped_igh_rescued_cells)?;
+    writeln!(w, "  v_mappings: {}", state.unmapped_igh_v_mappings)?;
+    writeln!(w, "  d_mappings: {}", state.unmapped_igh_d_mappings)?;
+    writeln!(w, "  j_mappings: {}", state.unmapped_igh_j_mappings)?;
+    writeln!(w, "  c_mappings: {}", state.unmapped_igh_c_mappings)?;
 
     writeln!(w, "evidence:")?;
     writeln!(w, "  cells: {}", state.evidence_cells)?;
@@ -898,6 +958,17 @@ fn main() -> Result<()> {
     mapping_info.total = n;
     mapping_info.report_n("vdj.threads", c.threads.max(1));
     mapping_info.report_n("vdj.receptor_overlap_records", n);
+    let ingest_status = status
+        .read()
+        .expect("reading VDJ status after BAM ingestion")
+        .clone();
+    mapping_info.report_n("vdj.unmapped_candidates", ingest_status.unmapped_candidates);
+    mapping_info.report_n("vdj.unmapped_igh_admitted", ingest_status.unmapped_igh_admitted);
+    mapping_info.report_n("vdj.unmapped_igh_rescued_cells", ingest_status.unmapped_igh_rescued_cells);
+    mapping_info.report_n("vdj.unmapped_igh_v_mappings", ingest_status.unmapped_igh_v_mappings);
+    mapping_info.report_n("vdj.unmapped_igh_d_mappings", ingest_status.unmapped_igh_d_mappings);
+    mapping_info.report_n("vdj.unmapped_igh_j_mappings", ingest_status.unmapped_igh_j_mappings);
+    mapping_info.report_n("vdj.unmapped_igh_c_mappings", ingest_status.unmapped_igh_c_mappings);
     if let Some(cells) = preliminary_cells.as_ref() {
         mapping_info.report_n("vdj.preliminary_cells", cells.len());
     }

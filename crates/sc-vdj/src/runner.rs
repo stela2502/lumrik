@@ -18,6 +18,247 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const EVIDENCE_BATCH_SIZE: usize = 200_000;
+const UNMAPPED_IGH_SEED_LEN: usize = 13;
+const UNMAPPED_IGH_MIN_J_SEEDS: usize = 2;
+const UNMAPPED_IGH_MIN_J_SEED_SPAN: usize = UNMAPPED_IGH_SEED_LEN;
+const UNMAPPED_IGH_MIN_HARVEST_SEEDS: usize = 2;
+const UNMAPPED_CANDIDATE_BATCH_SIZE: usize = 100_000;
+
+#[derive(Debug, Clone)]
+struct UnmappedReadCandidate {
+    cell_id: u64,
+    id: EvidenceId,
+    bases: Vec<u8>,
+    qualities: Vec<u8>,
+    is_last_in_template: bool,
+    is_secondary: bool,
+    is_supplementary: bool,
+}
+
+#[derive(Default)]
+struct SeedSupport {
+    distinct: HashSet<Vec<u8>>,
+    min_read_pos: usize,
+    max_read_pos: usize,
+    initialized: bool,
+}
+
+impl SeedSupport {
+    fn observe(&mut self, seed: &[u8], read_pos: usize) {
+        self.distinct.insert(seed.to_vec());
+        if self.initialized {
+            self.min_read_pos = self.min_read_pos.min(read_pos);
+            self.max_read_pos = self.max_read_pos.max(read_pos);
+        } else {
+            self.min_read_pos = read_pos;
+            self.max_read_pos = read_pos;
+            self.initialized = true;
+        }
+    }
+
+    fn distinct_hits(&self) -> usize {
+        self.distinct.len()
+    }
+
+    fn start_span(&self) -> usize {
+        self.max_read_pos.saturating_sub(self.min_read_pos)
+    }
+}
+
+/// Exact IGH germline seeds used only for the deferred unmapped-read rescue.
+///
+/// BAM ingestion deliberately retains every barcoded unmapped record without
+/// deciding whether it is receptor evidence. After the mapped evidence pass is
+/// complete, candidates are searched in parallel. Admission is strict and
+/// IGHJ-driven: at least two distinct J-specific seeds must support the same J
+/// segment across a real span of the read. Once admitted, V/D/J/C support is
+/// harvested more broadly and handed to the ordinary CellEvidenceVdj compactor.
+struct UnmappedIghSeeds {
+    by_seed: HashMap<Vec<u8>, Vec<crate::index::SegmentId>>,
+    j_specific_by_seed: HashMap<Vec<u8>, Vec<crate::index::SegmentId>>,
+}
+
+impl UnmappedIghSeeds {
+    fn new(index: &VdjIndex) -> Self {
+        let mut all_vdj_by_seed = HashMap::<Vec<u8>, Vec<crate::index::SegmentId>>::new();
+        for segment in &index.segments {
+            if segment.sequence.len() < UNMAPPED_IGH_SEED_LEN {
+                continue;
+            }
+            for seed in segment.sequence.windows(UNMAPPED_IGH_SEED_LEN) {
+                let ids = all_vdj_by_seed.entry(seed.to_vec()).or_default();
+                if !ids.contains(&segment.id) {
+                    ids.push(segment.id);
+                }
+            }
+        }
+
+        let mut by_seed = HashMap::<Vec<u8>, Vec<crate::index::SegmentId>>::new();
+        for kind in [SegmentKind::V, SegmentKind::D, SegmentKind::J, SegmentKind::C] {
+            for segment in index.segments_for(crate::index::Chain::Igh, kind) {
+                if segment.sequence.len() < UNMAPPED_IGH_SEED_LEN {
+                    continue;
+                }
+                for seed in segment.sequence.windows(UNMAPPED_IGH_SEED_LEN) {
+                    let ids = by_seed.entry(seed.to_vec()).or_default();
+                    if !ids.contains(&segment.id) {
+                        ids.push(segment.id);
+                    }
+                }
+            }
+        }
+
+        let j_specific_by_seed = all_vdj_by_seed
+            .into_iter()
+            .filter_map(|(seed, ids)| {
+                let all_igh_j = ids.iter().all(|id| {
+                    index.segment(*id).is_some_and(|segment| {
+                        segment.chain == crate::index::Chain::Igh
+                            && segment.kind == SegmentKind::J
+                    })
+                });
+                all_igh_j.then_some((seed, ids))
+            })
+            .collect();
+
+        Self {
+            by_seed,
+            j_specific_by_seed,
+        }
+    }
+
+    fn rescue_candidate(
+        &self,
+        candidate: UnmappedReadCandidate,
+        index: &VdjIndex,
+    ) -> Option<(u64, BamFeatureEvidence)> {
+        let reverse = crate::index::reverse_complement(&candidate.bases);
+
+        let forward_j = self.j_support(&candidate.bases);
+        let reverse_j = self.j_support(&reverse);
+        let (read_is_reverse_to_transcript, mut support, j_support) =
+            if self.has_strong_j(&forward_j) {
+                (false, self.all_support(&candidate.bases), forward_j)
+            } else if self.has_strong_j(&reverse_j) {
+                (true, self.all_support(&reverse), reverse_j)
+            } else {
+                return None;
+            };
+        // Preserve every J segment that passed the strict admission gate even
+        // if family-shared seeds make its broad-support count less impressive.
+        for (id, j) in j_support {
+            support.entry(id).or_insert(j);
+        }
+
+        let mut segment_ids = Vec::new();
+        for kind in [SegmentKind::V, SegmentKind::D, SegmentKind::J, SegmentKind::C] {
+            let best = support
+                .iter()
+                .filter(|(id, evidence)| {
+                    evidence.distinct_hits() >= UNMAPPED_IGH_MIN_HARVEST_SEEDS
+                        && index.segment(**id).is_some_and(|s| s.kind == kind)
+                })
+                .map(|(_, evidence)| evidence.distinct_hits())
+                .max()
+                .unwrap_or(0);
+            if best == 0 {
+                continue;
+            }
+            segment_ids.extend(support.iter().filter_map(|(id, evidence)| {
+                (evidence.distinct_hits() == best
+                    && index.segment(*id).is_some_and(|s| s.kind == kind))
+                .then_some(*id)
+            }));
+        }
+        segment_ids.sort_unstable();
+        segment_ids.dedup();
+        if !segment_ids
+            .iter()
+            .any(|id| index.segment(*id).is_some_and(|s| s.kind == SegmentKind::J))
+        {
+            return None;
+        }
+
+        let mappings = segment_ids
+            .into_iter()
+            .map(|segment_id| {
+                let segment_is_reverse = index.segment(segment_id).is_some_and(|segment| {
+                    matches!(segment.strand, crate::index::Strand::Minus)
+                });
+                MapperEvidence {
+                    segment_id,
+                    alignment: AlignmentGeometry {
+                        tid: -1,
+                        start: 0,
+                        end: 0,
+                        // summarize_chain_work converts mapper orientation back
+                        // to transcript orientation by XORing the segment strand.
+                        is_reverse: read_is_reverse_to_transcript ^ segment_is_reverse,
+                        is_secondary: candidate.is_secondary,
+                        is_supplementary: candidate.is_supplementary,
+                        mapq: 0,
+                        ref_blocks: Vec::new(),
+                    },
+                }
+            })
+            .collect();
+        let cell_id = candidate.cell_id;
+        let part = SequencePart {
+            bases: candidate.bases,
+            qualities: candidate.qualities,
+        };
+        let mut sequence_parts = BamFeatureSequenceParts::default();
+        if candidate.is_last_in_template {
+            sequence_parts.r2 = Some(part);
+        } else {
+            sequence_parts.r1 = Some(part);
+        }
+
+        Some((
+            cell_id,
+            BamFeatureEvidence {
+                id: candidate.id,
+                sequence: sequence_parts,
+                mappings,
+                intronic_constant_segments: Vec::new(),
+            },
+        ))
+    }
+
+    fn has_strong_j(&self, support: &HashMap<crate::index::SegmentId, SeedSupport>) -> bool {
+        support.values().any(|evidence| {
+            evidence.distinct_hits() >= UNMAPPED_IGH_MIN_J_SEEDS
+                && evidence.start_span() >= UNMAPPED_IGH_MIN_J_SEED_SPAN
+        })
+    }
+
+    fn j_support(&self, sequence: &[u8]) -> HashMap<crate::index::SegmentId, SeedSupport> {
+        self.support_from_table(sequence, &self.j_specific_by_seed)
+    }
+
+    fn all_support(&self, sequence: &[u8]) -> HashMap<crate::index::SegmentId, SeedSupport> {
+        self.support_from_table(sequence, &self.by_seed)
+    }
+
+    fn support_from_table(
+        &self,
+        sequence: &[u8],
+        table: &HashMap<Vec<u8>, Vec<crate::index::SegmentId>>,
+    ) -> HashMap<crate::index::SegmentId, SeedSupport> {
+        let mut support = HashMap::<crate::index::SegmentId, SeedSupport>::new();
+        if sequence.len() < UNMAPPED_IGH_SEED_LEN {
+            return support;
+        }
+        for (read_pos, seed) in sequence.windows(UNMAPPED_IGH_SEED_LEN).enumerate() {
+            if let Some(ids) = table.get(seed) {
+                for &id in ids {
+                    support.entry(id).or_default().observe(seed, read_pos);
+                }
+            }
+        }
+        support
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainKneeSelection {
@@ -59,6 +300,51 @@ pub struct BamIngestProgress {
     pub bam_records: usize,
     pub allowed_cell_records: usize,
     pub receptor_overlap_records: usize,
+    pub unmapped_candidates: usize,
+    pub unmapped_igh_admitted: usize,
+    pub unmapped_igh_rescued_cells: usize,
+    pub unmapped_igh_v_mappings: usize,
+    pub unmapped_igh_d_mappings: usize,
+    pub unmapped_igh_j_mappings: usize,
+    pub unmapped_igh_c_mappings: usize,
+}
+
+#[derive(Debug, Default)]
+struct UnmappedIghRescueStats {
+    candidates: usize,
+    admitted: usize,
+    rescued_cells: HashSet<u64>,
+    v_mappings: usize,
+    d_mappings: usize,
+    j_mappings: usize,
+    c_mappings: usize,
+}
+
+impl UnmappedIghRescueStats {
+    fn add_assign(&mut self, other: Self) {
+        self.candidates = self.candidates.saturating_add(other.candidates);
+        self.admitted = self.admitted.saturating_add(other.admitted);
+        self.rescued_cells.extend(other.rescued_cells);
+        self.v_mappings = self.v_mappings.saturating_add(other.v_mappings);
+        self.d_mappings = self.d_mappings.saturating_add(other.d_mappings);
+        self.j_mappings = self.j_mappings.saturating_add(other.j_mappings);
+        self.c_mappings = self.c_mappings.saturating_add(other.c_mappings);
+    }
+
+    fn progress(&self, bam_records: usize, allowed_cell_records: usize, receptor_overlap_records: usize) -> BamIngestProgress {
+        BamIngestProgress {
+            bam_records,
+            allowed_cell_records,
+            receptor_overlap_records,
+            unmapped_candidates: self.candidates,
+            unmapped_igh_admitted: self.admitted,
+            unmapped_igh_rescued_cells: self.rescued_cells.len(),
+            unmapped_igh_v_mappings: self.v_mappings,
+            unmapped_igh_d_mappings: self.d_mappings,
+            unmapped_igh_j_mappings: self.j_mappings,
+            unmapped_igh_c_mappings: self.c_mappings,
+        }
+    }
 }
 
 pub struct VdjRunner {
@@ -82,6 +368,58 @@ impl VdjRunner {
     }
     pub fn set_threads(&mut self, threads: usize) {
         self.threads = threads.max(1);
+    }
+
+    fn consume_unmapped_candidate_batch(
+        &mut self,
+        candidates: &mut Vec<UnmappedReadCandidate>,
+        seeds: &UnmappedIghSeeds,
+        pool: Option<&rayon::ThreadPool>,
+    ) -> UnmappedIghRescueStats {
+        if candidates.is_empty() {
+            return UnmappedIghRescueStats::default();
+        }
+
+        let batch = std::mem::replace(
+            candidates,
+            Vec::with_capacity(UNMAPPED_CANDIDATE_BATCH_SIZE),
+        );
+        let candidate_count = batch.len();
+        let rescue_one = |candidate| seeds.rescue_candidate(candidate, &self.index);
+        let rescued: Vec<(u64, BamFeatureEvidence)> = if let Some(pool) = pool {
+            pool.install(|| batch.into_par_iter().filter_map(rescue_one).collect())
+        } else {
+            batch.into_iter().filter_map(rescue_one).collect()
+        };
+
+        let mut stats = UnmappedIghRescueStats {
+            candidates: candidate_count,
+            admitted: rescued.len(),
+            ..Default::default()
+        };
+        let mut rescued_cells = HashSet::new();
+        for (cell_id, feature) in &rescued {
+            rescued_cells.insert(*cell_id);
+            for mapping in &feature.mappings {
+                match self.index.segment(mapping.segment_id).map(|s| s.kind) {
+                    Some(SegmentKind::V) => stats.v_mappings = stats.v_mappings.saturating_add(1),
+                    Some(SegmentKind::D) => stats.d_mappings = stats.d_mappings.saturating_add(1),
+                    Some(SegmentKind::J) => stats.j_mappings = stats.j_mappings.saturating_add(1),
+                    Some(SegmentKind::C) => stats.c_mappings = stats.c_mappings.saturating_add(1),
+                    None => {}
+                }
+            }
+        }
+        stats.rescued_cells = rescued_cells;
+
+        if !rescued.is_empty() {
+            self.evidence.consume_batch(
+                rescued,
+                &self.index,
+                self.config.min_sequence_overlap,
+            );
+        }
+        stats
     }
 
     pub fn read_bam<P: AsRef<Path>, R: BamIdentityResolver>(
@@ -133,8 +471,19 @@ impl VdjRunner {
         let mut n = 0usize;
         let mut bam_records = 0usize;
         let mut allowed_cell_records = 0usize;
+        let mut unmapped_rescue = UnmappedIghRescueStats::default();
         let mut entry = 0u32;
         let mut batch = Vec::<(u64, BamFeatureEvidence)>::with_capacity(EVIDENCE_BATCH_SIZE);
+        let mut unmapped_candidates =
+            Vec::<UnmappedReadCandidate>::with_capacity(UNMAPPED_CANDIDATE_BATCH_SIZE);
+        let unmapped_igh_seeds = UnmappedIghSeeds::new(&self.index);
+        let unmapped_pool = (self.threads > 1)
+            .then(|| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(self.threads)
+                    .build()
+                    .expect("building sc-vdj unmapped rescue Rayon pool")
+            });
 
         // Mapper BAMs emit the records belonging to one physical query together.
         // Keep only the immediately preceding query key so paired/supplementary
@@ -147,17 +496,10 @@ impl VdjRunner {
         for rec in reader.records() {
             let rec = rec?;
             bam_records = bam_records.saturating_add(1);
-            if rec.is_unmapped() {
-                continue;
-            }
             let Some(cell) = resolver.cell(&rec) else {
                 continue;
             };
             let cell_id = IntToStr::new(cell.as_bytes()).into_u64();
-            if allowed_cells.is_some_and(|allowed| !allowed.contains(&cell_id)) {
-                continue;
-            }
-            allowed_cell_records = allowed_cell_records.saturating_add(1);
             let query_key = (cell_id, rec.qname().to_vec());
 
             if last_query.as_ref() != Some(&query_key) {
@@ -170,11 +512,21 @@ impl VdjRunner {
                         self.config.min_sequence_overlap,
                     );
                     progress(
-                        BamIngestProgress {
-                            bam_records,
-                            allowed_cell_records,
-                            receptor_overlap_records: n,
-                        },
+                        unmapped_rescue.progress(bam_records, allowed_cell_records, n),
+                        &self.evidence,
+                        &self.index,
+                    );
+                }
+                if unmapped_candidates.len() >= UNMAPPED_CANDIDATE_BATCH_SIZE {
+                    let rescue = self.consume_unmapped_candidate_batch(
+                        &mut unmapped_candidates,
+                        &unmapped_igh_seeds,
+                        unmapped_pool.as_ref(),
+                    );
+                    n = n.saturating_add(rescue.admitted);
+                    unmapped_rescue.add_assign(rescue);
+                    progress(
+                        unmapped_rescue.progress(bam_records, allowed_cell_records, n),
                         &self.evidence,
                         &self.index,
                     );
@@ -182,6 +534,38 @@ impl VdjRunner {
                 last_query = Some(query_key);
                 current_evidence_id = None;
             }
+
+            // Do not ask STAR to decide whether an unmapped molecule deserves
+            // to participate in receptor discovery. Retain every barcoded
+            // unmapped record now; classify it only after the mapped evidence
+            // pass, in parallel, against the receptor index. This also bypasses
+            // the preliminary exonic-cell gate for genuinely rescued cells.
+            if rec.is_unmapped() {
+                let id = *current_evidence_id.get_or_insert_with(|| {
+                    let id = EvidenceId {
+                        flush: self.flush_id,
+                        entry,
+                    };
+                    entry = entry.wrapping_add(1);
+                    id
+                });
+                unmapped_candidates.push(UnmappedReadCandidate {
+                    cell_id,
+                    id,
+                    bases: rec.seq().as_bytes(),
+                    qualities: rec.qual().to_vec(),
+                    is_last_in_template: rec.is_last_in_template(),
+                    is_secondary: rec.is_secondary(),
+                    is_supplementary: rec.is_supplementary(),
+                });
+                self.cell_names.entry(cell_id).or_insert(cell);
+                continue;
+            }
+
+            if allowed_cells.is_some_and(|allowed| !allowed.contains(&cell_id)) {
+                continue;
+            }
+            allowed_cell_records = allowed_cell_records.saturating_add(1);
 
             let tid = rec.tid();
             if tid < 0 {
@@ -260,15 +644,27 @@ impl VdjRunner {
             self.evidence
                 .consume_batch(batch, &self.index, self.config.min_sequence_overlap);
             progress(
-                BamIngestProgress {
-                    bam_records,
-                    allowed_cell_records,
-                    receptor_overlap_records: n,
-                },
+                unmapped_rescue.progress(bam_records, allowed_cell_records, n),
                 &self.evidence,
                 &self.index,
             );
         }
+
+        if !unmapped_candidates.is_empty() {
+            let rescue = self.consume_unmapped_candidate_batch(
+                &mut unmapped_candidates,
+                &unmapped_igh_seeds,
+                unmapped_pool.as_ref(),
+            );
+            n = n.saturating_add(rescue.admitted);
+            unmapped_rescue.add_assign(rescue);
+            progress(
+                unmapped_rescue.progress(bam_records, allowed_cell_records, n),
+                &self.evidence,
+                &self.index,
+            );
+        }
+
         self.flush_id = self.flush_id.wrapping_add(1);
         Ok(n)
     }
@@ -526,7 +922,78 @@ fn receptor_knee_threshold(counts_desc: &[usize]) -> usize {
 
 #[cfg(test)]
 mod knee_tests {
-    use super::{qualifies_reconstruction_candidate, receptor_knee_threshold};
+    use super::{
+        qualifies_reconstruction_candidate, receptor_knee_threshold, UnmappedIghSeeds,
+        UnmappedReadCandidate, UNMAPPED_IGH_SEED_LEN,
+    };
+    use crate::cellrep::EvidenceId;
+    use crate::index::{Chain, SegmentKind, Strand, VdjIndex, VdjSegment};
+
+    fn test_segment(name: &str, kind: SegmentKind, sequence: &[u8]) -> VdjSegment {
+        VdjSegment {
+            id: 0,
+            name: name.to_string(),
+            transcript_id: name.to_string(),
+            gene_id: name.to_string(),
+            chain: Chain::Igh,
+            kind,
+            chromosome: "chr12".to_string(),
+            start: 0,
+            end: sequence.len() as u32,
+            strand: Strand::Plus,
+            exon_blocks: vec![(0, sequence.len() as u32)],
+            coding_start: (kind == SegmentKind::V).then_some(0),
+            sequence: sequence.to_vec(),
+        }
+    }
+
+    #[test]
+    fn unmapped_igh_rescue_is_j_gated_and_harvests_v_support() {
+        let v = b"ACGTTGCAACCTGATCGTACCGATGCTAGCATGGA";
+        let j = b"TTGACCGTATCGGATCCGATGACCTGGA";
+        let index = VdjIndex::from_segments(vec![
+            test_segment("IGHV-test", SegmentKind::V, v),
+            test_segment("IGHJ-test", SegmentKind::J, j),
+        ])
+        .unwrap();
+        let seeds = UnmappedIghSeeds::new(&index);
+
+        let mut read = b"NNNN".to_vec();
+        read.extend_from_slice(v);
+        read.extend_from_slice(b"GGTACCTAAC");
+        read.extend_from_slice(j);
+        let candidate = |bases: Vec<u8>| UnmappedReadCandidate {
+            cell_id: 7,
+            id: EvidenceId { flush: 0, entry: 1 },
+            qualities: vec![30; bases.len()],
+            bases,
+            is_last_in_template: false,
+            is_secondary: false,
+            is_supplementary: false,
+        };
+
+        let (_, rescued) = seeds.rescue_candidate(candidate(read.clone()), &index).unwrap();
+        assert!(rescued.mappings.iter().any(|m| {
+            index.segment(m.segment_id).unwrap().kind == SegmentKind::V
+        }));
+        assert!(rescued.mappings.iter().any(|m| {
+            index.segment(m.segment_id).unwrap().kind == SegmentKind::J
+        }));
+
+        let reverse = crate::index::reverse_complement(&read);
+        assert!(seeds.rescue_candidate(candidate(reverse), &index).is_some());
+
+        let mut v_without_j = v.to_vec();
+        v_without_j.extend_from_slice(b"AAAAAAAAAAAAAAAAAAAA");
+        assert!(seeds
+            .rescue_candidate(candidate(v_without_j), &index)
+            .is_none());
+
+        let one_j_seed = j[..UNMAPPED_IGH_SEED_LEN].to_vec();
+        assert!(seeds
+            .rescue_candidate(candidate(one_j_seed), &index)
+            .is_none());
+    }
 
     #[test]
     fn reconstruction_candidate_accepts_vj_or_repeated_v_only() {

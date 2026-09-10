@@ -1,10 +1,10 @@
 [
   {
-    "column": "Number",
+    "column": "Color",
     "levels": [
-      "1",
-      "2",
-      "3"
+      "Red",
+      "Blue",
+      "Green"
     ],
     "numeric": [
       0.0,
@@ -15,11 +15,11 @@
     "one_hot": true
   },
   {
-    "column": "Color",
+    "column": "Number",
     "levels": [
-      "Red",
-      "Blue",
-      "Green"
+      "1",
+      "2",
+      "3"
     ],
     "numeric": [
       0.0,
