@@ -116,6 +116,7 @@ impl ExternalMapper for Star {
         );
         remove_option(&mut args, "--outSAMtype", None);
         remove_option(&mut args, "--outStd", Some(1));
+        remove_option(&mut args, "--outSAMunmapped", None);
 
         /*
          * MapperProcess runs FIFO-based mappers in a private temporary
@@ -141,6 +142,8 @@ impl ExternalMapper for Star {
             "Unsorted".into(),
             "--outStd".into(),
             "BAM_Unsorted".into(),
+            "--outSAMunmapped".into(),
+            "Within".into(),
         ]);
 
         if !has_option(&args, "--outBAMcompression") {

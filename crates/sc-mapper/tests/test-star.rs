@@ -203,6 +203,54 @@ fn star_maps_a_real_fastq_record() -> Result<()> {
     Ok(())
 }
 
+
+#[test]
+fn star_keeps_unmapped_reads_in_bam_output() -> Result<()> {
+    if !star_available() {
+        return Ok(());
+    }
+
+    let (_tmpdir, genome_dir) = prepare_star_reference()?;
+
+    let launch = MapperLaunch {
+        mapper_bin: "STAR".into(),
+        index: genome_dir,
+        options: vec![
+            // A caller must not be able to accidentally strip unmapped reads
+            // from the mapper BAM consumed by downstream Lumrik analyses.
+            "--outSAMunmapped".into(),
+            "None".into(),
+        ],
+        threads: 1,
+        paired: false,
+    };
+
+    let mapper = Star::from_launch(launch)?;
+    mapper.check()?;
+
+    let mut mapper = mapper.spawn()?;
+    let read = fq("read_unmapped_001", "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN");
+
+    let mut calls = Vec::new();
+    if let Some(call) = mapper.process(&read, None)? {
+        calls.push(call);
+    }
+    calls.extend(mapper.finish()?);
+
+    assert_eq!(calls.len(), 1, "expected one MappingCall for unmapped input");
+    assert_eq!(calls[0].read_id, "read_unmapped_001");
+    assert!(
+        calls[0]
+            .records
+            .records
+            .iter()
+            .any(|rec| rec.record.is_unmapped()),
+        "STAR mapper BAM dropped the unmapped input read"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn star_from_cli_maps_after_input_is_closed() -> Result<()> {
     if !star_available() {
