@@ -26,8 +26,8 @@ struct Cli {
 }
 
 fn open_fastq(path: &Path) -> Result<Box<dyn BufRead>, String> {
-    let file = File::open(path)
-        .map_err(|e| format!("failed to open R1 '{}': {e}", path.display()))?;
+    let file =
+        File::open(path).map_err(|e| format!("failed to open R1 '{}': {e}", path.display()))?;
 
     let is_gz = path
         .extension()
@@ -189,7 +189,10 @@ fn main() -> Result<(), String> {
     eprintln!("reads scanned: {total}");
     eprintln!("BD v2.384 cells resolved by fuzzy whitelist: {called}");
     if total != 0 {
-        eprintln!("resolved fraction: {:.2}%", called as f64 * 100.0 / total as f64);
+        eprintln!(
+            "resolved fraction: {:.2}%",
+            called as f64 * 100.0 / total as f64
+        );
     }
 
     Ok(())

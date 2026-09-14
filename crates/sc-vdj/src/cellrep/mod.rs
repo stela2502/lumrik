@@ -330,11 +330,19 @@ impl CellEvidence {
             *n = n.saturating_add(count);
         }
         for (chain, count) in delta.stats.intronic_constant_records.drain() {
-            let n = self.stats.intronic_constant_records.entry(chain).or_default();
+            let n = self
+                .stats
+                .intronic_constant_records
+                .entry(chain)
+                .or_default();
             *n = n.saturating_add(count);
         }
         for (segment, count) in delta.stats.intronic_constant_segments.drain() {
-            let n = self.stats.intronic_constant_segments.entry(segment).or_default();
+            let n = self
+                .stats
+                .intronic_constant_segments
+                .entry(segment)
+                .or_default();
             *n = n.saturating_add(count);
         }
         for (key, count) in delta.stats.segment_mappings.drain() {
@@ -376,11 +384,7 @@ impl CellEvidence {
                 *self.stats.chain_records.entry(chain).or_default() += 1;
             }
             for chain in reconstruction_chains {
-                *self
-                    .stats
-                    .reconstruction_records
-                    .entry(chain)
-                    .or_default() += 1;
+                *self.stats.reconstruction_records.entry(chain).or_default() += 1;
             }
 
             let mut intronic_chains = HashSet::<Chain>::new();
@@ -451,9 +455,9 @@ fn feature_has_rearrangement_segment(
     chain: Chain,
 ) -> bool {
     feature.mappings.iter().any(|mapping| {
-        index.segment(mapping.segment_id).is_some_and(|segment| {
-            segment.chain == chain && segment.kind != SegmentKind::C
-        })
+        index
+            .segment(mapping.segment_id)
+            .is_some_and(|segment| segment.chain == chain && segment.kind != SegmentKind::C)
     })
 }
 
@@ -488,9 +492,13 @@ fn splice_supported_jc_links(
 
     let mut out = Vec::new();
     for j in js {
-        let Some(jseg) = index.segment(j) else { continue };
+        let Some(jseg) = index.segment(j) else {
+            continue;
+        };
         for &c in &cs {
-            let Some(cseg) = index.segment(c) else { continue };
+            let Some(cseg) = index.segment(c) else {
+                continue;
+            };
             if jseg.chromosome != cseg.chromosome || jseg.strand != cseg.strand {
                 continue;
             }

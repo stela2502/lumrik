@@ -378,15 +378,21 @@ pub(crate) fn refresh_recombination_from_observed(
     index: &VdjIndex,
 ) -> bool {
     let observed = recomb.observed_rearrangement.clone();
-    let Some(v_seg) = index.segment(recomb.v) else { return false; };
-    let Some(j_seg) = index.segment(recomb.j) else { return false; };
+    let Some(v_seg) = index.segment(recomb.v) else {
+        return false;
+    };
+    let Some(j_seg) = index.segment(recomb.j) else {
+        return false;
+    };
     let v_aln = local_alignment(&observed, &v_seg.sequence);
     let j_aln = local_alignment(&observed, &j_seg.sequence);
     if v_aln.score <= 0 || j_aln.score <= 0 || v_aln.query_end > j_aln.query_start {
         return false;
     }
     let (d_seq, d_aln) = if let Some(d_id) = recomb.d {
-        let Some(d_seg) = index.segment(d_id) else { return false; };
+        let Some(d_seg) = index.segment(d_id) else {
+            return false;
+        };
         let aln = local_alignment(
             &observed[v_aln.query_end.min(observed.len())..j_aln.query_start.min(observed.len())],
             &d_seg.sequence,
@@ -412,12 +418,7 @@ pub(crate) fn refresh_recombination_from_observed(
     ) else {
         return false;
     };
-    let productivity = assess_productivity(
-        &observed,
-        v_aln,
-        j_aln,
-        v_seg.coding_start(),
-    );
+    let productivity = assess_productivity(&observed, v_aln, j_aln, v_seg.coding_start());
     recomb.junction = measured.junction;
     recomb.naive_recombination = measured.naive;
     recomb.productive = productivity.productive;
@@ -785,10 +786,15 @@ fn assess_productivity(
     let delta = v_aln.reference_start as isize - cds_start as isize;
     let frame = (v_aln.query_start as isize - delta).rem_euclid(3) as usize;
 
-    let v_start = v_aln.query_start.max(v_aln.query_end.saturating_sub(V_ANCHOR_WINDOW));
+    let v_start = v_aln
+        .query_start
+        .max(v_aln.query_end.saturating_sub(V_ANCHOR_WINDOW));
     let v_end = v_aln.query_end.min(rearr_end);
     let j_start = j_aln.query_start.min(rearr_end);
-    let j_end = j_aln.query_end.min(j_start.saturating_add(J_ANCHOR_WINDOW)).min(rearr_end);
+    let j_end = j_aln
+        .query_end
+        .min(j_start.saturating_add(J_ANCHOR_WINDOW))
+        .min(rearr_end);
 
     let mut v_c = None;
     let mut q = frame;
@@ -830,7 +836,11 @@ fn assess_productivity(
     let junction_end = (j_anchor + 3).min(observed.len());
     let junction = observed[v_c..junction_end].to_vec();
     let junction_aa = translate(&junction);
-    let cdr3 = if junction.len() >= 6 { junction[3..junction.len() - 3].to_vec() } else { Vec::new() };
+    let cdr3 = if junction.len() >= 6 {
+        junction[3..junction.len() - 3].to_vec()
+    } else {
+        Vec::new()
+    };
     let cdr3_aa = translate(&cdr3);
 
     ProductivityAssessment {

@@ -262,7 +262,6 @@ fn escape_json(value: &str) -> String {
     out
 }
 
-
 pub fn snapshot_html(snapshot: &ServerSnapshot) -> String {
     let elapsed_ms = snapshot
         .finished_unix_ms
@@ -495,5 +494,4 @@ mod tests {
         assert!(html.contains("42 &lt; 100"));
         assert!(html.contains("00:00:02"));
     }
-
 }

@@ -203,7 +203,6 @@ fn star_maps_a_real_fastq_record() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn star_keeps_unmapped_reads_in_bam_output() -> Result<()> {
     if !star_available() {
@@ -237,7 +236,11 @@ fn star_keeps_unmapped_reads_in_bam_output() -> Result<()> {
     }
     calls.extend(mapper.finish()?);
 
-    assert_eq!(calls.len(), 1, "expected one MappingCall for unmapped input");
+    assert_eq!(
+        calls.len(),
+        1,
+        "expected one MappingCall for unmapped input"
+    );
     assert_eq!(calls[0].read_id, "read_unmapped_001");
     assert!(
         calls[0]

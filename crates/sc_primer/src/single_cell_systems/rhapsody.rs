@@ -338,7 +338,9 @@ impl RhapsodyWhitelist {
             return None;
         }
 
-        let last = packed.len().checked_sub(self.version.unshifted_consumed_len())?;
+        let last = packed
+            .len()
+            .checked_sub(self.version.unshifted_consumed_len())?;
         for outer in from..=last {
             for shift in shift_start..=shift_end {
                 let Some(base) = outer.checked_add(shift) else {
@@ -373,20 +375,12 @@ impl RhapsodyWhitelist {
 
         let packed = OneHotSequence::from_bytes(seq);
         let mut cursor = 0usize;
-        while let Some(offset) = self.next_candidate_start_packed(
-            &packed,
-            cursor,
-            shift_start,
-            shift_end,
-        ) {
-            if let Some(call) = self.call_with_packed(
-                seq,
-                qual,
-                &packed,
-                offset,
-                shift_start,
-                shift_end,
-            ) {
+        while let Some(offset) =
+            self.next_candidate_start_packed(&packed, cursor, shift_start, shift_end)
+        {
+            if let Some(call) =
+                self.call_with_packed(seq, qual, &packed, offset, shift_start, shift_end)
+            {
                 return Some(call);
             }
             cursor = offset.saturating_add(1);
@@ -445,30 +439,26 @@ impl RhapsodyWhitelist {
             let c3 = &seq[coords.c3.0..coords.c3.1];
 
             if !self.v2_linkers_pass(seq, &coords) {
-                whitelist_reason = Some(
-                    "BD_CELL: combined 8 bp linker has more than two mismatches".to_string(),
-                );
+                whitelist_reason =
+                    Some("BD_CELL: combined 8 bp linker has more than two mismatches".to_string());
                 continue;
             }
 
             if self.index_c1_unique(c1).is_none() {
                 whitelist_reason = Some(
-                    "BD_CELL: C1 unique-nearest whitelist assignment was ambiguous"
-                        .to_string(),
+                    "BD_CELL: C1 unique-nearest whitelist assignment was ambiguous".to_string(),
                 );
                 continue;
             }
             if self.index_c2_unique(c2).is_none() {
                 whitelist_reason = Some(
-                    "BD_CELL: C2 unique-nearest whitelist assignment was ambiguous"
-                        .to_string(),
+                    "BD_CELL: C2 unique-nearest whitelist assignment was ambiguous".to_string(),
                 );
                 continue;
             }
             if self.index_c3_unique(c3).is_none() {
                 whitelist_reason = Some(
-                    "BD_CELL: C3 unique-nearest whitelist assignment was ambiguous"
-                        .to_string(),
+                    "BD_CELL: C3 unique-nearest whitelist assignment was ambiguous".to_string(),
                 );
                 continue;
             }
@@ -623,10 +613,7 @@ impl RhapsodyWhitelist {
     fn v2_linker_mismatches_at(&self, packed: &OneHotSequence, base: usize) -> Option<u32> {
         let linker1 = packed.window::<4>(base.checked_add(9)?).ok()?;
         let linker2 = packed.window::<4>(base.checked_add(22)?).ok()?;
-        Some(
-            linker1.mismatches(BD_V2_LINKER_1_ONEHOT)
-                + linker2.mismatches(BD_V2_LINKER_2_ONEHOT),
-        )
+        Some(linker1.mismatches(BD_V2_LINKER_1_ONEHOT) + linker2.mismatches(BD_V2_LINKER_2_ONEHOT))
     }
 
     #[inline]
@@ -662,18 +649,12 @@ impl RhapsodyWhitelist {
             return None;
         }
 
-        let (c1_idx, c1_mismatches) = Self::index_block_unique_onehot(
-            packed.window::<9>(coords.c1.0).ok()?,
-            &self.c1_fuzzy,
-        )?;
-        let (c2_idx, c2_mismatches) = Self::index_block_unique_onehot(
-            packed.window::<9>(coords.c2.0).ok()?,
-            &self.c2_fuzzy,
-        )?;
-        let (c3_idx, c3_mismatches) = Self::index_block_unique_onehot(
-            packed.window::<9>(coords.c3.0).ok()?,
-            &self.c3_fuzzy,
-        )?;
+        let (c1_idx, c1_mismatches) =
+            Self::index_block_unique_onehot(packed.window::<9>(coords.c1.0).ok()?, &self.c1_fuzzy)?;
+        let (c2_idx, c2_mismatches) =
+            Self::index_block_unique_onehot(packed.window::<9>(coords.c2.0).ok()?, &self.c2_fuzzy)?;
+        let (c3_idx, c3_mismatches) =
+            Self::index_block_unique_onehot(packed.window::<9>(coords.c3.0).ok()?, &self.c3_fuzzy)?;
 
         let mut linker_signature = [0u8; 8];
         linker_signature[..4].copy_from_slice(seq.get(coords.c1.1..coords.c2.0)?);
@@ -896,8 +877,8 @@ impl RhapsodyWhitelist {
         let Ok(observed) = OneHot::<8>::from_bytes(&observed) else {
             return false;
         };
-        let expected = OneHot::<8>::from_bytes(BD_V2_LINKERS)
-            .expect("builtin BD v2 linker must encode");
+        let expected =
+            OneHot::<8>::from_bytes(BD_V2_LINKERS).expect("builtin BD v2 linker must encode");
         observed.mismatches(expected) <= BD_V2_MAX_LINKER_MISMATCHES
     }
 
@@ -973,8 +954,8 @@ impl RhapsodyWhitelist {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Chemistry, PrimerDetector};
     use crate::Orientation;
+    use crate::{Chemistry, PrimerDetector};
 
     fn qual(len: usize) -> Vec<u8> {
         vec![40; len]
@@ -1221,8 +1202,10 @@ mod tests {
         let cell = wl.create_cell_cassette(c1, c2, c3);
         let primer = detector.grammar().synthesize(&cell, b"ACGTAC").unwrap();
 
-        let mut shifted = b"ACGT".to_vec();
-        shifted.extend_from_slice(&primer);
+        // Grammar::synthesize() materializes SEARCH as four deterministic
+        // placeholder bases, so `primer` already represents the maximum
+        // allowed shift (4). Do not prepend another four bases here.
+        let mut shifted = primer;
         shifted.extend_from_slice(b"GATCGATCGATC");
         let q = qual(shifted.len());
         let forward = detector.detect_first(&shifted, &q).unwrap().unwrap();
@@ -1257,5 +1240,4 @@ mod tests {
             assert_eq!(wl.cell_id_for_seq(&seq), Some(id));
         }
     }
-
 }

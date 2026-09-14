@@ -466,49 +466,148 @@ impl ServerContent for RunStatus {
                     "Throughput",
                     vec![
                         StatusMetric::new("Reads processed", self.reads_processed.to_string()),
-                        StatusMetric::new("Current reads / second", format!("{:.0}", self.reads_per_second)),
-                        StatusMetric::new("Steady reads / second", format!("{:.0}", self.steady_reads_per_second)),
-                        StatusMetric::new("Run-average reads / second", format!("{:.0}", self.average_reads_per_second)),
-                        StatusMetric::new("Current FASTQ", self.input_file.clone().unwrap_or_else(|| "-".to_string())),
+                        StatusMetric::new(
+                            "Current reads / second",
+                            format!("{:.0}", self.reads_per_second),
+                        ),
+                        StatusMetric::new(
+                            "Steady reads / second",
+                            format!("{:.0}", self.steady_reads_per_second),
+                        ),
+                        StatusMetric::new(
+                            "Run-average reads / second",
+                            format!("{:.0}", self.average_reads_per_second),
+                        ),
+                        StatusMetric::new(
+                            "Current FASTQ",
+                            self.input_file.clone().unwrap_or_else(|| "-".to_string()),
+                        ),
                     ],
                 ),
                 StatusSection::new(
                     "Read routing",
                     vec![
-                        StatusMetric::new("Accepted genomic molecules", format!("{} ({:.2}%)", self.accepted_pairs, pct(self.accepted_pairs))),
-                        StatusMetric::new("Exported to mapper", format!("{} ({:.2}%)", self.mapper_reads, self.mapper_export_pct)),
-                        StatusMetric::new("Feature-tag molecules", format!("{} ({:.2}%)", self.unique_feature, self.unique_feature_pct)),
-                        StatusMetric::new("Feature-tag matches", format!("{} ({:.2}%)", self.feature_tag_matches, pct(self.feature_tag_matches))),
-                        StatusMetric::new("Rejected pairs", format!("{} ({:.2}%)", self.failed_pairs, pct(self.failed_pairs))),
-                        StatusMetric::new("Cell / UMI not detected", format!("{} ({:.2}%)", self.no_cell_umi, self.no_cell_umi_pct)),
+                        StatusMetric::new(
+                            "Accepted genomic molecules",
+                            format!("{} ({:.2}%)", self.accepted_pairs, pct(self.accepted_pairs)),
+                        ),
+                        StatusMetric::new(
+                            "Exported to mapper",
+                            format!("{} ({:.2}%)", self.mapper_reads, self.mapper_export_pct),
+                        ),
+                        StatusMetric::new(
+                            "Feature-tag molecules",
+                            format!("{} ({:.2}%)", self.unique_feature, self.unique_feature_pct),
+                        ),
+                        StatusMetric::new(
+                            "Feature-tag matches",
+                            format!(
+                                "{} ({:.2}%)",
+                                self.feature_tag_matches,
+                                pct(self.feature_tag_matches)
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "Rejected pairs",
+                            format!("{} ({:.2}%)", self.failed_pairs, pct(self.failed_pairs)),
+                        ),
+                        StatusMetric::new(
+                            "Cell / UMI not detected",
+                            format!("{} ({:.2}%)", self.no_cell_umi, self.no_cell_umi_pct),
+                        ),
                     ],
                 ),
                 StatusSection::new(
                     "Molecules",
                     vec![
-                        StatusMetric::new("Candidate molecules", format!("{} ({:.2}%)", self.candidate_pairs, pct(self.candidate_pairs))),
-                        StatusMetric::new("Duplicates", format!("{} ({:.2}%)", self.duplicates, self.duplicate_pct)),
-                        StatusMetric::new("Unique molecule yield", format!("{:.2}%", self.unique_yield_pct)),
-                        StatusMetric::new("Paired R1 insert found", format!("{} ({:.2}%)", self.paired_r1_insert_found, pct(self.paired_r1_insert_found))),
-                        StatusMetric::new("No usable paired R1 insert", format!("{} ({:.2}%)", self.no_usable_paired_r1_insert, pct(self.no_usable_paired_r1_insert))),
-                        StatusMetric::new("Forward / reverse", format!("{} / {}", self.forward_molecules, self.reverse_molecules)),
+                        StatusMetric::new(
+                            "Candidate molecules",
+                            format!(
+                                "{} ({:.2}%)",
+                                self.candidate_pairs,
+                                pct(self.candidate_pairs)
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "Duplicates",
+                            format!("{} ({:.2}%)", self.duplicates, self.duplicate_pct),
+                        ),
+                        StatusMetric::new(
+                            "Unique molecule yield",
+                            format!("{:.2}%", self.unique_yield_pct),
+                        ),
+                        StatusMetric::new(
+                            "Paired R1 insert found",
+                            format!(
+                                "{} ({:.2}%)",
+                                self.paired_r1_insert_found,
+                                pct(self.paired_r1_insert_found)
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "No usable paired R1 insert",
+                            format!(
+                                "{} ({:.2}%)",
+                                self.no_usable_paired_r1_insert,
+                                pct(self.no_usable_paired_r1_insert)
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "Forward / reverse",
+                            format!("{} / {}", self.forward_molecules, self.reverse_molecules),
+                        ),
                     ],
                 ),
                 StatusSection::new(
                     "Mapper / quantification",
                     vec![
                         StatusMetric::new("BAM records seen", self.bam_records_seen.to_string()),
-                        StatusMetric::new("BAM records with cell / UMI", format!("{} ({:.2}%)", self.quantified_bam_records, bam_pct(self.quantified_bam_records))),
-                        StatusMetric::new("Compatible", format!("{} ({:.2}%)", self.compatible_bam_records, bam_pct(self.compatible_bam_records))),
-                        StatusMetric::new("Unmapped", format!("{} ({:.2}%)", self.unmapped_bam_records, bam_pct(self.unmapped_bam_records))),
-                        StatusMetric::new("Cells retained", self.retained_cells.map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
+                        StatusMetric::new(
+                            "BAM records with cell / UMI",
+                            format!(
+                                "{} ({:.2}%)",
+                                self.quantified_bam_records,
+                                bam_pct(self.quantified_bam_records)
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "Compatible",
+                            format!(
+                                "{} ({:.2}%)",
+                                self.compatible_bam_records,
+                                bam_pct(self.compatible_bam_records)
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "Unmapped",
+                            format!(
+                                "{} ({:.2}%)",
+                                self.unmapped_bam_records,
+                                bam_pct(self.unmapped_bam_records)
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "Cells retained",
+                            self.retained_cells
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
                     ],
                 ),
                 StatusSection::new(
                     "Memory",
                     vec![
-                        StatusMetric::new("Process RSS / peak", format!("{:.0} / {:.0} MiB", self.process_rss_mib, self.process_peak_rss_mib)),
-                        StatusMetric::new("System memory available", format!("{:.0} MiB", self.system_available_mib)),
+                        StatusMetric::new(
+                            "Process RSS / peak",
+                            format!(
+                                "{:.0} / {:.0} MiB",
+                                self.process_rss_mib, self.process_peak_rss_mib
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "System memory available",
+                            format!("{:.0} MiB", self.system_available_mib),
+                        ),
                     ],
                 ),
             ],

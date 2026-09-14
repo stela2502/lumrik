@@ -126,8 +126,7 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
     let splice_index = test_path("tiny.gtf.dat");
     let star_index = test_path("star_index");
 
-    let current_exe =
-        std::env::current_exe().expect("failed to locate current test executable");
+    let current_exe = std::env::current_exe().expect("failed to locate current test executable");
 
     let target_release = current_exe
         .parent()
@@ -142,8 +141,7 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
         splice_index_bin.display()
     );
 
-
-    let status = Command::new( &splice_index_bin )
+    let status = Command::new(&splice_index_bin)
         .args([
             "build",
             "--annotation",

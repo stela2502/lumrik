@@ -237,11 +237,10 @@ impl VdjIndex {
         let mut out = Vec::new();
         for id in ids {
             let s = &self.segments[*id as usize];
-            if blocks.iter().any(|&(a, b)| {
-                s.exon_blocks
-                    .iter()
-                    .any(|&(x, y)| a < y && b > x)
-            }) {
+            if blocks
+                .iter()
+                .any(|&(a, b)| s.exon_blocks.iter().any(|&(x, y)| a < y && b > x))
+            {
                 out.push(*id);
             }
         }
@@ -432,7 +431,8 @@ impl VdjIndexBuilder {
                     end,
                     strand,
                     coding_start: if entry.kind == SegmentKind::V {
-                        tx.cds_span().map(|span| project_cds_start(tx.exons(), tx.strand, span))
+                        tx.cds_span()
+                            .map(|span| project_cds_start(tx.exons(), tx.strand, span))
                     } else {
                         None
                     },
@@ -450,7 +450,10 @@ impl VdjIndexBuilder {
                 .collect();
             missing.sort();
             if !missing.is_empty() {
-                bail!("requested VDJ gene(s) not found in annotation: {}", missing.join(", "));
+                bail!(
+                    "requested VDJ gene(s) not found in annotation: {}",
+                    missing.join(", ")
+                );
             }
         }
         if segments.is_empty() {
@@ -701,7 +704,10 @@ mod index_contract_tests {
         // Give the V transcript an explicit coding start at genomic position 3
         // (GTF position 4), so the projected mature-transcript coding start is 3.
         genome[3..6].copy_from_slice(b"ATG");
-        fs::write(&fasta, format!(">chr1\n{}\n", String::from_utf8(genome).unwrap()))?;
+        fs::write(
+            &fasta,
+            format!(">chr1\n{}\n", String::from_utf8(genome).unwrap()),
+        )?;
         fs::write(
             &gtf,
             concat!(
@@ -722,7 +728,11 @@ mod index_contract_tests {
             .build(&gtf, &fasta)?;
 
         let full_v = full.segments.iter().find(|s| s.name == "Ighv1-64").unwrap();
-        let tiny_v = filtered.segments.iter().find(|s| s.name == "Ighv1-64").unwrap();
+        let tiny_v = filtered
+            .segments
+            .iter()
+            .find(|s| s.name == "Ighv1-64")
+            .unwrap();
         assert_eq!(tiny_v.sequence, full_v.sequence);
         assert_eq!(tiny_v.exon_blocks, full_v.exon_blocks);
         assert_eq!(tiny_v.coding_start(), full_v.coding_start());

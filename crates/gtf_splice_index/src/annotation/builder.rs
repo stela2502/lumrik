@@ -215,5 +215,4 @@ chr1\tsrc\tCDS\t201\t240\t.\t+\t2\tgene_id \"G1\"; transcript_id \"T1\";
         assert_eq!(tx.exons().len(), 2);
         assert_eq!(tx.cds_span(), Some((120, 240)));
     }
-
 }

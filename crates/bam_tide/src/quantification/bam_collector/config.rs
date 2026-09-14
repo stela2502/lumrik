@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 use clap::Args;
 
-use crate::{cli::AnalysisType, quantification::cli::{BamAuxTag, QuantMode}};
+use crate::{
+    cli::AnalysisType,
+    quantification::cli::{BamAuxTag, QuantMode},
+};
 use read_tag_table::ReadTagTableCli;
 
 #[derive(Debug, Clone, Args)]

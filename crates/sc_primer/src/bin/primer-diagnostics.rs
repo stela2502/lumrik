@@ -44,8 +44,8 @@ struct Cli {
 }
 
 fn open_fastq(path: &Path) -> Result<Box<dyn BufRead>, String> {
-    let file = File::open(path)
-        .map_err(|e| format!("failed to open R1 '{}': {e}", path.display()))?;
+    let file =
+        File::open(path).map_err(|e| format!("failed to open R1 '{}': {e}", path.display()))?;
 
     let is_gz = path
         .extension()
@@ -161,7 +161,8 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
     let mut failed_linker_signatures = HashMap::<([u8; 8], usize, usize), u64>::new();
     let mut failed_without_linker_profile = 0u64;
     let mut failed_linker_cell_profiles = HashMap::<(usize, u32, u32, u32), u64>::new();
-    let mut failed_linker_examples = HashMap::<usize, Vec<(u64, usize, [u8; 8], u32, u32, u32, Vec<u8>)>>::new();
+    let mut failed_linker_examples =
+        HashMap::<usize, Vec<(u64, usize, [u8; 8], u32, u32, u32, Vec<u8>)>>::new();
     let mut forward_calls = 0u64;
     let mut reverse_calls = 0u64;
 
@@ -204,12 +205,9 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
         }
 
         if cli.deep_failures {
-            if let Some(profile) = whitelist.best_mismatch_profile(
-                &seq,
-                0,
-                cli.shift_start,
-                cli.shift_end,
-            ) {
+            if let Some(profile) =
+                whitelist.best_mismatch_profile(&seq, 0, cli.shift_start, cli.shift_end)
+            {
                 *failed_profiles
                     .entry((
                         profile.c1_mismatches,
@@ -242,7 +240,8 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
                 let distance = hamming(linker1, LINKER1) + hamming(linker2, LINKER2);
 
                 if best_linker.is_none_or(|(_, current_distance, current_shift)| {
-                    distance < current_distance || (distance == current_distance && shift < current_shift)
+                    distance < current_distance
+                        || (distance == current_distance && shift < current_shift)
                 }) {
                     best_linker = Some((signature, distance, shift));
                 }
@@ -258,13 +257,26 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
                 // linker, so the two diagnostics describe one candidate cassette.
                 if let Some(profile) = whitelist.best_mismatch_profile(&seq, 0, shift, shift) {
                     *failed_linker_cell_profiles
-                        .entry((distance, profile.c1_mismatches, profile.c2_mismatches, profile.c3_mismatches))
+                        .entry((
+                            distance,
+                            profile.c1_mismatches,
+                            profile.c2_mismatches,
+                            profile.c3_mismatches,
+                        ))
                         .or_default() += 1;
 
                     if matches!(distance, 4 | 5) {
                         let examples = failed_linker_examples.entry(distance).or_default();
                         if examples.len() < 10 {
-                            examples.push((total, shift, signature, profile.c1_mismatches, profile.c2_mismatches, profile.c3_mismatches, seq.clone()));
+                            examples.push((
+                                total,
+                                shift,
+                                signature,
+                                profile.c1_mismatches,
+                                profile.c2_mismatches,
+                                profile.c3_mismatches,
+                                seq.clone(),
+                            ));
                         }
                     }
                 }
@@ -272,7 +284,6 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
                 failed_without_linker_profile += 1;
             }
         }
-
     }
 
     let failed = total.saturating_sub(called);
@@ -332,24 +343,36 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
         println!("# failed_best_linker_distance");
         println!("linker_mismatches\tcount\tfraction_failed");
         for (distance, count) in distances {
-            let fraction = if failed == 0 { 0.0 } else { count as f64 / failed as f64 };
+            let fraction = if failed == 0 {
+                0.0
+            } else {
+                count as f64 / failed as f64
+            };
             println!("{distance}\t{count}\t{fraction:.8}");
         }
 
         let mut signatures = failed_linker_signatures.into_iter().collect::<Vec<_>>();
-        signatures.sort_unstable_by(|((sig_a, dist_a, shift_a), count_a), ((sig_b, dist_b, shift_b), count_b)| {
-            count_b
-                .cmp(count_a)
-                .then_with(|| dist_a.cmp(dist_b))
-                .then_with(|| shift_a.cmp(shift_b))
-                .then_with(|| sig_a.cmp(sig_b))
-        });
+        signatures.sort_unstable_by(
+            |((sig_a, dist_a, shift_a), count_a), ((sig_b, dist_b, shift_b), count_b)| {
+                count_b
+                    .cmp(count_a)
+                    .then_with(|| dist_a.cmp(dist_b))
+                    .then_with(|| shift_a.cmp(shift_b))
+                    .then_with(|| sig_a.cmp(sig_b))
+            },
+        );
 
         println!();
         println!("# failed_best_linker_signatures");
-        println!("signature\tlinker1\tlinker2\tlinker_mismatches\tbest_shift\tcount\tfraction_failed");
+        println!(
+            "signature\tlinker1\tlinker2\tlinker_mismatches\tbest_shift\tcount\tfraction_failed"
+        );
         for ((signature, distance, shift), count) in signatures {
-            let fraction = if failed == 0 { 0.0 } else { count as f64 / failed as f64 };
+            let fraction = if failed == 0 {
+                0.0
+            } else {
+                count as f64 / failed as f64
+            };
             println!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{:.8}",
                 String::from_utf8_lossy(&signature),
@@ -366,17 +389,31 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
     if !failed_linker_cell_profiles.is_empty() {
         let mut rows = failed_linker_cell_profiles.into_iter().collect::<Vec<_>>();
         rows.sort_unstable_by(|((al, a1, a2, a3), ac), ((bl, b1, b2, b3), bc)| {
-            al.cmp(bl).then_with(|| (a1+a2+a3).cmp(&(b1+b2+b3))).then_with(|| bc.cmp(ac)).then_with(|| a1.cmp(b1)).then_with(|| a2.cmp(b2)).then_with(|| a3.cmp(b3))
+            al.cmp(bl)
+                .then_with(|| (a1 + a2 + a3).cmp(&(b1 + b2 + b3)))
+                .then_with(|| bc.cmp(ac))
+                .then_with(|| a1.cmp(b1))
+                .then_with(|| a2.cmp(b2))
+                .then_with(|| a3.cmp(b3))
         });
         let mut totals = HashMap::<usize, u64>::new();
-        for ((linker_distance, _, _, _), count) in &rows { *totals.entry(*linker_distance).or_default() += *count; }
+        for ((linker_distance, _, _, _), count) in &rows {
+            *totals.entry(*linker_distance).or_default() += *count;
+        }
         println!();
         println!("# failed_cell_mismatches_by_linker_distance");
         println!("linker_mismatches\tc1_mismatches\tc2_mismatches\tc3_mismatches\ttotal_cell_mismatches\tcount\tfraction_with_linker_distance");
         for ((linker_distance, c1, c2, c3), count) in rows {
             let denominator = totals.get(&linker_distance).copied().unwrap_or(0);
-            let fraction = if denominator == 0 { 0.0 } else { count as f64 / denominator as f64 };
-            println!("{linker_distance}\t{c1}\t{c2}\t{c3}\t{}\t{count}\t{fraction:.8}", c1+c2+c3);
+            let fraction = if denominator == 0 {
+                0.0
+            } else {
+                count as f64 / denominator as f64
+            };
+            println!(
+                "{linker_distance}\t{c1}\t{c2}\t{c3}\t{}\t{count}\t{fraction:.8}",
+                c1 + c2 + c3
+            );
         }
     }
 
@@ -387,7 +424,12 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
         for linker_distance in [4usize, 5usize] {
             if let Some(examples) = failed_linker_examples.get(&linker_distance) {
                 for (read_number, shift, signature, c1, c2, c3, seq) in examples {
-                    println!("{linker_distance}\t{read_number}\t{shift}\t{}\t{c1}\t{c2}\t{c3}\t{}\t{}", String::from_utf8_lossy(signature), c1+c2+c3, String::from_utf8_lossy(seq));
+                    println!(
+                        "{linker_distance}\t{read_number}\t{shift}\t{}\t{c1}\t{c2}\t{c3}\t{}\t{}",
+                        String::from_utf8_lossy(signature),
+                        c1 + c2 + c3,
+                        String::from_utf8_lossy(seq)
+                    );
                 }
             }
         }
@@ -395,17 +437,19 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
 
     if !failed_profiles.is_empty() {
         let mut profiles = failed_profiles.into_iter().collect::<Vec<_>>();
-        profiles.sort_unstable_by(|((a1, a2, a3, ashift), acount), ((b1, b2, b3, bshift), bcount)| {
-            let atotal = a1 + a2 + a3;
-            let btotal = b1 + b2 + b3;
-            atotal
-                .cmp(&btotal)
-                .then_with(|| bcount.cmp(acount))
-                .then_with(|| a1.cmp(b1))
-                .then_with(|| a2.cmp(b2))
-                .then_with(|| a3.cmp(b3))
-                .then_with(|| ashift.cmp(bshift))
-        });
+        profiles.sort_unstable_by(
+            |((a1, a2, a3, ashift), acount), ((b1, b2, b3, bshift), bcount)| {
+                let atotal = a1 + a2 + a3;
+                let btotal = b1 + b2 + b3;
+                atotal
+                    .cmp(&btotal)
+                    .then_with(|| bcount.cmp(acount))
+                    .then_with(|| a1.cmp(b1))
+                    .then_with(|| a2.cmp(b2))
+                    .then_with(|| a3.cmp(b3))
+                    .then_with(|| ashift.cmp(bshift))
+            },
+        );
 
         let mut total_distribution = HashMap::<u32, u64>::new();
         for ((c1, c2, c3, _), count) in &profiles {
@@ -447,7 +491,10 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
     eprintln!("reads scanned: {total}");
     eprintln!("reads resolved: {called}");
     if total != 0 {
-        eprintln!("resolved fraction: {:.2}%", called as f64 * 100.0 / total as f64);
+        eprintln!(
+            "resolved fraction: {:.2}%",
+            called as f64 * 100.0 / total as f64
+        );
     }
 
     Ok(())
@@ -469,7 +516,10 @@ fn run_generic(cli: &Cli) -> Result<(), String> {
         };
         total += 1;
 
-        match detector.detect_first(&seq, &qual).map_err(|e| e.to_string())? {
+        match detector
+            .detect_first(&seq, &qual)
+            .map_err(|e| e.to_string())?
+        {
             Some(_) => called += 1,
             None => {
                 let reason = detector
@@ -514,7 +564,10 @@ fn run_generic(cli: &Cli) -> Result<(), String> {
     eprintln!("reads scanned: {total}");
     eprintln!("reads resolved: {called}");
     if total != 0 {
-        eprintln!("resolved fraction: {:.2}%", called as f64 * 100.0 / total as f64);
+        eprintln!(
+            "resolved fraction: {:.2}%",
+            called as f64 * 100.0 / total as f64
+        );
     }
     Ok(())
 }
@@ -529,9 +582,10 @@ fn main() -> Result<(), String> {
     }
 
     match bd_version(cli.chemistry) {
-        Some(BdCellVersion::V2_96 | BdCellVersion::V2_384) => {
-            run_bd(&cli, bd_version(cli.chemistry).expect("matched BD chemistry"))
-        }
+        Some(BdCellVersion::V2_96 | BdCellVersion::V2_384) => run_bd(
+            &cli,
+            bd_version(cli.chemistry).expect("matched BD chemistry"),
+        ),
         _ => run_generic(&cli),
     }
 }

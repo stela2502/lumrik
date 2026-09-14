@@ -198,7 +198,10 @@ impl OneHotSequence {
             words[word] |= encode_base(base) << (within * 4);
         }
 
-        Self { words, len: seq.len() }
+        Self {
+            words,
+            len: seq.len(),
+        }
     }
 
     #[inline]

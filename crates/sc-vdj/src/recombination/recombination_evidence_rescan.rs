@@ -161,11 +161,8 @@ impl RescanEvidenceVdj {
                 let mut delta = CellRescanEvidence::default();
 
                 for record in records {
-                    let receptor_hit = map_receptor_oriented(
-                        receptor_mapper,
-                        cell_id,
-                        &record.sequence,
-                    );
+                    let receptor_hit =
+                        map_receptor_oriented(receptor_mapper, cell_id, &record.sequence);
                     let receptor = receptor_hit
                         .as_ref()
                         .and_then(|(feature_index, _, _)| {
@@ -204,18 +201,15 @@ impl RescanEvidenceVdj {
                                 call,
                                 index,
                             ) {
-                                delta.junction_support_reads = delta
-                                    .junction_support_reads
-                                    .saturating_add(1);
+                                delta.junction_support_reads =
+                                    delta.junction_support_reads.saturating_add(1);
                                 if read_evidence.spans_junction {
-                                    delta.junction_spanning_reads = delta
-                                        .junction_spanning_reads
-                                        .saturating_add(1);
+                                    delta.junction_spanning_reads =
+                                        delta.junction_spanning_reads.saturating_add(1);
                                 }
                                 if read_evidence.conflicts {
-                                    delta.junction_conflicting_reads = delta
-                                        .junction_conflicting_reads
-                                        .saturating_add(1);
+                                    delta.junction_conflicting_reads =
+                                        delta.junction_conflicting_reads.saturating_add(1);
                                 }
                                 merge_junction_read(
                                     delta
@@ -292,9 +286,7 @@ impl RescanEvidenceVdj {
             self.constant_hit_records = self
                 .constant_hit_records
                 .saturating_add(delta.constant_hit_records);
-            self.linked_fragments = self
-                .linked_fragments
-                .saturating_add(delta.linked_fragments);
+            self.linked_fragments = self.linked_fragments.saturating_add(delta.linked_fragments);
             self.junction_support_reads = self
                 .junction_support_reads
                 .saturating_add(delta.junction_support_reads);
@@ -539,8 +531,14 @@ where
         let record = record?;
         report.bam_records_scanned += 1;
         if report.bam_records_scanned % RESCAN_PROGRESS_EVERY_BAM_RECORDS == 0 {
-            let (receptor_hit_records, constant_hit_records, linked_fragments, junction_support_reads, junction_spanning_reads, junction_conflicting_reads) =
-                evidence.progress_counts();
+            let (
+                receptor_hit_records,
+                constant_hit_records,
+                linked_fragments,
+                junction_support_reads,
+                junction_spanning_reads,
+                junction_conflicting_reads,
+            ) = evidence.progress_counts();
             progress(RecombinationEvidenceRescanProgress {
                 bam_records_scanned: report.bam_records_scanned,
                 wanted_cell_records: report.wanted_cell_records,
@@ -579,8 +577,14 @@ where
                     calls,
                 );
                 batches_completed = batches_completed.saturating_add(1);
-                let (receptor_hit_records, constant_hit_records, linked_fragments, junction_support_reads, junction_spanning_reads, junction_conflicting_reads) =
-                    evidence.progress_counts();
+                let (
+                    receptor_hit_records,
+                    constant_hit_records,
+                    linked_fragments,
+                    junction_support_reads,
+                    junction_spanning_reads,
+                    junction_conflicting_reads,
+                ) = evidence.progress_counts();
                 progress(RecombinationEvidenceRescanProgress {
                     bam_records_scanned: report.bam_records_scanned,
                     wanted_cell_records: report.wanted_cell_records,
@@ -623,8 +627,14 @@ where
             calls,
         );
         batches_completed = batches_completed.saturating_add(1);
-        let (receptor_hit_records, constant_hit_records, linked_fragments, junction_support_reads, junction_spanning_reads, junction_conflicting_reads) =
-            evidence.progress_counts();
+        let (
+            receptor_hit_records,
+            constant_hit_records,
+            linked_fragments,
+            junction_support_reads,
+            junction_spanning_reads,
+            junction_conflicting_reads,
+        ) = evidence.progress_counts();
         progress(RecombinationEvidenceRescanProgress {
             bam_records_scanned: report.bam_records_scanned,
             wanted_cell_records: report.wanted_cell_records,
@@ -771,8 +781,9 @@ where
     }
 
     for (target_index, target) in receptor_targets.iter().enumerate() {
-        report.calls[target_index].stable_id =
-            calls[target.call_group].1[target.call_index].stable_id.clone();
+        report.calls[target_index].stable_id = calls[target.call_group].1[target.call_index]
+            .stable_id
+            .clone();
     }
     report.rescued = rescued;
     Ok(report)
@@ -854,13 +865,17 @@ fn junction_read_evidence(
             continue;
         }
         let query_pos = query_pos as usize;
-        let Some(&base) = sequence.get(query_pos) else { continue; };
-        let Some(base_index) = base_index(base) else { continue; };
+        let Some(&base) = sequence.get(query_pos) else {
+            continue;
+        };
+        let Some(base_index) = base_index(base) else {
+            continue;
+        };
         let junction_pos = reference_pos - junction_start;
         counts[junction_pos][base_index] = counts[junction_pos][base_index].saturating_add(1);
         let quality = qualities.get(query_pos).copied().unwrap_or(0).min(60) as u32 + 1;
-        quality_sums[junction_pos][base_index] = quality_sums[junction_pos][base_index]
-            .saturating_add(quality);
+        quality_sums[junction_pos][base_index] =
+            quality_sums[junction_pos][base_index].saturating_add(quality);
         covered += 1;
         if call.observed_rearrangement[reference_pos].to_ascii_uppercase()
             != base.to_ascii_uppercase()
@@ -938,14 +953,20 @@ fn infer_ungapped_offset(
     if best_votes < 2 {
         return None;
     }
-    if ranked.get(1).is_some_and(|(_, second_votes)| *second_votes == best_votes) {
+    if ranked
+        .get(1)
+        .is_some_and(|(_, second_votes)| *second_votes == best_votes)
+    {
         return None;
     }
     Some(best_offset)
 }
 
 fn merge_junction_read(dst: &mut JunctionPileup, src: JunctionReadEvidence) {
-    if dst.reference_start.is_some_and(|start| start != src.reference_start) {
+    if dst
+        .reference_start
+        .is_some_and(|start| start != src.reference_start)
+    {
         return;
     }
     dst.reference_start = Some(src.reference_start);
@@ -960,15 +981,18 @@ fn merge_junction_read(dst: &mut JunctionPileup, src: JunctionReadEvidence) {
     for pos in 0..src.counts.len() {
         for base in 0..4 {
             dst.counts[pos][base] = dst.counts[pos][base].saturating_add(src.counts[pos][base]);
-            dst.quality_sums[pos][base] = dst.quality_sums[pos][base]
-                .saturating_add(src.quality_sums[pos][base]);
+            dst.quality_sums[pos][base] =
+                dst.quality_sums[pos][base].saturating_add(src.quality_sums[pos][base]);
         }
     }
 }
 
 fn merge_junction_pileup(dst: &mut JunctionPileup, src: JunctionPileup) {
     if let Some(start) = src.reference_start {
-        if dst.reference_start.is_some_and(|existing| existing != start) {
+        if dst
+            .reference_start
+            .is_some_and(|existing| existing != start)
+        {
             return;
         }
         dst.reference_start = Some(start);
@@ -980,8 +1004,8 @@ fn merge_junction_pileup(dst: &mut JunctionPileup, src: JunctionPileup) {
     for pos in 0..src.counts.len() {
         for base in 0..4 {
             dst.counts[pos][base] = dst.counts[pos][base].saturating_add(src.counts[pos][base]);
-            dst.quality_sums[pos][base] = dst.quality_sums[pos][base]
-                .saturating_add(src.quality_sums[pos][base]);
+            dst.quality_sums[pos][base] =
+                dst.quality_sums[pos][base].saturating_add(src.quality_sums[pos][base]);
         }
     }
 }
@@ -994,7 +1018,9 @@ fn ensure_pileup_len(pileup: &mut JunctionPileup, len: usize) {
 }
 
 fn refine_junction_from_pileup(call: &mut Recombination, pileup: &JunctionPileup) -> usize {
-    let Some(junction_start) = pileup.reference_start else { return 0; };
+    let Some(junction_start) = pileup.reference_start else {
+        return 0;
+    };
     let mut refined = 0usize;
     for (pos, counts) in pileup.counts.iter().enumerate() {
         let depth: u32 = counts.iter().sum();
@@ -1029,7 +1055,9 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return None;
     }
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn base_index(base: u8) -> Option<usize> {

@@ -94,7 +94,12 @@ impl UnmappedIghSeeds {
         }
 
         let mut by_seed = HashMap::<Vec<u8>, Vec<crate::index::SegmentId>>::new();
-        for kind in [SegmentKind::V, SegmentKind::D, SegmentKind::J, SegmentKind::C] {
+        for kind in [
+            SegmentKind::V,
+            SegmentKind::D,
+            SegmentKind::J,
+            SegmentKind::C,
+        ] {
             for segment in index.segments_for(crate::index::Chain::Igh, kind) {
                 if segment.sequence.len() < UNMAPPED_IGH_SEED_LEN {
                     continue;
@@ -113,8 +118,7 @@ impl UnmappedIghSeeds {
             .filter_map(|(seed, ids)| {
                 let all_igh_j = ids.iter().all(|id| {
                     index.segment(*id).is_some_and(|segment| {
-                        segment.chain == crate::index::Chain::Igh
-                            && segment.kind == SegmentKind::J
+                        segment.chain == crate::index::Chain::Igh && segment.kind == SegmentKind::J
                     })
                 });
                 all_igh_j.then_some((seed, ids))
@@ -151,7 +155,12 @@ impl UnmappedIghSeeds {
         }
 
         let mut segment_ids = Vec::new();
-        for kind in [SegmentKind::V, SegmentKind::D, SegmentKind::J, SegmentKind::C] {
+        for kind in [
+            SegmentKind::V,
+            SegmentKind::D,
+            SegmentKind::J,
+            SegmentKind::C,
+        ] {
             let best = support
                 .iter()
                 .filter(|(id, evidence)| {
@@ -182,9 +191,9 @@ impl UnmappedIghSeeds {
         let mappings = segment_ids
             .into_iter()
             .map(|segment_id| {
-                let segment_is_reverse = index.segment(segment_id).is_some_and(|segment| {
-                    matches!(segment.strand, crate::index::Strand::Minus)
-                });
+                let segment_is_reverse = index
+                    .segment(segment_id)
+                    .is_some_and(|segment| matches!(segment.strand, crate::index::Strand::Minus));
                 MapperEvidence {
                     segment_id,
                     alignment: AlignmentGeometry {
@@ -331,7 +340,12 @@ impl UnmappedIghRescueStats {
         self.c_mappings = self.c_mappings.saturating_add(other.c_mappings);
     }
 
-    fn progress(&self, bam_records: usize, allowed_cell_records: usize, receptor_overlap_records: usize) -> BamIngestProgress {
+    fn progress(
+        &self,
+        bam_records: usize,
+        allowed_cell_records: usize,
+        receptor_overlap_records: usize,
+    ) -> BamIngestProgress {
         BamIngestProgress {
             bam_records,
             allowed_cell_records,
@@ -413,11 +427,8 @@ impl VdjRunner {
         stats.rescued_cells = rescued_cells;
 
         if !rescued.is_empty() {
-            self.evidence.consume_batch(
-                rescued,
-                &self.index,
-                self.config.min_sequence_overlap,
-            );
+            self.evidence
+                .consume_batch(rescued, &self.index, self.config.min_sequence_overlap);
         }
         stats
     }
@@ -477,13 +488,12 @@ impl VdjRunner {
         let mut unmapped_candidates =
             Vec::<UnmappedReadCandidate>::with_capacity(UNMAPPED_CANDIDATE_BATCH_SIZE);
         let unmapped_igh_seeds = UnmappedIghSeeds::new(&self.index);
-        let unmapped_pool = (self.threads > 1)
-            .then(|| {
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(self.threads)
-                    .build()
-                    .expect("building sc-vdj unmapped rescue Rayon pool")
-            });
+        let unmapped_pool = (self.threads > 1).then(|| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(self.threads)
+                .build()
+                .expect("building sc-vdj unmapped rescue Rayon pool")
+        });
 
         // Mapper BAMs emit the records belonging to one physical query together.
         // Keep only the immediately preceding query key so paired/supplementary
@@ -972,13 +982,17 @@ mod knee_tests {
             is_supplementary: false,
         };
 
-        let (_, rescued) = seeds.rescue_candidate(candidate(read.clone()), &index).unwrap();
-        assert!(rescued.mappings.iter().any(|m| {
-            index.segment(m.segment_id).unwrap().kind == SegmentKind::V
-        }));
-        assert!(rescued.mappings.iter().any(|m| {
-            index.segment(m.segment_id).unwrap().kind == SegmentKind::J
-        }));
+        let (_, rescued) = seeds
+            .rescue_candidate(candidate(read.clone()), &index)
+            .unwrap();
+        assert!(rescued
+            .mappings
+            .iter()
+            .any(|m| { index.segment(m.segment_id).unwrap().kind == SegmentKind::V }));
+        assert!(rescued
+            .mappings
+            .iter()
+            .any(|m| { index.segment(m.segment_id).unwrap().kind == SegmentKind::J }));
 
         let reverse = crate::index::reverse_complement(&read);
         assert!(seeds.rescue_candidate(candidate(reverse), &index).is_some());

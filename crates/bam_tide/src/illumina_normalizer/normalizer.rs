@@ -117,12 +117,12 @@ impl IlluminaPartial {
         let normalized_cell_seq = if unbarcoded {
             None
         } else {
-            Some(
-                primer_match
-                    .cell_seq
+            Some(primer_match.cell_seq.clone().unwrap_or_else(|| {
+                cell.as_ref()
+                    .expect("barcoded grammar must have CELL")
+                    .seq
                     .clone()
-                    .unwrap_or_else(|| cell.as_ref().expect("barcoded grammar must have CELL").seq.clone()),
-            )
+            }))
         };
 
         let identity = config

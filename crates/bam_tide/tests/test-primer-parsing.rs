@@ -260,11 +260,9 @@ fn illumina_normalize_pair_preserves_cell_and_umi_qualities() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn bd_rhapsody_normalizer_uses_corrected_cell_barcode() -> Result<()> {
-    let primer = PrimerDetector::from_chemistry(Chemistry::BdV2_384)
-        .map_err(anyhow::Error::msg)?;
+    let primer = PrimerDetector::from_chemistry(Chemistry::BdV2_384).map_err(anyhow::Error::msg)?;
 
     let config = IlluminaNormalizerConfig {
         out: PathBuf::from("unused-out.fastq"),
@@ -295,10 +293,7 @@ fn bd_rhapsody_normalizer_uses_corrected_cell_barcode() -> Result<()> {
         "read2",
         b"TNACAGAGAGATGTGAGCGCCATATGACAGCGGAGCATTGAACCTTTTTTTTTTTTTTTTTTTTTTTTTTT",
     );
-    let r2 = fastq(
-        "read",
-        b"TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA",
-    );
+    let r2 = fastq("read", b"TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA");
 
     let mut partial = IlluminaPartial::new();
     let feature_mapper = fast_tag_mapper::FastTagMapper::new();
@@ -313,8 +308,7 @@ fn bd_rhapsody_normalizer_uses_corrected_cell_barcode() -> Result<()> {
     assert_eq!(partial.candidates[1].read_tag.cell_seq, expected);
 
     assert_eq!(
-        partial.candidates[0].dedup_key,
-        partial.candidates[1].dedup_key,
+        partial.candidates[0].dedup_key, partial.candidates[1].dedup_key,
         "different observed errors in one corrected BD cell must not split molecule identity",
     );
 

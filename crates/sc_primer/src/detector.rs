@@ -72,12 +72,9 @@ impl PrimerDetector {
         match &self.single_cell_system {
             Some(SingleCellSystem::Tenx(tenx)) => {
                 let version = tenx.version();
-                let replacement = TenxWhitelist::from_text_with_mismatches(
-                    version,
-                    &text,
-                    max_mismatches,
-                )
-                .map_err(PrimerError::invalid_grammar)?;
+                let replacement =
+                    TenxWhitelist::from_text_with_mismatches(version, &text, max_mismatches)
+                        .map_err(PrimerError::invalid_grammar)?;
                 self.single_cell_system = Some(SingleCellSystem::Tenx(replacement));
             }
             Some(SingleCellSystem::Rhapsody(_)) => {
@@ -135,9 +132,7 @@ impl PrimerDetector {
     /// 	otherwise.
     pub fn cell_id_for_seq(&self, seq: &[u8]) -> Option<u64> {
         match &self.single_cell_system {
-            Some(SingleCellSystem::Rhapsody(rhapsody)) => {
-                rhapsody.cell_id_for_seq(seq)
-            }
+            Some(SingleCellSystem::Rhapsody(rhapsody)) => rhapsody.cell_id_for_seq(seq),
             _ => None,
         }
     }
@@ -318,10 +313,18 @@ impl PrimerDetector {
     ) -> PrimerResult<Vec<PrimerMatch>> {
         let mut hits = Vec::new();
         let mut cursor = 0usize;
-        let packed = self.leading_bd_search().map(|_| OneHotSequence::from_bytes(seq));
+        let packed = self
+            .leading_bd_search()
+            .map(|_| OneHotSequence::from_bytes(seq));
 
         while let Some(offset) = self.next_candidate_start(seq, packed.as_ref(), cursor) {
-            match self.try_from_start_with_packed(seq, qual, offset, orientation, packed.as_ref())? {
+            match self.try_from_start_with_packed(
+                seq,
+                qual,
+                offset,
+                orientation,
+                packed.as_ref(),
+            )? {
                 Some(hit) => {
                     // A successful match owns the whole primer span. Continue
                     // at its end instead of re-testing SEARCH shifts or other
@@ -346,10 +349,14 @@ impl PrimerDetector {
         orientation: Orientation,
     ) -> PrimerResult<Option<PrimerMatch>> {
         let mut cursor = 0usize;
-        let packed = self.leading_bd_search().map(|_| OneHotSequence::from_bytes(seq));
+        let packed = self
+            .leading_bd_search()
+            .map(|_| OneHotSequence::from_bytes(seq));
 
         while let Some(offset) = self.next_candidate_start(seq, packed.as_ref(), cursor) {
-            if let Some(hit) = self.try_from_start_with_packed(seq, qual, offset, orientation, packed.as_ref())? {
+            if let Some(hit) =
+                self.try_from_start_with_packed(seq, qual, offset, orientation, packed.as_ref())?
+            {
                 return Ok(Some(hit));
             }
             cursor = offset.saturating_add(1);
@@ -395,7 +402,10 @@ impl PrimerDetector {
         // read-wide search index. This rule is applied identically to forward
         // and reverse-complement detection.
         if self.leading_bd_search().is_some()
-            && matches!(&self.single_cell_system, Some(SingleCellSystem::Rhapsody(_)))
+            && matches!(
+                &self.single_cell_system,
+                Some(SingleCellSystem::Rhapsody(_))
+            )
         {
             return (from == 0 && !seq.is_empty()).then_some(0);
         }
@@ -629,14 +639,10 @@ impl PrimerDetector {
                             if matches!(
                                 rhapsody.version(),
                                 BdCellVersion::V2_96 | BdCellVersion::V2_384
-                            ) => rhapsody.call_with_packed(
-                                seq,
-                                qual,
-                                packed,
-                                pos,
-                                search.0,
-                                search.1,
-                            ),
+                            ) =>
+                        {
+                            rhapsody.call_with_packed(seq, qual, packed, pos, search.0, search.1)
+                        }
                         _ => rhapsody.call(seq, qual, pos, search.0, search.1),
                     };
                     let Some(call) = call else {

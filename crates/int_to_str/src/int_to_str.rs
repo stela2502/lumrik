@@ -1,6 +1,6 @@
+use onehot_dna::{OneHot, OneHotError};
 use std::collections::BTreeMap;
 use std::fmt;
-use onehot_dna::{OneHot, OneHotError};
 //use crate::errors::SeqError;
 //use crate::traits::BinaryMatcher;
 
@@ -602,7 +602,10 @@ mod tests {
         let expected = IntToStr::new(b"CTAC");
 
         assert_eq!(encoded.last_informative_u8(), expected.first_u8());
-        assert_ne!(encoded.last_informative_u8(), *encoded.u8_encoded.last().unwrap());
+        assert_ne!(
+            encoded.last_informative_u8(),
+            *encoded.u8_encoded.last().unwrap()
+        );
     }
 
     #[test]

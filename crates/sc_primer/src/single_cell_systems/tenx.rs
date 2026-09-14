@@ -289,7 +289,6 @@ mod tests {
         assert_eq!(wl.index_cell(b"TAACCCAAGAAACACT"), Some(0));
     }
 
-
     #[test]
     fn tenx_one_mismatch_tie_is_rejected() {
         let wl = TenxWhitelist::from_text(
@@ -302,10 +301,7 @@ mod tests {
 
     #[test]
     fn tenx_single_n_is_one_mismatch_and_must_be_unique() {
-        let unique = TenxWhitelist::from_text(
-            TenxVersion::ThreePrimeV3,
-            "ACGTTGCAACGTTGCA\n",
-        );
+        let unique = TenxWhitelist::from_text(TenxVersion::ThreePrimeV3, "ACGTTGCAACGTTGCA\n");
         assert_eq!(unique.index_cell(b"NCGTTGCAACGTTGCA"), Some(0));
 
         let tied = TenxWhitelist::from_text(

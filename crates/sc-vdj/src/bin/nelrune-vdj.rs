@@ -3,12 +3,12 @@ use clap::Parser;
 use flate2::read::MultiGzDecoder;
 use int_to_str::IntToStr;
 use lumrik_status::{
-    memory_status, public_hostname, snapshot_html, spawn_status_server, ServerContent, ServerSnapshot,
-    StatusMetric, StatusSection,
+    memory_status, public_hostname, snapshot_html, spawn_status_server, ServerContent,
+    ServerSnapshot, StatusMetric, StatusSection,
 };
 use mapping_info::MappingInfo;
-use sc_vdj::output::{write_mapping_info_report, ReportWriter};
 use sc_primer::BdCellVersion;
+use sc_vdj::output::{write_mapping_info_report, ReportWriter};
 use sc_vdj::{
     BamIngestProgress, CellEvidenceVdj, Chain, NelruneIdentityResolver, SegmentKind, VdjIndex,
     VdjIndexBuilder, VdjRunner, VdjRunnerConfig,
@@ -218,8 +218,9 @@ impl ServerContent for VdjRunStatus {
 
         ServerSnapshot {
             title: "Lumrik V(D)J".to_string(),
-            subtitle: "Evidence, receptor reconstruction, and splice-supported constant confirmation"
-                .to_string(),
+            subtitle:
+                "Evidence, receptor reconstruction, and splice-supported constant confirmation"
+                    .to_string(),
             started_unix_ms: self.started_unix_ms,
             finished_unix_ms: self.finished_unix_ms,
             stage: self.stage.clone(),
@@ -279,16 +280,10 @@ impl ServerContent for VdjRunStatus {
                 StatusSection::new(
                     "Unmapped IGH rescue",
                     vec![
-                        StatusMetric::new(
-                            "Candidates",
-                            self.unmapped_candidates.to_string(),
-                        ),
+                        StatusMetric::new("Candidates", self.unmapped_candidates.to_string()),
                         StatusMetric::new(
                             "JH-admitted records",
-                            format_count_pct(
-                                self.unmapped_igh_admitted,
-                                self.unmapped_candidates,
-                            ),
+                            format_count_pct(self.unmapped_igh_admitted, self.unmapped_candidates),
                         ),
                         StatusMetric::new(
                             "Rescued cells",
@@ -314,7 +309,10 @@ impl ServerContent for VdjRunStatus {
                         StatusMetric::new("J / no V,D cells", self.igh_j_no_vd_cells.to_string()),
                         StatusMetric::new(
                             "Intronic C cells / records",
-                            format!("{} / {}", self.igh_intronic_c_cells, self.igh_intronic_c_records),
+                            format!(
+                                "{} / {}",
+                                self.igh_intronic_c_cells, self.igh_intronic_c_records
+                            ),
                         ),
                     ],
                 ),
@@ -322,16 +320,89 @@ impl ServerContent for VdjRunStatus {
                     "Reconstruction",
                     vec![
                         StatusMetric::new("Stage time", self.phase_time(2)),
-                        StatusMetric::new("IGH knee", format_knee(self.knee_thresholds[0], self.knee_selected_cells[0], self.knee_evidence_cells[0])),
-                        StatusMetric::new("IGK knee", format_knee(self.knee_thresholds[1], self.knee_selected_cells[1], self.knee_evidence_cells[1])),
-                        StatusMetric::new("IGL knee", format_knee(self.knee_thresholds[2], self.knee_selected_cells[2], self.knee_evidence_cells[2])),
-                        StatusMetric::new("TRA knee", format_knee(self.knee_thresholds[3], self.knee_selected_cells[3], self.knee_evidence_cells[3])),
-                        StatusMetric::new("TRB knee", format_knee(self.knee_thresholds[4], self.knee_selected_cells[4], self.knee_evidence_cells[4])),
-                        StatusMetric::new("TRG / TRD knee", format!("{} / {}", format_knee(self.knee_thresholds[5], self.knee_selected_cells[5], self.knee_evidence_cells[5]), format_knee(self.knee_thresholds[6], self.knee_selected_cells[6], self.knee_evidence_cells[6]))),
-                        StatusMetric::new("Called cells / recombinations", format!("{} / {}", self.calls_cells, self.recombinations)),
-                        StatusMetric::new("Productive", format!("{} ({productive_pct:.1}%)", self.productive)),
-                        StatusMetric::new("IGH / IGK / IGL", format!("{} / {} / {}", self.calls_by_chain[0], self.calls_by_chain[1], self.calls_by_chain[2])),
-                        StatusMetric::new("TRA / TRB / TRG / TRD", format!("{} / {} / {} / {}", self.calls_by_chain[3], self.calls_by_chain[4], self.calls_by_chain[5], self.calls_by_chain[6])),
+                        StatusMetric::new(
+                            "IGH knee",
+                            format_knee(
+                                self.knee_thresholds[0],
+                                self.knee_selected_cells[0],
+                                self.knee_evidence_cells[0],
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "IGK knee",
+                            format_knee(
+                                self.knee_thresholds[1],
+                                self.knee_selected_cells[1],
+                                self.knee_evidence_cells[1],
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "IGL knee",
+                            format_knee(
+                                self.knee_thresholds[2],
+                                self.knee_selected_cells[2],
+                                self.knee_evidence_cells[2],
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "TRA knee",
+                            format_knee(
+                                self.knee_thresholds[3],
+                                self.knee_selected_cells[3],
+                                self.knee_evidence_cells[3],
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "TRB knee",
+                            format_knee(
+                                self.knee_thresholds[4],
+                                self.knee_selected_cells[4],
+                                self.knee_evidence_cells[4],
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "TRG / TRD knee",
+                            format!(
+                                "{} / {}",
+                                format_knee(
+                                    self.knee_thresholds[5],
+                                    self.knee_selected_cells[5],
+                                    self.knee_evidence_cells[5]
+                                ),
+                                format_knee(
+                                    self.knee_thresholds[6],
+                                    self.knee_selected_cells[6],
+                                    self.knee_evidence_cells[6]
+                                )
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "Called cells / recombinations",
+                            format!("{} / {}", self.calls_cells, self.recombinations),
+                        ),
+                        StatusMetric::new(
+                            "Productive",
+                            format!("{} ({productive_pct:.1}%)", self.productive),
+                        ),
+                        StatusMetric::new(
+                            "IGH / IGK / IGL",
+                            format!(
+                                "{} / {} / {}",
+                                self.calls_by_chain[0],
+                                self.calls_by_chain[1],
+                                self.calls_by_chain[2]
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "TRA / TRB / TRG / TRD",
+                            format!(
+                                "{} / {} / {} / {}",
+                                self.calls_by_chain[3],
+                                self.calls_by_chain[4],
+                                self.calls_by_chain[5],
+                                self.calls_by_chain[6]
+                            ),
+                        ),
                     ],
                 ),
                 StatusSection::new(
@@ -344,18 +415,46 @@ impl ServerContent for VdjRunStatus {
                         ),
                         StatusMetric::new(
                             "Full BAM pass",
-                            if rescan_complete { "complete" } else { "in progress" },
+                            if rescan_complete {
+                                "complete"
+                            } else {
+                                "in progress"
+                            },
                         ),
-                        StatusMetric::new("Wanted-cell records", self.rescan_wanted_records.to_string()),
+                        StatusMetric::new(
+                            "Wanted-cell records",
+                            self.rescan_wanted_records.to_string(),
+                        ),
                         StatusMetric::new("Evidence batches", self.rescan_batches.to_string()),
-                        StatusMetric::new("CDR3/receptor hits", self.receptor_rediscovery_hits.to_string()),
-                        StatusMetric::new("Junction-support reads", self.junction_support_reads.to_string()),
-                        StatusMetric::new("Full-junction spanning reads", self.junction_spanning_reads.to_string()),
-                        StatusMetric::new("Junction-conflicting reads", self.junction_conflicting_reads.to_string()),
-                        StatusMetric::new("Refined calls / bases", format!("{} / {}", self.junction_refined_calls, self.junction_refined_bases)),
+                        StatusMetric::new(
+                            "CDR3/receptor hits",
+                            self.receptor_rediscovery_hits.to_string(),
+                        ),
+                        StatusMetric::new(
+                            "Junction-support reads",
+                            self.junction_support_reads.to_string(),
+                        ),
+                        StatusMetric::new(
+                            "Full-junction spanning reads",
+                            self.junction_spanning_reads.to_string(),
+                        ),
+                        StatusMetric::new(
+                            "Junction-conflicting reads",
+                            self.junction_conflicting_reads.to_string(),
+                        ),
+                        StatusMetric::new(
+                            "Refined calls / bases",
+                            format!(
+                                "{} / {}",
+                                self.junction_refined_calls, self.junction_refined_bases
+                            ),
+                        ),
                         StatusMetric::new("Constant-region hits", self.constant_hits.to_string()),
                         StatusMetric::new("Linked fragments", self.linked_fragments.to_string()),
-                        StatusMetric::new("Constant calls rescued", self.rescued_constants.to_string()),
+                        StatusMetric::new(
+                            "Constant calls rescued",
+                            self.rescued_constants.to_string(),
+                        ),
                     ],
                 ),
                 StatusSection::new(
@@ -365,10 +464,16 @@ impl ServerContent for VdjRunStatus {
                         StatusMetric::new("Reference preparation", self.phase_time(0)),
                         StatusMetric::new("Output writing", self.phase_time(4)),
                         StatusMetric::new("Worker threads", self.threads.to_string()),
-                        StatusMetric::new("Reference segments", self.reference_segments.to_string()),
+                        StatusMetric::new(
+                            "Reference segments",
+                            self.reference_segments.to_string(),
+                        ),
                         StatusMetric::new(
                             "Process RSS / peak",
-                            format!("{:.0} / {:.0} MiB", memory.process_rss_mib, memory.process_peak_rss_mib),
+                            format!(
+                                "{:.0} / {:.0} MiB",
+                                memory.process_rss_mib, memory.process_peak_rss_mib
+                            ),
                         ),
                         StatusMetric::new(
                             "System memory available",
@@ -661,7 +766,11 @@ fn write_run_summary_yaml(path: &Path, state: &VdjRunStatus) -> Result<()> {
     writeln!(w, "input:")?;
     writeln!(w, "  bam_records: {}", state.bam_records)?;
     writeln!(w, "  allowed_cell_records: {}", state.allowed_cell_records)?;
-    writeln!(w, "  receptor_overlap_records: {}", state.receptor_overlap_records)?;
+    writeln!(
+        w,
+        "  receptor_overlap_records: {}",
+        state.receptor_overlap_records
+    )?;
     match state.preliminary_cells {
         Some(value) => writeln!(w, "  preliminary_cells: {value}")?,
         None => writeln!(w, "  preliminary_cells: null")?,
@@ -684,8 +793,16 @@ fn write_run_summary_yaml(path: &Path, state: &VdjRunStatus) -> Result<()> {
     writeln!(w, "  cells_with_d: {}", state.cells_with_d)?;
     writeln!(w, "  cells_with_j: {}", state.cells_with_j)?;
     writeln!(w, "  cells_with_retained_exonic_c: {}", state.cells_with_c)?;
-    writeln!(w, "  j_constant_linked_cells: {}", state.j_constant_linked_cells)?;
-    writeln!(w, "  j_constant_linked_fragments: {}", state.j_constant_linked_fragments)?;
+    writeln!(
+        w,
+        "  j_constant_linked_cells: {}",
+        state.j_constant_linked_cells
+    )?;
+    writeln!(
+        w,
+        "  j_constant_linked_fragments: {}",
+        state.j_constant_linked_fragments
+    )?;
 
     writeln!(w, "igh_state:")?;
     writeln!(w, "  v_j_cells: {}", state.igh_vj_cells)?;
@@ -706,7 +823,11 @@ fn write_run_summary_yaml(path: &Path, state: &VdjRunStatus) -> Result<()> {
     writeln!(w, "  called_cells: {}", state.calls_cells)?;
     writeln!(w, "  recombinations: {}", state.recombinations)?;
     writeln!(w, "  productive: {}", state.productive)?;
-    writeln!(w, "  mean_per_called_cell: {:.6}", state.mean_calls_per_cell)?;
+    writeln!(
+        w,
+        "  mean_per_called_cell: {:.6}",
+        state.mean_calls_per_cell
+    )?;
     for (slot, chain) in Chain::ALL.into_iter().enumerate() {
         writeln!(w, "  {}: {}", chain.to_string(), state.calls_by_chain[slot])?;
     }
@@ -715,14 +836,38 @@ fn write_run_summary_yaml(path: &Path, state: &VdjRunStatus) -> Result<()> {
     writeln!(w, "  bam_records_scanned: {}", state.rescan_records)?;
     writeln!(w, "  wanted_cell_records: {}", state.rescan_wanted_records)?;
     writeln!(w, "  evidence_batches: {}", state.rescan_batches)?;
-    writeln!(w, "  receptor_rediscovery_hits: {}", state.receptor_rediscovery_hits)?;
+    writeln!(
+        w,
+        "  receptor_rediscovery_hits: {}",
+        state.receptor_rediscovery_hits
+    )?;
     writeln!(w, "  constant_region_hits: {}", state.constant_hits)?;
     writeln!(w, "  linked_fragments: {}", state.linked_fragments)?;
-    writeln!(w, "  junction_support_reads: {}", state.junction_support_reads)?;
-    writeln!(w, "  junction_spanning_reads: {}", state.junction_spanning_reads)?;
-    writeln!(w, "  junction_conflicting_reads: {}", state.junction_conflicting_reads)?;
-    writeln!(w, "  junction_refined_calls: {}", state.junction_refined_calls)?;
-    writeln!(w, "  junction_refined_bases: {}", state.junction_refined_bases)?;
+    writeln!(
+        w,
+        "  junction_support_reads: {}",
+        state.junction_support_reads
+    )?;
+    writeln!(
+        w,
+        "  junction_spanning_reads: {}",
+        state.junction_spanning_reads
+    )?;
+    writeln!(
+        w,
+        "  junction_conflicting_reads: {}",
+        state.junction_conflicting_reads
+    )?;
+    writeln!(
+        w,
+        "  junction_refined_calls: {}",
+        state.junction_refined_calls
+    )?;
+    writeln!(
+        w,
+        "  junction_refined_bases: {}",
+        state.junction_refined_bases
+    )?;
     writeln!(w, "  constant_calls_rescued: {}", state.rescued_constants)?;
     writeln!(
         w,
@@ -731,10 +876,22 @@ fn write_run_summary_yaml(path: &Path, state: &VdjRunStatus) -> Result<()> {
     )?;
 
     writeln!(w, "timings_ms:")?;
-    writeln!(w, "  reference_preparation: {}", duration_ms(state.phase_times[0]))?;
-    writeln!(w, "  evidence_collection: {}", duration_ms(state.phase_times[1]))?;
+    writeln!(
+        w,
+        "  reference_preparation: {}",
+        duration_ms(state.phase_times[0])
+    )?;
+    writeln!(
+        w,
+        "  evidence_collection: {}",
+        duration_ms(state.phase_times[1])
+    )?;
     writeln!(w, "  reconstruction: {}", duration_ms(state.phase_times[2]))?;
-    writeln!(w, "  confirmation_rescan: {}", duration_ms(state.phase_times[3]))?;
+    writeln!(
+        w,
+        "  confirmation_rescan: {}",
+        duration_ms(state.phase_times[3])
+    )?;
     writeln!(w, "  output_writing: {}", duration_ms(state.phase_times[4]))?;
     writeln!(w, "memory_mib:")?;
     writeln!(w, "  process_rss: {:.3}", memory.process_rss_mib)?;
@@ -963,12 +1120,30 @@ fn main() -> Result<()> {
         .expect("reading VDJ status after BAM ingestion")
         .clone();
     mapping_info.report_n("vdj.unmapped_candidates", ingest_status.unmapped_candidates);
-    mapping_info.report_n("vdj.unmapped_igh_admitted", ingest_status.unmapped_igh_admitted);
-    mapping_info.report_n("vdj.unmapped_igh_rescued_cells", ingest_status.unmapped_igh_rescued_cells);
-    mapping_info.report_n("vdj.unmapped_igh_v_mappings", ingest_status.unmapped_igh_v_mappings);
-    mapping_info.report_n("vdj.unmapped_igh_d_mappings", ingest_status.unmapped_igh_d_mappings);
-    mapping_info.report_n("vdj.unmapped_igh_j_mappings", ingest_status.unmapped_igh_j_mappings);
-    mapping_info.report_n("vdj.unmapped_igh_c_mappings", ingest_status.unmapped_igh_c_mappings);
+    mapping_info.report_n(
+        "vdj.unmapped_igh_admitted",
+        ingest_status.unmapped_igh_admitted,
+    );
+    mapping_info.report_n(
+        "vdj.unmapped_igh_rescued_cells",
+        ingest_status.unmapped_igh_rescued_cells,
+    );
+    mapping_info.report_n(
+        "vdj.unmapped_igh_v_mappings",
+        ingest_status.unmapped_igh_v_mappings,
+    );
+    mapping_info.report_n(
+        "vdj.unmapped_igh_d_mappings",
+        ingest_status.unmapped_igh_d_mappings,
+    );
+    mapping_info.report_n(
+        "vdj.unmapped_igh_j_mappings",
+        ingest_status.unmapped_igh_j_mappings,
+    );
+    mapping_info.report_n(
+        "vdj.unmapped_igh_c_mappings",
+        ingest_status.unmapped_igh_c_mappings,
+    );
     if let Some(cells) = preliminary_cells.as_ref() {
         mapping_info.report_n("vdj.preliminary_cells", cells.len());
     }
@@ -976,8 +1151,14 @@ fn main() -> Result<()> {
     mapping_info.report_n("vdj.recombinations", nr);
     mapping_info.report_n("vdj.receptor_rediscovery_constant_calls", rescan.rescued);
     mapping_info.report_n("vdj.junction_support_reads", rescan.junction_support_reads);
-    mapping_info.report_n("vdj.junction_spanning_reads", rescan.junction_spanning_reads);
-    mapping_info.report_n("vdj.junction_conflicting_reads", rescan.junction_conflicting_reads);
+    mapping_info.report_n(
+        "vdj.junction_spanning_reads",
+        rescan.junction_spanning_reads,
+    );
+    mapping_info.report_n(
+        "vdj.junction_conflicting_reads",
+        rescan.junction_conflicting_reads,
+    );
     mapping_info.report_n("vdj.junction_refined_calls", rescan.junction_refined_calls);
     mapping_info.report_n("vdj.junction_refined_bases", rescan.junction_refined_bases);
     for (chain, count) in &by_chain {

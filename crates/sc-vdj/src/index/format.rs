@@ -41,7 +41,10 @@ pub(super) fn save(index: &VdjIndex, path: &Path) -> Result<()> {
             write_u32(&mut w, end)?;
         }
         match s.coding_start {
-            Some(x) => { write_u8(&mut w, 1)?; write_u32(&mut w, x)?; }
+            Some(x) => {
+                write_u8(&mut w, 1)?;
+                write_u32(&mut w, x)?;
+            }
             None => write_u8(&mut w, 0)?,
         }
         write_bytes(&mut w, &s.sequence)?;
@@ -65,7 +68,13 @@ pub(super) fn load(path: &Path) -> Result<VdjIndex> {
         ),
     };
     let version = read_u32(&mut r)?;
-    let expected = if has_coding_start { VERSION_V7 } else if precise_exon_blocks { VERSION_V6 } else { VERSION_V5 };
+    let expected = if has_coding_start {
+        VERSION_V7
+    } else if precise_exon_blocks {
+        VERSION_V6
+    } else {
+        VERSION_V5
+    };
     if version != expected {
         bail!("unsupported VDJ index version {version}")
     }

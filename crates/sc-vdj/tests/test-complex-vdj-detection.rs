@@ -88,12 +88,21 @@ fn complex_fragmented_vdj_with_pn_d_and_constant_is_detected_from_bam() {
     let ranges = [
         (0, 52, 110u32, CigarString(vec![Cigar::Match(52)])),
         (34, 72, 302u32, CigarString(vec![Cigar::Match(38)])),
-        (55, rearr_len, 503u32, CigarString(vec![Cigar::Match((rearr_len - 55) as u32)])),
+        (
+            55,
+            rearr_len,
+            503u32,
+            CigarString(vec![Cigar::Match((rearr_len - 55) as u32)]),
+        ),
         (
             68,
             receptor.len(),
             512u32,
-            CigarString(vec![Cigar::Match(16), Cigar::RefSkip(172), Cigar::Match(30)]),
+            CigarString(vec![
+                Cigar::Match(16),
+                Cigar::RefSkip(172),
+                Cigar::Match(30),
+            ]),
         ),
     ];
     let tmp = tempfile::tempdir().unwrap();

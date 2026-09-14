@@ -7,8 +7,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use sc_primer::{Chemistry, PrimerDetector};
 
-const DEFAULT_LUMRIK: &str =
-    "target/sc-vdj-test-output/server-ZD-4631-BcellsLaneF/vdj_calls.tsv";
+const DEFAULT_LUMRIK: &str = "target/sc-vdj-test-output/server-ZD-4631-BcellsLaneF/vdj_calls.tsv";
 
 const DEFAULT_BD_AIRR: &str =
     "/home/med-sal/sens05_shared/jyuan/no_backup/giorgia_VDJ_single_cell_2026_06_01/db_pipeline_B_cell_run/B_cells_VDJ_Dominant_Contigs_AIRR.tsv";
@@ -72,20 +71,15 @@ fn main() -> Result<()> {
     println!("  Chemistry: {:?}", args.chemistry);
     println!();
 
-    let lumrik_cells: HashSet<u64> =
-        lumrik.iter().map(|x| x.cell_id).collect();
+    let lumrik_cells: HashSet<u64> = lumrik.iter().map(|x| x.cell_id).collect();
 
-    let bd_cells: HashSet<u64> =
-        bd.iter().map(|x| x.cell_id).collect();
+    let bd_cells: HashSet<u64> = bd.iter().map(|x| x.cell_id).collect();
 
-    let shared_cells =
-        lumrik_cells.intersection(&bd_cells).count();
+    let shared_cells = lumrik_cells.intersection(&bd_cells).count();
 
-    let lumrik_only_cells =
-        lumrik_cells.difference(&bd_cells).count();
+    let lumrik_only_cells = lumrik_cells.difference(&bd_cells).count();
 
-    let bd_only_cells =
-        bd_cells.difference(&lumrik_cells).count();
+    let bd_only_cells = bd_cells.difference(&lumrik_cells).count();
 
     println!("Calls");
     println!("  Lumrik: {}", lumrik.len());
@@ -108,18 +102,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn read_lumrik(
-    path: &Path,
-    detector: &PrimerDetector,
-) -> Result<Vec<LumrikCall>> {
-    let file = File::open(path)
-        .with_context(|| format!("opening Lumrik TSV {}", path.display()))?;
+fn read_lumrik(path: &Path, detector: &PrimerDetector) -> Result<Vec<LumrikCall>> {
+    let file =
+        File::open(path).with_context(|| format!("opening Lumrik TSV {}", path.display()))?;
 
     let mut lines = BufReader::new(file).lines();
 
-    let header = lines
-        .next()
-        .context("Lumrik TSV is empty")??;
+    let header = lines.next().context("Lumrik TSV is empty")??;
 
     let columns: Vec<&str> = header.split('\t').collect();
 
@@ -143,9 +132,7 @@ fn read_lumrik(
 
         let cell = field_ref(&fields, cell_idx);
 
-        let Some(cell_id) =
-            detector.cell_id_for_seq(cell.as_bytes())
-        else {
+        let Some(cell_id) = detector.cell_id_for_seq(cell.as_bytes()) else {
             unmapped_barcodes.insert(cell.to_string());
             continue;
         };
@@ -171,14 +158,12 @@ fn read_lumrik(
 }
 
 fn read_bd_airr(path: &Path) -> Result<Vec<BdCall>> {
-    let file = File::open(path)
-        .with_context(|| format!("opening BD AIRR TSV {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("opening BD AIRR TSV {}", path.display()))?;
 
     let mut lines = BufReader::new(file).lines();
 
-    let header = lines
-        .next()
-        .context("BD AIRR TSV is empty")??;
+    let header = lines.next().context("BD AIRR TSV is empty")??;
 
     let columns: Vec<&str> = header.split('\t').collect();
 
@@ -207,9 +192,7 @@ fn read_bd_airr(path: &Path) -> Result<Vec<BdCall>> {
 
         let cell_id: u64 = raw_cell_id
             .parse()
-            .with_context(|| {
-                format!("invalid BD cell_id {raw_cell_id:?}")
-            })?;
+            .with_context(|| format!("invalid BD cell_id {raw_cell_id:?}"))?;
 
         calls.push(BdCall {
             cell_id,
@@ -229,8 +212,7 @@ fn read_bd_airr(path: &Path) -> Result<Vec<BdCall>> {
 }
 
 fn compare_calls(lumrik: &[LumrikCall], bd: &[BdCall]) {
-    let mut bd_by_cell_locus: HashMap<(u64, String), Vec<&BdCall>> =
-        HashMap::new();
+    let mut bd_by_cell_locus: HashMap<(u64, String), Vec<&BdCall>> = HashMap::new();
 
     for call in bd {
         bd_by_cell_locus
@@ -252,19 +234,15 @@ fn compare_calls(lumrik: &[LumrikCall], bd: &[BdCall]) {
             continue;
         };
 
-        if candidates.iter().any(|bd| {
-            bd.v == call.v
-                && bd.d == call.d
-                && bd.j == call.j
-                && bd.c == call.c
-        }) {
+        if candidates
+            .iter()
+            .any(|bd| bd.v == call.v && bd.d == call.d && bd.j == call.j && bd.c == call.c)
+        {
             exact_vdj += 1;
             continue;
         }
 
-        if candidates.iter().any(|bd| {
-            bd.v == call.v && bd.j == call.j
-        }) {
+        if candidates.iter().any(|bd| bd.v == call.v && bd.j == call.j) {
             exact_vj += 1;
             continue;
         }

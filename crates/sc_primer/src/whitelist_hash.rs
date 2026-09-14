@@ -41,8 +41,16 @@ impl WhitelistLayout {
 
         let mut parts = Vec::with_capacity(part_count);
         let mut start = 0usize;
-        let base_gap = if gap_slots == 0 { 0 } else { gap_bases / gap_slots };
-        let extra = if gap_slots == 0 { 0 } else { gap_bases % gap_slots };
+        let base_gap = if gap_slots == 0 {
+            0
+        } else {
+            gap_bases / gap_slots
+        };
+        let extra = if gap_slots == 0 {
+            0
+        } else {
+            gap_bases % gap_slots
+        };
 
         for part in 0..part_count {
             parts.push(HashPart { start, len: 4 });
@@ -108,10 +116,7 @@ impl<const N: usize> WhitelistHash<N> {
         })
     }
 
-    pub fn from_sequences<S: AsRef<[u8]>>(
-        seqs: &[S],
-        max_mismatches: u32,
-    ) -> Result<Self, String> {
+    pub fn from_sequences<S: AsRef<[u8]>>(seqs: &[S], max_mismatches: u32) -> Result<Self, String> {
         let mut out = Self::with_capacity(seqs.len(), max_mismatches)?;
         for seq in seqs {
             out.insert(seq.as_ref())?;
@@ -176,8 +181,8 @@ impl<const N: usize> WhitelistHash<N> {
         self.exact_onehot.insert(one_hot.bits(), id);
 
         for (position, part) in self.layout.parts.iter().copied().enumerate() {
-            let key = Self::encode_part(seq, part)
-                .expect("validated ACGT whitelist part must encode");
+            let key =
+                Self::encode_part(seq, part).expect("validated ACGT whitelist part must encode");
             self.data[key as usize].positions[position].push(id);
         }
 
@@ -557,7 +562,11 @@ impl<const N: usize> WhitelistHash<N> {
                 tied = true;
             }
         }
-        if tied { None } else { best.map(|index| (index, best_dist)) }
+        if tied {
+            None
+        } else {
+            best.map(|index| (index, best_dist))
+        }
     }
 }
 
@@ -565,14 +574,38 @@ impl<const N: usize> WhitelistHash<N> {
 /// const-generic `WhitelistHash<N>` used by built-in chemistries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeWhitelistHash {
-    N1(WhitelistHash<1>), N2(WhitelistHash<2>), N3(WhitelistHash<3>), N4(WhitelistHash<4>),
-    N5(WhitelistHash<5>), N6(WhitelistHash<6>), N7(WhitelistHash<7>), N8(WhitelistHash<8>),
-    N9(WhitelistHash<9>), N10(WhitelistHash<10>), N11(WhitelistHash<11>), N12(WhitelistHash<12>),
-    N13(WhitelistHash<13>), N14(WhitelistHash<14>), N15(WhitelistHash<15>), N16(WhitelistHash<16>),
-    N17(WhitelistHash<17>), N18(WhitelistHash<18>), N19(WhitelistHash<19>), N20(WhitelistHash<20>),
-    N21(WhitelistHash<21>), N22(WhitelistHash<22>), N23(WhitelistHash<23>), N24(WhitelistHash<24>),
-    N25(WhitelistHash<25>), N26(WhitelistHash<26>), N27(WhitelistHash<27>), N28(WhitelistHash<28>),
-    N29(WhitelistHash<29>), N30(WhitelistHash<30>), N31(WhitelistHash<31>), N32(WhitelistHash<32>),
+    N1(WhitelistHash<1>),
+    N2(WhitelistHash<2>),
+    N3(WhitelistHash<3>),
+    N4(WhitelistHash<4>),
+    N5(WhitelistHash<5>),
+    N6(WhitelistHash<6>),
+    N7(WhitelistHash<7>),
+    N8(WhitelistHash<8>),
+    N9(WhitelistHash<9>),
+    N10(WhitelistHash<10>),
+    N11(WhitelistHash<11>),
+    N12(WhitelistHash<12>),
+    N13(WhitelistHash<13>),
+    N14(WhitelistHash<14>),
+    N15(WhitelistHash<15>),
+    N16(WhitelistHash<16>),
+    N17(WhitelistHash<17>),
+    N18(WhitelistHash<18>),
+    N19(WhitelistHash<19>),
+    N20(WhitelistHash<20>),
+    N21(WhitelistHash<21>),
+    N22(WhitelistHash<22>),
+    N23(WhitelistHash<23>),
+    N24(WhitelistHash<24>),
+    N25(WhitelistHash<25>),
+    N26(WhitelistHash<26>),
+    N27(WhitelistHash<27>),
+    N28(WhitelistHash<28>),
+    N29(WhitelistHash<29>),
+    N30(WhitelistHash<30>),
+    N31(WhitelistHash<31>),
+    N32(WhitelistHash<32>),
 }
 
 macro_rules! runtime_dispatch {
@@ -594,7 +627,11 @@ impl RuntimeWhitelistHash {
         )
     }
 
-    pub fn from_path(len: usize, path: impl AsRef<Path>, max_mismatches: u32) -> Result<Self, String> {
+    pub fn from_path(
+        len: usize,
+        path: impl AsRef<Path>,
+        max_mismatches: u32,
+    ) -> Result<Self, String> {
         let path = path.as_ref();
         let text = fs::read_to_string(path)
             .map_err(|e| format!("failed to read whitelist '{}': {e}", path.display()))?;
@@ -603,17 +640,26 @@ impl RuntimeWhitelistHash {
 
     pub fn best_match(&self, seq: &[u8]) -> Option<(usize, u32)> {
         macro_rules! call { ($($variant:ident),+ $(,)?) => { match self { $(Self::$variant(hash) => hash.best_match_default(seq),)+ } }; }
-        call!(N1,N2,N3,N4,N5,N6,N7,N8,N9,N10,N11,N12,N13,N14,N15,N16,N17,N18,N19,N20,N21,N22,N23,N24,N25,N26,N27,N28,N29,N30,N31,N32)
+        call!(
+            N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11, N12, N13, N14, N15, N16, N17, N18, N19,
+            N20, N21, N22, N23, N24, N25, N26, N27, N28, N29, N30, N31, N32
+        )
     }
 
     pub fn sequence(&self, index: usize) -> Option<Vec<u8>> {
         macro_rules! call { ($($variant:ident),+ $(,)?) => { match self { $(Self::$variant(hash) => hash.sequence(index),)+ } }; }
-        call!(N1,N2,N3,N4,N5,N6,N7,N8,N9,N10,N11,N12,N13,N14,N15,N16,N17,N18,N19,N20,N21,N22,N23,N24,N25,N26,N27,N28,N29,N30,N31,N32)
+        call!(
+            N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11, N12, N13, N14, N15, N16, N17, N18, N19,
+            N20, N21, N22, N23, N24, N25, N26, N27, N28, N29, N30, N31, N32
+        )
     }
 
     pub fn len(&self) -> usize {
         macro_rules! call { ($($variant:ident),+ $(,)?) => { match self { $(Self::$variant(hash) => hash.len(),)+ } }; }
-        call!(N1,N2,N3,N4,N5,N6,N7,N8,N9,N10,N11,N12,N13,N14,N15,N16,N17,N18,N19,N20,N21,N22,N23,N24,N25,N26,N27,N28,N29,N30,N31,N32)
+        call!(
+            N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11, N12, N13, N14, N15, N16, N17, N18, N19,
+            N20, N21, N22, N23, N24, N25, N26, N27, N28, N29, N30, N31, N32
+        )
     }
 }
 
@@ -624,18 +670,24 @@ mod tests {
     #[test]
     fn nine_base_layout_leaves_one_base_gap() {
         let layout = WhitelistLayout::automatic(9).unwrap();
-        assert_eq!(layout.parts(), &[HashPart { start: 0, len: 4 }, HashPart { start: 5, len: 4 }]);
+        assert_eq!(
+            layout.parts(),
+            &[HashPart { start: 0, len: 4 }, HashPart { start: 5, len: 4 }]
+        );
     }
 
     #[test]
     fn sixteen_base_layout_has_four_positional_chunks() {
         let layout = WhitelistLayout::automatic(16).unwrap();
-        assert_eq!(layout.parts(), &[
-            HashPart { start: 0, len: 4 },
-            HashPart { start: 4, len: 4 },
-            HashPart { start: 8, len: 4 },
-            HashPart { start: 12, len: 4 },
-        ]);
+        assert_eq!(
+            layout.parts(),
+            &[
+                HashPart { start: 0, len: 4 },
+                HashPart { start: 4, len: 4 },
+                HashPart { start: 8, len: 4 },
+                HashPart { start: 12, len: 4 },
+            ]
+        );
     }
 
     #[test]
@@ -652,10 +704,9 @@ mod tests {
 
     #[test]
     fn wrong_position_does_not_vote() {
-        let hash = WhitelistHash::<16>::from_sequences(&[
-            b"ACGTTGCAGGCCAATT",
-            b"TGCAACGTGGCCAATT",
-        ], 1).unwrap();
+        let hash =
+            WhitelistHash::<16>::from_sequences(&[b"ACGTTGCAGGCCAATT", b"TGCAACGTGGCCAATT"], 1)
+                .unwrap();
         assert_eq!(hash.best_match_default(b"ACGTTGCAGGCTAATT"), Some((0, 1)));
     }
 
@@ -682,16 +733,15 @@ mod tests {
     fn unique_nearest_onehot_matches_byte_api() {
         let hash = WhitelistHash::<9>::from_sequences(&[b"ACGTTGCAA", b"TTTTTTTTT"], 1).unwrap();
         let query = OneHot::<9>::from_bytes(b"ACGATGTAA").unwrap();
-        assert_eq!(hash.unique_nearest_onehot(query), hash.unique_nearest(b"ACGATGTAA"));
+        assert_eq!(
+            hash.unique_nearest_onehot(query),
+            hash.unique_nearest(b"ACGATGTAA")
+        );
     }
 
     #[test]
     fn routed_unique_nearest_rescues_from_one_intact_hash_part() {
-        let hash = WhitelistHash::<9>::from_sequences(
-            &[b"ACGTATGCA", b"TTTTATTTT"],
-            1,
-        )
-        .unwrap();
+        let hash = WhitelistHash::<9>::from_sequences(&[b"ACGTATGCA", b"TTTTATTTT"], 1).unwrap();
         let query = OneHot::<9>::from_bytes(b"ACGTCTGTA").unwrap();
 
         // Two mismatches are allowed here because the intact leading ACGT

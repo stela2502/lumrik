@@ -145,10 +145,7 @@ impl TenxOntMultimerTest {
         out
     }
 
-    fn build_chemistry_monomers(
-        detector: &PrimerDetector,
-        fuzzy: bool,
-    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+    fn build_chemistry_monomers(detector: &PrimerDetector, fuzzy: bool) -> Vec<(Vec<u8>, Vec<u8>)> {
         let mut reads = Vec::with_capacity(10);
 
         for index in 0..10 {
@@ -368,9 +365,7 @@ fn test_bd_v2_384_detection_returns_match_diagnostics() {
     seq.extend_from_slice(b"GATCGATC");
     let qual = TestData::qual(seq.len());
 
-    let (hit, diagnostics) = detector
-        .detect_first_with_diagnostics(&seq, &qual)
-        .unwrap();
+    let (hit, diagnostics) = detector.detect_first_with_diagnostics(&seq, &qual).unwrap();
     let hit = hit.expect("BD primer should match");
     let bd = diagnostics
         .and_then(|diagnostics| diagnostics.bd)
@@ -380,7 +375,10 @@ fn test_bd_v2_384_detection_returns_match_diagnostics() {
     assert_eq!(bd.shift, 0);
     assert_eq!(&bd.linker_signature, b"GTGAGACA");
     assert_eq!(bd.linker_mismatches, 0);
-    assert_eq!((bd.c1_mismatches, bd.c2_mismatches, bd.c3_mismatches), (0, 0, 0));
+    assert_eq!(
+        (bd.c1_mismatches, bd.c2_mismatches, bd.c3_mismatches),
+        (0, 0, 0)
+    );
 }
 
 #[test]
@@ -647,11 +645,16 @@ fn benchmark_detect_all_tenx_positional_long() {
         assert_eq!(hits[0].primer_start, 0);
     }
 
-    bench("10x detect_all positional [long]", 100_000, reads.len(), || {
-        for (seq, qual) in &reads {
-            std::hint::black_box(detector.detect_all(seq, qual).unwrap());
-        }
-    });
+    bench(
+        "10x detect_all positional [long]",
+        100_000,
+        reads.len(),
+        || {
+            for (seq, qual) in &reads {
+                std::hint::black_box(detector.detect_all(seq, qual).unwrap());
+            }
+        },
+    );
 }
 
 #[test]
@@ -873,7 +876,10 @@ fn tenx_builtin_is_positional_and_does_not_scan_for_a_later_barcode() {
     let mut shifted_qual = vec![b'I'; 8];
     shifted_qual.extend_from_slice(&valid_qual);
 
-    assert!(detector.detect_all(&shifted_seq, &shifted_qual).unwrap().is_empty());
+    assert!(detector
+        .detect_all(&shifted_seq, &shifted_qual)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

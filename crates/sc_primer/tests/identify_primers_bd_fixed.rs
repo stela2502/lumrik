@@ -89,7 +89,6 @@ fn identify_primers_accepts_sequence_file_and_summarizes_errors() {
     let _ = std::fs::remove_file(path);
 }
 
-
 #[test]
 fn identify_primers_recovers_reverse_complement_bd_igk_read() {
     const REVERSE_IGK: &str = "ANAGGAAACTCTGGTGCGTGGCTCACCTAATGACGACGTGTCCACATTCGTAGTCCCCAGGCGTGGAGTCGTGATTATACTCTCTCTCCTGGCTCTCAGCTCAGGGGCCATTTCCCAGGCTGTTGTGACTCAGGAATCTGCACTCACCACA";
