@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use onehot_dna::{OneHot, OneHotError};
 //use crate::errors::SeqError;
 //use crate::traits::BinaryMatcher;
 
@@ -237,6 +238,79 @@ impl IntToStr {
 
     pub fn len(&self) -> usize {
         self.u8_encoded.len()
+    }
+
+    /// Return the first packed 4-base byte.
+    ///
+    /// Empty sequences return zero, matching the existing `Index` behaviour.
+    #[inline]
+    pub fn first_u8(&self) -> u8 {
+        self.u8_encoded.first().copied().unwrap_or(0)
+    }
+
+    /// Return the maximally informative packed byte for the final four bases.
+    ///
+    /// `u8_encoded.last()` is only maximally informative when the sequence
+    /// length is divisible by four. For e.g. a 9 bp barcode its final packed
+    /// byte contains one real base plus three padded A bases. This method
+    /// instead repacks the last four *real* bases, without converting back to
+    /// a DNA string.
+    ///
+    /// For sequences shorter than four bases this returns their existing
+    /// packed byte. Empty sequences return zero.
+    #[inline]
+    pub fn last_informative_u8(&self) -> u8 {
+        if self.size == 0 {
+            return 0;
+        }
+
+        if self.size <= 4 {
+            return self.first_u8();
+        }
+
+        let start = self.size - 4;
+        let mut packed = 0u8;
+
+        for target_pos in 0..4 {
+            let source_pos = start + target_pos;
+            let source_byte = self.u8_encoded[source_pos / 4];
+            let base = (source_byte >> ((source_pos % 4) * 2)) & 0b11;
+            packed |= base << (target_pos * 2);
+        }
+
+        packed
+    }
+
+    /// Convert this already 2-bit-packed sequence directly to `OneHot<N>`.
+    ///
+    /// This avoids `IntToStr -> DNA bytes -> OneHot`. The sequence must have
+    /// exactly `N` meaningful bases. Note that `IntToStr` historically maps
+    /// `N` to `A` during 2-bit encoding; callers that need unknown bases to
+    /// remain mismatches must reject them before constructing `IntToStr`.
+    pub fn as_one_hot<const N: usize>(&self) -> Result<OneHot<N>, OneHotError> {
+        if N > OneHot::<N>::MAX_LEN {
+            return Err(OneHotError::TooLong {
+                max: OneHot::<N>::MAX_LEN,
+                observed: N,
+            });
+        }
+
+        if self.size != N {
+            return Err(OneHotError::WrongLength {
+                expected: N,
+                observed: self.size,
+            });
+        }
+
+        let mut bits = 0u128;
+
+        for pos in 0..N {
+            let packed = self.u8_encoded[pos / 4];
+            let base = (packed >> ((pos % 4) * 2)) & 0b11;
+            bits |= (1u128 << base) << (pos * 4);
+        }
+
+        Ok(OneHot::<N>::from_bits(bits))
     }
 
     fn reverse_bits_in_byte(b: u8) -> u8 {
@@ -520,5 +594,44 @@ mod tests {
     #[test]
     fn test_uxx_roundtrip_aaaaaacaagaataaa() {
         roundtrip_test("AAAAAACAAGAATAAA");
+    }
+
+    #[test]
+    fn last_informative_u8_uses_last_four_real_bases() {
+        let encoded = IntToStr::new(b"GTCAGCTAC");
+        let expected = IntToStr::new(b"CTAC");
+
+        assert_eq!(encoded.last_informative_u8(), expected.first_u8());
+        assert_ne!(encoded.last_informative_u8(), *encoded.u8_encoded.last().unwrap());
+    }
+
+    #[test]
+    fn first_and_last_u8_can_be_identical_without_padding_artifacts() {
+        let encoded = IntToStr::new(b"AGCTAGCT");
+        let agct = IntToStr::new(b"AGCT").first_u8();
+
+        assert_eq!(encoded.first_u8(), agct);
+        assert_eq!(encoded.last_informative_u8(), agct);
+    }
+
+    #[test]
+    fn as_one_hot_matches_direct_encoding_without_string_roundtrip() {
+        let seq = b"GTCAGCTAC";
+        let encoded = IntToStr::new(seq);
+        let direct = onehot_dna::OneHot::<9>::from_bytes(seq).unwrap();
+
+        assert_eq!(encoded.as_one_hot::<9>().unwrap(), direct);
+    }
+
+    #[test]
+    fn as_one_hot_rejects_wrong_const_length() {
+        let encoded = IntToStr::new(b"GTCAGCTAC");
+        assert!(matches!(
+            encoded.as_one_hot::<8>(),
+            Err(onehot_dna::OneHotError::WrongLength {
+                expected: 8,
+                observed: 9
+            })
+        ));
     }
 }

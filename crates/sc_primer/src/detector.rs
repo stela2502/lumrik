@@ -40,6 +40,71 @@ impl PrimerDetector {
         })
     }
 
+    /// Replace/install the cell whitelist from a line-delimited text file.
+    ///
+    /// TENX_CELL grammars retain their chemistry coordinates but use the
+    /// supplied 16 bp whitelist. A generic grammar must contain exactly one
+    /// CELL:N operation; its N (1..=32) selects the const-generic matcher
+    /// behind the runtime CLI facade. BD uses three independent 9 bp block
+    /// whitelists and therefore requires its built-in component tables.
+    pub fn with_whitelist_path<P: AsRef<Path>>(
+        mut self,
+        path: P,
+        max_mismatches: u32,
+    ) -> PrimerResult<Self> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            PrimerError::invalid_grammar(format!(
+                "failed to read whitelist '{}': {e}",
+                path.display()
+            ))
+        })?;
+
+        match &self.single_cell_system {
+            Some(SingleCellSystem::Tenx(tenx)) => {
+                let version = tenx.version();
+                let replacement = TenxWhitelist::from_text_with_mismatches(
+                    version,
+                    &text,
+                    max_mismatches,
+                )
+                .map_err(PrimerError::invalid_grammar)?;
+                self.single_cell_system = Some(SingleCellSystem::Tenx(replacement));
+            }
+            Some(SingleCellSystem::Rhapsody(_)) => {
+                return Err(PrimerError::invalid_grammar(
+                    "--whitelist cannot replace BD's three independent C1/C2/C3 block whitelists",
+                ));
+            }
+            Some(SingleCellSystem::Whitelist(_)) => unreachable!("detector is newly constructed"),
+            None => {
+                let cell_ops = self
+                    .grammar
+                    .ops
+                    .iter()
+                    .filter_map(|op| match op {
+                        GrammarOp::Cell { len } => Some(*len),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if cell_ops.len() != 1 {
+                    return Err(PrimerError::invalid_grammar(
+                        "--whitelist with a custom grammar requires exactly one CELL:N operation",
+                    ));
+                }
+                let whitelist = crate::whitelist_hash::RuntimeWhitelistHash::from_text(
+                    cell_ops[0],
+                    &text,
+                    max_mismatches,
+                )
+                .map_err(PrimerError::invalid_grammar)?;
+                self.single_cell_system = Some(SingleCellSystem::Whitelist(whitelist));
+            }
+        }
+
+        Ok(self)
+    }
+
     /// Length of the normalized cell barcode returned in `PrimerMatch::cell_seq`.
     ///
     /// BD Rhapsody cassettes contain linker/spacing sequence in the read, but the
@@ -50,6 +115,7 @@ impl PrimerDetector {
         match &self.single_cell_system {
             Some(SingleCellSystem::Rhapsody(_)) => 27,
             Some(SingleCellSystem::Tenx(system)) => system.version().cell_len(),
+            Some(SingleCellSystem::Whitelist(_)) => self.grammar.cell_len(),
             None => self.grammar.cell_len(),
         }
     }
@@ -160,10 +226,10 @@ impl PrimerDetector {
                 target_index
             };
 
-        self.cell_seq_for_target_index(target_index)
+        self.cell_seq_for_index(target_index)
     }
 
-    fn cell_seq_for_target_index(&self, target_index: u64) -> PrimerResult<Vec<u8>> {
+    pub fn cell_seq_for_index(&self, target_index: u64) -> PrimerResult<Vec<u8>> {
         if let Some(system) = &self.single_cell_system {
             return system.cell_seq_for_index(target_index).ok_or_else(|| {
                 PrimerError::invalid_coordinates(format!(
@@ -261,6 +327,15 @@ impl PrimerDetector {
             return anchor.find_next_cell_start(seq, from);
         }
 
+        // Built-in 10x read structures are positional: the cell barcode begins
+        // at the start of R1.  Do not turn the millions-entry whitelist into a
+        // read-wide search index by retrying it at every base.  Long-read / ONT
+        // cassette discovery must provide an explicit anchor/search grammar
+        // instead of relying on TENX_CELL itself to discover coordinates.
+        if self.leading_tenx_cell() {
+            return (from == 0 && !seq.is_empty()).then_some(0);
+        }
+
         // Built-in BD v2 grammars start with SEARCH followed by BD_CELL.  Scan
         // the two fixed BD linkers once and only invoke the costly whitelist
         // matcher at positions that can actually be a cassette.
@@ -276,6 +351,15 @@ impl PrimerDetector {
         }
 
         (from < seq.len()).then_some(from)
+    }
+
+    /// A built-in TENX_CELL without an explicit leading anchor/search is a
+    /// positional R1 grammar.  Its barcode starts at offset zero.
+    fn leading_tenx_cell(&self) -> bool {
+        matches!(
+            self.grammar.ops.as_slice(),
+            [GrammarOp::TenxCell { .. }, ..]
+        ) && matches!(&self.single_cell_system, Some(SingleCellSystem::Tenx(_)))
     }
 
     /// SEARCH directly before BD_CELL is the only flexible prefix used by the
@@ -408,6 +492,18 @@ impl PrimerDetector {
                     if !Self::has_range(seq, pos, *len) || !Self::has_range(qual, pos, *len) {
                         return Ok(None);
                     }
+
+                    if let Some(SingleCellSystem::Whitelist(whitelist)) = &self.single_cell_system {
+                        let observed = &seq[pos..pos + *len];
+                        let Some((cell_index, _distance)) = whitelist.best_match(observed) else {
+                            return Ok(None);
+                        };
+                        let Some(corrected) = whitelist.sequence(cell_index) else {
+                            return Ok(None);
+                        };
+                        primer_match.add_cell_seq(&corrected);
+                    }
+
                     primer_match.add_segment("CELL", pos..pos + *len);
                     pos += *len;
                 }
@@ -500,8 +596,22 @@ impl PrimerDetector {
                         return Ok(None);
                     }
 
+                    let Some(SingleCellSystem::Tenx(tenx)) = &self.single_cell_system else {
+                        return Err(PrimerError::invalid_grammar(
+                            "TENX_CELL grammar has no 10x whitelist",
+                        ));
+                    };
+
+                    let observed = &seq[pos..pos + len];
+                    let Some(cell_index) = tenx.index_cell(observed) else {
+                        return Ok(None);
+                    };
+                    let Some(corrected) = tenx.cell_id_to_seq(cell_index + 1) else {
+                        return Ok(None);
+                    };
+
                     primer_match.add_segment("CELL", pos..pos + len);
-                    primer_match.add_cell_seq(&seq[pos..pos + len]);
+                    primer_match.add_cell_seq(&corrected);
 
                     pos += len;
                 }

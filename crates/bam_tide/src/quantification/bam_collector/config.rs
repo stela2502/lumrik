@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 
-use crate::quantification::cli::{BamAuxTag, QuantMode};
+use crate::{cli::AnalysisType, quantification::cli::{BamAuxTag, QuantMode}};
 use read_tag_table::ReadTagTableCli;
 
 #[derive(Debug, Clone, Args)]
@@ -93,6 +93,14 @@ pub struct BamCollectorConfig {
 
     #[command(flatten)]
     pub read_tags: ReadTagTableCli,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AnalysisType::SingleCell,
+        help = "Quantify single-cell CB/UB metadata or treat each BAM as one bulk sample."
+    )]
+    pub analysis_type: AnalysisType,
 
     #[arg(
         long,

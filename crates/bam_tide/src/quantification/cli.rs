@@ -8,6 +8,8 @@ use clap::{Args, ValueEnum};
 
 use read_tag_table::ReadTagTableCli;
 
+use crate::cli::AnalysisType;
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum QuantMode {
     Gene,
@@ -140,7 +142,17 @@ pub struct QuantCli {
     #[arg(long)]
     pub primer_structure: Option<String>,
 
-    /// BAM aux tag containing the cell barcode.
+    /// Quantify a single-cell BAM using cell/UMI metadata, or a bulk BAM
+    /// without cell/UMI tags.
+    ///
+    /// In bulk mode all reads from one BAM are assigned to one synthetic
+    /// sample/cell and the read QNAME supplies a stable pseudo-UMI so paired
+    /// mates count as one fragment. Multiple BAM inputs become separate
+    /// synthetic samples.
+    #[arg(long, value_enum, default_value_t = AnalysisType::SingleCell)]
+    pub analysis_type: AnalysisType,
+
+    /// BAM aux tag containing the cell barcode (single-cell mode only).
     ///
     /// Examples:
     ///   CB (10x corrected)
@@ -149,7 +161,7 @@ pub struct QuantCli {
     #[arg(long, default_value = "CB")]
     pub cell_tag: BamAuxTag,
 
-    /// BAM aux tag containing the UMI.
+    /// BAM aux tag containing the UMI (single-cell mode only).
     ///
     /// Examples:
     ///   UB (10x corrected)

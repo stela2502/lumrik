@@ -6,6 +6,7 @@ pub mod error;
 pub mod grammar;
 pub mod model;
 pub mod single_cell_systems;
+pub mod whitelist_hash;
 
 pub use chemistry::Chemistry;
 pub use cli::PrimerCli;
@@ -14,3 +15,5 @@ pub use error::{PrimerError, PrimerResult};
 pub use grammar::{Grammar, GrammarOp, MoleculeIdentity};
 pub use model::{Orientation, PrimerMatch, PrimerSegment, PrimerSlice};
 pub use single_cell_systems::rhapsody::{BdCellVersion, RhapsodyCellCall, RhapsodyWhitelist};
+
+pub use whitelist_hash::{HashPart, RuntimeWhitelistHash, WhitelistHash, WhitelistLayout};

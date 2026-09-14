@@ -1,4 +1,5 @@
 use clap::Args;
+use std::path::PathBuf;
 
 use crate::{Chemistry, Grammar, PrimerDetector};
 
@@ -16,6 +17,17 @@ pub struct PrimerCli {
     #[arg(long)]
     pub primer_structure: Option<String>,
 
+    /// Optional line-delimited cell-barcode whitelist.
+    ///
+    /// For TENX_CELL this replaces the built-in chemistry whitelist. For a
+    /// custom grammar, exactly one CELL:N operation is required.
+    #[arg(long, value_name = "FILE")]
+    pub whitelist: Option<PathBuf>,
+
+    /// Maximum barcode mismatches corrected by --whitelist / whitelist-backed chemistries.
+    #[arg(long, default_value_t = 1)]
+    pub whitelist_mismatches: u32,
+
     /// Also search the reverse-complement orientation.
     #[arg(long, default_value_t = true)]
     pub detect_reverse_complement: bool,
@@ -29,7 +41,10 @@ impl PrimerCli {
             self.chemistry.grammar()?
         };
 
-        let detector = PrimerDetector::from_grammar(grammar)?;
+        let mut detector = PrimerDetector::from_grammar(grammar)?;
+        if let Some(path) = self.whitelist.as_deref() {
+            detector = detector.with_whitelist_path(path, self.whitelist_mismatches)?;
+        }
 
         Ok(detector)
     }

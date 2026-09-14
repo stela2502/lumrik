@@ -8,7 +8,7 @@ use crate::single_cell_systems::traits::CellIdGenerator;
 use crate::single_cell_systems::whitelists::bd_const_blocks::{
     BD_V2_384_C1, BD_V2_384_C2, BD_V2_384_C3, BD_V2_96_C1, BD_V2_96_C2, BD_V2_96_C3,
 };
-use onehot_dna::{OneHot, OneHotSet};
+use crate::whitelist_hash::WhitelistHash;
 
 const BD_V2_LINKER_1: &[u8; 4] = b"GTGA";
 const BD_V2_LINKER_2: &[u8; 4] = b"GACA";
@@ -82,9 +82,9 @@ pub struct RhapsodyWhitelist {
     c2_exact: HashMap<Vec<u8>, u64>,
     c3_exact: HashMap<Vec<u8>, u64>,
 
-    c1_fuzzy: OneHotSet<9>,
-    c2_fuzzy: OneHotSet<9>,
-    c3_fuzzy: OneHotSet<9>,
+    c1_fuzzy: WhitelistHash<9>,
+    c2_fuzzy: WhitelistHash<9>,
+    c3_fuzzy: WhitelistHash<9>,
 }
 
 impl BdCellVersion {
@@ -182,11 +182,11 @@ impl RhapsodyWhitelist {
             c2_exact: Self::make_map(c2s),
             c3_exact: Self::make_map(c3s),
 
-            c1_fuzzy: OneHotSet::<9>::from_sequences(c1s)
+            c1_fuzzy: WhitelistHash::<9>::from_sequences(c1s, 1)
                 .expect("builtin C1 whitelist must encode"),
-            c2_fuzzy: OneHotSet::<9>::from_sequences(c2s)
+            c2_fuzzy: WhitelistHash::<9>::from_sequences(c2s, 1)
                 .expect("builtin C2 whitelist must encode"),
-            c3_fuzzy: OneHotSet::<9>::from_sequences(c3s)
+            c3_fuzzy: WhitelistHash::<9>::from_sequences(c3s, 1)
                 .expect("builtin C3 whitelist must encode"),
         }
     }
@@ -589,10 +589,12 @@ impl RhapsodyWhitelist {
     }
 
     #[inline]
-    fn index_block_slow(seq: &[u8], fuzzy: &OneHotSet<9>, max_mismatches: u32) -> Option<u64> {
-        let obs = OneHot::<9>::from_bytes(seq).ok()?;
-        let (idx, _dist) = fuzzy.best_match(&obs, max_mismatches)?;
-
+    fn index_block_slow(seq: &[u8], fuzzy: &WhitelistHash<9>, max_mismatches: u32) -> Option<u64> {
+        // The terminal 4-base keys only select a small whitelist candidate set.
+        // The complete 9-base OneHot comparison still decides the unique best
+        // hit, so this preserves correction semantics without scanning all 384
+        // entries after every non-exact barcode block.
+        let (idx, _dist) = fuzzy.best_match(seq, max_mismatches)?;
         Some(idx as u64)
     }
 

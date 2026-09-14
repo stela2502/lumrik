@@ -8,6 +8,7 @@ use anyhow::{Context, Result, anyhow};
 
 use rust_htslib::bam::{self, Read, Reader, record::Aux};
 
+use crate::cli::AnalysisType;
 use crate::quantification::{
     bam_collector::{config::BamCollectorConfig, read_group::ReadGroup},
     chunk_processor::ChunkProcessor,
@@ -197,6 +198,7 @@ impl BamCollector {
                 &mut n_seen,
                 &mut seen_unbarcoded,
                 read_tag_table.as_ref(),
+                (path_id as u64) + 1,
             )
             .with_context(|| format!("collecting BAM {}", path.display()))?;
         }
@@ -229,6 +231,7 @@ impl BamCollector {
             &mut n_seen,
             &mut seen_unbarcoded,
             None,
+            1,
         )?;
 
         Ok(BamCollectorResult { data, snp })
@@ -242,6 +245,7 @@ impl BamCollector {
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
         read_tag_table: Option<&ReadTagTable>,
+        bulk_cell_id: u64,
     ) -> Result<()> {
         let header = reader.header().clone();
 
@@ -287,6 +291,7 @@ impl BamCollector {
                     data,
                     n_seen,
                     seen_unbarcoded,
+                    bulk_cell_id,
                 )? {
                     break;
                 }
@@ -306,6 +311,7 @@ impl BamCollector {
                     data,
                     n_seen,
                     seen_unbarcoded,
+                    bulk_cell_id,
                 )?;
             }
         }
@@ -325,10 +331,37 @@ impl BamCollector {
         data: &mut QuantData,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
+        bulk_cell_id: u64,
     ) -> Result<bool> {
         let qname = std::str::from_utf8(group.qname())
             .context("BAM contains a non-UTF8 QNAME")?
             .to_owned();
+
+        // Bulk BAMs have no biological cell barcode or UMI. Keep one
+        // synthetic cell per input BAM and derive a stable pseudo-UMI from
+        // QNAME so mates from the same fragment collapse together without
+        // requiring CB/UB tags or query-name sorting.
+        if self.config.analysis_type == AnalysisType::Bulk {
+            let molecule_id = bulk_molecule_id(qname.as_bytes());
+            data.report.report("bulk synthetic identity");
+
+            for record in group.records() {
+                self.push_job(
+                    job_builder.build_with_identity(
+                        record,
+                        &mut data.report,
+                        bulk_cell_id,
+                        molecule_id,
+                    )?,
+                    jobs,
+                    n_seen,
+                );
+                if self.after_job(processor, jobs, data, *n_seen)? {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
 
         // Lumrik mapper output has the complete ReadTagRecord encoded in the
         // QNAME. This takes precedence even for a NONE grammar because the
@@ -473,6 +506,23 @@ impl BamCollector {
     }
 }
 
+/// Stable FNV-1a hash used as a pseudo-UMI for bulk fragments.
+///
+/// QNAME is shared by paired mates, so both alignments receive the same
+/// molecule id even in coordinate-sorted BAMs. This deliberately does not
+/// use Rust's default hasher so bulk output is reproducible across runs.
+fn bulk_molecule_id(qname: &[u8]) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in qname {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
 fn header_is_queryname_sorted(header: &bam::HeaderView) -> bool {
     header_text_is_queryname_sorted(&String::from_utf8_lossy(header.as_bytes()))
 }
@@ -484,6 +534,17 @@ fn header_text_is_queryname_sorted(text: &str) -> bool {
                 .split('\t')
                 .any(|field| field.eq_ignore_ascii_case("SO:queryname"))
     })
+}
+
+#[cfg(test)]
+mod bulk_tests {
+    use super::bulk_molecule_id;
+
+    #[test]
+    fn bulk_qname_identity_is_stable_and_fragment_scoped() {
+        assert_eq!(bulk_molecule_id(b"read-1"), bulk_molecule_id(b"read-1"));
+        assert_ne!(bulk_molecule_id(b"read-1"), bulk_molecule_id(b"read-2"));
+    }
 }
 
 impl BamCollectorHandle {

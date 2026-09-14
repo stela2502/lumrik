@@ -3,7 +3,7 @@
 use crate::bed_data::Normalize;
 use clap::{Parser, ValueEnum};
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum AnalysisType {
     Bulk,
     #[value(name = "single-cell")]

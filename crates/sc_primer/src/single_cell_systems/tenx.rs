@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::io::Read;
 
@@ -7,6 +6,7 @@ use flate2::read::GzDecoder;
 use crate::error::{PrimerError, PrimerResult};
 use crate::single_cell_systems::models::Range;
 use crate::single_cell_systems::CellIdGenerator;
+use crate::whitelist_hash::WhitelistHash;
 
 static TENX_3M_FEBRUARY_2018: &[u8] = include_bytes!("whitelists/3M-february-2018.txt.gz");
 
@@ -54,8 +54,7 @@ pub struct TenxCellCall {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenxWhitelist {
     version: TenxVersion,
-    cells: Vec<u32>,
-    exact: HashMap<u32, u64>,
+    hash: WhitelistHash<16>,
 }
 
 impl TenxVersion {
@@ -152,81 +151,23 @@ impl TenxWhitelist {
     }
 
     pub fn from_text(version: TenxVersion, text: &str) -> Self {
-        let cells = text
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(|line| {
-                Self::encode_cell(line.as_bytes())
-                    .expect("10x whitelist cell must be a 16 bp A/C/G/T sequence")
-            })
-            .collect::<Vec<_>>();
+        Self::from_text_with_mismatches(version, text, 1)
+            .expect("10x whitelist must contain unique 16 bp A/C/G/T sequences")
+    }
 
-        Self::from_encoded(version, cells)
+    pub fn from_text_with_mismatches(
+        version: TenxVersion,
+        text: &str,
+        max_mismatches: u32,
+    ) -> Result<Self, String> {
+        let hash = WhitelistHash::<16>::from_text(text, max_mismatches)?;
+        Ok(Self { version, hash })
     }
 
     pub fn new(version: TenxVersion, cells: Vec<Vec<u8>>) -> Self {
-        let cells = cells
-            .into_iter()
-            .map(|seq| {
-                Self::encode_cell(&seq)
-                    .expect("10x whitelist cell must be a 16 bp A/C/G/T sequence")
-            })
-            .collect();
-
-        Self::from_encoded(version, cells)
-    }
-
-    fn from_encoded(version: TenxVersion, cells: Vec<u32>) -> Self {
-        let exact = cells
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(idx, seq)| (seq, idx as u64))
-            .collect();
-
-        Self {
-            version,
-            cells,
-            exact,
-        }
-    }
-
-    #[inline]
-    fn encode_cell(seq: &[u8]) -> Option<u32> {
-        if seq.len() != 16 {
-            return None;
-        }
-
-        let mut encoded = 0u32;
-        for &base in seq {
-            let bits = match base {
-                b'A' | b'a' => 0u32,
-                b'C' | b'c' => 1u32,
-                b'G' | b'g' => 2u32,
-                b'T' | b't' => 3u32,
-                _ => return None,
-            };
-            encoded = (encoded << 2) | bits;
-        }
-
-        Some(encoded)
-    }
-
-    #[inline]
-    fn decode_cell(mut encoded: u32) -> Vec<u8> {
-        let mut seq = vec![b'A'; 16];
-        for base in seq.iter_mut().rev() {
-            *base = match encoded & 0b11 {
-                0 => b'A',
-                1 => b'C',
-                2 => b'G',
-                3 => b'T',
-                _ => unreachable!(),
-            };
-            encoded >>= 2;
-        }
-        seq
+        let hash = WhitelistHash::<16>::from_sequences(&cells, 1)
+            .expect("10x whitelist cell must be a unique 16 bp A/C/G/T sequence");
+        Self { version, hash }
     }
 
     pub fn version(&self) -> TenxVersion {
@@ -234,51 +175,24 @@ impl TenxWhitelist {
     }
 
     pub fn len(&self) -> usize {
-        self.cells.len()
+        self.hash.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
+        self.hash.is_empty()
     }
 
     pub fn index_cell(&self, seq: &[u8]) -> Option<u64> {
-        let encoded = Self::encode_cell(seq)?;
-
-        if let Some(&idx) = self.exact.get(&encoded) {
-            return Some(idx);
-        }
-
-        // A 16 bp barcode has only 16 * 3 = 48 Hamming-distance-1
-        // neighbours. Probe those directly against the already-built exact map
-        // instead of constructing a second fuzzy index over the whole whitelist.
-        let mut best = None;
-        for pos in 0..16 {
-            let shift = 2 * pos;
-            let mask = 0b11u32 << shift;
-            let observed = (encoded & mask) >> shift;
-
-            for replacement in 0..4u32 {
-                if replacement == observed {
-                    continue;
-                }
-
-                let candidate = (encoded & !mask) | (replacement << shift);
-                if let Some(&idx) = self.exact.get(&candidate) {
-                    best = Some(best.map_or(idx, |current: u64| current.min(idx)));
-                }
-            }
-        }
-
-        best
+        self.hash
+            .best_match_default(seq)
+            .map(|(index, _distance)| index as u64)
     }
 
     pub fn cell_id_to_seq(&self, cell_id: u64) -> Option<Vec<u8>> {
         if cell_id == 0 {
             return None;
         }
-
-        let idx = (cell_id - 1) as usize;
-        self.cells.get(idx).copied().map(Self::decode_cell)
+        self.hash.sequence((cell_id - 1) as usize)
     }
 
     pub fn coords(&self, base: usize) -> Option<TenxCoords> {
@@ -310,7 +224,7 @@ impl TenxWhitelist {
         Some(TenxCellCall {
             version: self.version,
             cell_id,
-            cell_seq: Self::decode_cell(*self.cells.get(cell_idx as usize)?),
+            cell_seq: self.hash.sequence(cell_idx as usize)?,
             cell_qual: qual[cell.0..cell.1].to_vec(),
             umi_seq: seq[umi.0..umi.1].to_vec(),
             umi_qual: qual[umi.0..umi.1].to_vec(),
@@ -323,14 +237,13 @@ impl TenxWhitelist {
 
 impl CellIdGenerator for TenxWhitelist {
     fn cell_seq_for_index(&self, allocation_index: u64) -> Option<Vec<u8>> {
-        self.cells
-            .get(allocation_index as usize)
-            .copied()
-            .map(Self::decode_cell)
+        self.hash.sequence(allocation_index as usize)
     }
 
     fn cell_index_for_seq(&self, cell_seq: &[u8]) -> Option<u64> {
-        Self::encode_cell(cell_seq).and_then(|encoded| self.exact.get(&encoded).copied())
+        self.hash
+            .best_match_default(cell_seq)
+            .map(|(index, _distance)| index as u64)
     }
 }
 
@@ -376,11 +289,30 @@ mod tests {
         assert_eq!(wl.index_cell(b"TAACCCAAGAAACACT"), Some(0));
     }
 
+
     #[test]
-    fn tenx_binary_encoding_roundtrips() {
-        let seq = b"ACGTACGTACGTACGT";
-        let encoded = TenxWhitelist::encode_cell(seq).unwrap();
-        assert_eq!(TenxWhitelist::decode_cell(encoded), seq);
+    fn tenx_one_mismatch_tie_is_rejected() {
+        let wl = TenxWhitelist::from_text(
+            TenxVersion::ThreePrimeV3,
+            "ACGTTGCAACGTTGCA\nACGATGCAACGTTGCA\n",
+        );
+
+        assert_eq!(wl.index_cell(b"ACGCTGCAACGTTGCA"), None);
+    }
+
+    #[test]
+    fn tenx_single_n_is_one_mismatch_and_must_be_unique() {
+        let unique = TenxWhitelist::from_text(
+            TenxVersion::ThreePrimeV3,
+            "ACGTTGCAACGTTGCA\n",
+        );
+        assert_eq!(unique.index_cell(b"NCGTTGCAACGTTGCA"), Some(0));
+
+        let tied = TenxWhitelist::from_text(
+            TenxVersion::ThreePrimeV3,
+            "ACGTTGCAACGTTGCA\nCCGTTGCAACGTTGCA\n",
+        );
+        assert_eq!(tied.index_cell(b"NCGTTGCAACGTTGCA"), None);
     }
 
     #[test]

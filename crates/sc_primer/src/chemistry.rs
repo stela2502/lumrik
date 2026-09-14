@@ -83,18 +83,18 @@ impl Chemistry {
 
     pub fn grammar(self) -> PrimerResult<Grammar> {
         match self {
-            Self::TenxThreePrimeV1 => Grammar::parse(self.name(), "CELL:16+UMI:10+POLYT:min=0"),
+            Self::TenxThreePrimeV1 => Grammar::parse(self.name(), "TENX_CELL:3p-v1+UMI:10"),
 
             Self::TenxThreePrimeV2 => {
-                Grammar::parse(self.name(), "TENX_CELL:3p-v2+UMI:10+POLYT:min=0")
+                Grammar::parse(self.name(), "TENX_CELL:3p-v2+UMI:10")
             }
 
             Self::TenxThreePrimeV3 => {
-                Grammar::parse(self.name(), "TENX_CELL:3p-v3+UMI:12+POLYT:min=0")
+                Grammar::parse(self.name(), "TENX_CELL:3p-v3+UMI:12")
             }
 
             Self::TenxThreePrimeV4 => {
-                Grammar::parse(self.name(), "TENX_CELL:3p-v4+UMI:12+POLYT:min=0")
+                Grammar::parse(self.name(), "TENX_CELL:3p-v4+UMI:12")
             }
 
             Self::TenxFivePrime => Grammar::parse(self.name(), "TENX_CELL:5p+UMI:10"),

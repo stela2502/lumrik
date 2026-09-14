@@ -145,6 +145,35 @@ impl TenxOntMultimerTest {
         out
     }
 
+    fn build_chemistry_monomers(
+        detector: &PrimerDetector,
+        fuzzy: bool,
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut reads = Vec::with_capacity(10);
+
+        for index in 0..10 {
+            let mut cell = detector
+                .cell_seq_for_index(index as u64)
+                .expect("missing chemistry whitelist cell");
+
+            if fuzzy {
+                cell[0] = b'N';
+            }
+
+            let umi = detector.grammar().umi_from_u64(index as u64);
+            let insert = Self::insert(index);
+            let monomer_quality = b'!'.saturating_add(index as u8);
+
+            let mut seq = detector.grammar().synthesize(&cell, &umi).unwrap();
+            seq.extend_from_slice(&insert);
+            let qual = vec![monomer_quality; seq.len()];
+
+            reads.push((seq, qual));
+        }
+
+        reads
+    }
+
     fn run() {
         let grammar = TestData::tenx_3p_v3_no_polyt_grammar("tenx-ont-stress");
         let detector = PrimerDetector::from_grammar(grammar.clone()).unwrap();
@@ -563,24 +592,43 @@ fn stress_detect_all_bd_v2_384_1000x() {
 }*/
 
 #[test]
-#[ignore = "benchmark"]
-fn benchmark_detect_all_tenx_multimer() {
+fn benchmark_detect_all_tenx_positional() {
     let detector = PrimerDetector::from_chemistry(Chemistry::TenxThreePrimeV3).unwrap();
+    let reads = TenxOntMultimerTest::build_chemistry_monomers(&detector, false);
 
-    let grammar = detector.grammar().clone();
+    for (seq, qual) in &reads {
+        let hits = detector.detect_all(seq, qual).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].primer_start, 0);
+    }
 
-    let built = TenxOntMultimerTest::build_read(&grammar);
-
-    let hits = detector.detect_all(&built.seq, &built.qual).unwrap();
-    assert_eq!(hits.len(), 10);
-
-    bench("10x detect_all multimer", 100_000, 10, || {
-        std::hint::black_box(detector.detect_all(&built.seq, &built.qual).unwrap());
+    bench("10x detect_all positional", 10_000, reads.len(), || {
+        for (seq, qual) in &reads {
+            std::hint::black_box(detector.detect_all(seq, qual).unwrap());
+        }
     });
 }
 
 #[test]
 #[ignore = "benchmark"]
+fn benchmark_detect_all_tenx_positional_long() {
+    let detector = PrimerDetector::from_chemistry(Chemistry::TenxThreePrimeV3).unwrap();
+    let reads = TenxOntMultimerTest::build_chemistry_monomers(&detector, false);
+
+    for (seq, qual) in &reads {
+        let hits = detector.detect_all(seq, qual).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].primer_start, 0);
+    }
+
+    bench("10x detect_all positional [long]", 100_000, reads.len(), || {
+        for (seq, qual) in &reads {
+            std::hint::black_box(detector.detect_all(seq, qual).unwrap());
+        }
+    });
+}
+
+#[test]
 fn benchmark_detect_all_bd_v2_384_multimer() {
     let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
 
@@ -609,43 +657,89 @@ fn benchmark_detect_all_bd_v2_384_multimer() {
     let hits = detector.detect_all(&seq, &qual).unwrap();
     assert_eq!(hits.len(), 100);
 
-    bench("BD detect_all multimer", 100_000, 100, || {
+    bench("BD detect_all multimer", 10_000, 100, || {
         std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
     });
 }
 
 #[test]
 #[ignore = "benchmark"]
-fn benchmark_detect_all_tenx_multimer_fuzzy() {
-    let detector = PrimerDetector::from_chemistry(Chemistry::TenxThreePrimeV3).unwrap();
-    let grammar = detector.grammar().clone();
+fn benchmark_detect_all_bd_v2_384_multimer_long() {
+    let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
 
-    let mut built = TenxOntMultimerTest::build_read(&grammar);
+    let mut seq = Vec::new();
+    let mut qual = Vec::new();
 
-    let hits_per_read = 10;
-    let monomer_len = built.seq.len() / hits_per_read;
-    let fixed_len = b"CTACACGACGCTCTTCCGATCT".len();
+    let wl = RhapsodyWhitelist::bd_v2_384();
 
-    for i in 0..hits_per_read {
-        let cell_start = i * monomer_len + fixed_len;
-        built.seq[cell_start] = b'N';
+    for i in 0..100 {
+        let cell_id = (i + 1) as u64;
+        let (c1, c2, c3) = wl.cell_id_to_parts_ids(cell_id).expect("invalid cell id");
+        let cell = wl.create_cell_cassette(c1, c2, c3);
+        let umi = detector.grammar().umi_from_u64(i as u64);
+        let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
+
+        primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
+        seq.extend_from_slice(&primer);
+        qual.extend(std::iter::repeat_n(b'I', primer.len()));
     }
 
-    let hits = detector.detect_all(&built.seq, &built.qual).unwrap();
-    assert_eq!(hits.len(), hits_per_read);
+    let hits = detector.detect_all(&seq, &qual).unwrap();
+    assert_eq!(hits.len(), 100);
+
+    bench("BD detect_all multimer [long]", 100_000, 100, || {
+        std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
+    });
+}
+
+#[test]
+fn benchmark_detect_all_tenx_positional_fuzzy() {
+    let detector = PrimerDetector::from_chemistry(Chemistry::TenxThreePrimeV3).unwrap();
+    let reads = TenxOntMultimerTest::build_chemistry_monomers(&detector, true);
+
+    for (seq, qual) in &reads {
+        let hits = detector.detect_all(seq, qual).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].primer_start, 0);
+    }
 
     bench(
-        "10x fuzzy detect_all multimer",
-        100_000,
-        hits_per_read,
+        "10x fuzzy detect_all positional",
+        10_000,
+        reads.len(),
         || {
-            std::hint::black_box(detector.detect_all(&built.seq, &built.qual).unwrap());
+            for (seq, qual) in &reads {
+                std::hint::black_box(detector.detect_all(seq, qual).unwrap());
+            }
         },
     );
 }
 
 #[test]
 #[ignore = "benchmark"]
+fn benchmark_detect_all_tenx_positional_fuzzy_long() {
+    let detector = PrimerDetector::from_chemistry(Chemistry::TenxThreePrimeV3).unwrap();
+    let reads = TenxOntMultimerTest::build_chemistry_monomers(&detector, true);
+
+    for (seq, qual) in &reads {
+        let hits = detector.detect_all(seq, qual).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].primer_start, 0);
+    }
+
+    bench(
+        "10x fuzzy detect_all positional [long]",
+        100_000,
+        reads.len(),
+        || {
+            for (seq, qual) in &reads {
+                std::hint::black_box(detector.detect_all(seq, qual).unwrap());
+            }
+        },
+    );
+}
+
+#[test]
 fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
     let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
 
@@ -682,6 +776,46 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
 
     bench(
         "BD fuzzy detect_all multimer",
+        10_000,
+        hits_per_read,
+        || {
+            std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
+        },
+    );
+}
+#[test]
+#[ignore = "benchmark"]
+fn benchmark_detect_all_bd_v2_384_multimer_fuzzy_long() {
+    let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
+
+    let mut seq = Vec::new();
+    let mut qual = Vec::new();
+
+    let wl = RhapsodyWhitelist::bd_v2_384();
+    let hits_per_read = 100;
+
+    for i in 0..hits_per_read {
+        let cell_id = (i + 1) as u64;
+        let (c1, c2, c3) = wl
+            .cell_id_to_parts_ids(cell_id)
+            .expect("invalid BD cell id");
+        let mut cell = wl.create_cell_cassette(c1, c2, c3);
+
+        cell[0] = b'N';
+
+        let umi = detector.grammar().umi_from_u64(i as u64);
+        let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
+
+        primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
+        qual.extend(std::iter::repeat_n(b'I', primer.len()));
+        seq.extend_from_slice(&primer);
+    }
+
+    let hits = detector.detect_all(&seq, &qual).unwrap();
+    assert_eq!(hits.len(), hits_per_read);
+
+    bench(
+        "BD fuzzy detect_all multimer [long]",
         100_000,
         hits_per_read,
         || {
@@ -689,6 +823,21 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
         },
     );
 }
+
+#[test]
+fn tenx_builtin_is_positional_and_does_not_scan_for_a_later_barcode() {
+    let detector = PrimerDetector::from_chemistry(Chemistry::TenxThreePrimeV3).unwrap();
+    let mut reads = TenxOntMultimerTest::build_chemistry_monomers(&detector, false);
+    let (valid_seq, valid_qual) = reads.remove(0);
+
+    let mut shifted_seq = b"GATCGATC".to_vec();
+    shifted_seq.extend_from_slice(&valid_seq);
+    let mut shifted_qual = vec![b'I'; 8];
+    shifted_qual.extend_from_slice(&valid_qual);
+
+    assert!(detector.detect_all(&shifted_seq, &shifted_qual).unwrap().is_empty());
+}
+
 #[test]
 fn bd_v2_384_detect_all_does_not_repeat_search_window_hits() {
     let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();

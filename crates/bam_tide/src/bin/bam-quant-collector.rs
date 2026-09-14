@@ -66,6 +66,7 @@ fn run(args: QuantCli) -> Result<()> {
         snp_min_anchor: args.snp_min_anchor,
 
         read_tags: args.read_tags.clone(),
+        analysis_type: args.analysis_type,
         cell_tag: args.cell_tag,
         umi_tag: args.umi_tag,
 
