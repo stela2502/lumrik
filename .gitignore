@@ -8,4 +8,4 @@
 /.nextflow*
 flamegraph.svg
 perf.data*
-
+.nf-test.log

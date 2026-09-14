@@ -1,8 +1,0 @@
-Sep-11 15:06:05.084 [main] INFO  com.askimed.nf.test.App - nf-test 0.9.5
-Sep-11 15:06:05.102 [main] INFO  com.askimed.nf.test.App - Arguments: [test, --tag, component, --profile, +singularity]
-Sep-11 15:06:05.892 [main] INFO  com.askimed.nf.test.App - Nextflow Version: 24.10.0
-Sep-11 15:06:05.895 [main] WARN  com.askimed.nf.test.commands.RunTestsCommand - No nf-test config file found.
-Sep-11 15:06:06.305 [main] INFO  com.askimed.nf.test.lang.dependencies.DependencyResolver - Loaded 0 files from directory /home/med-sal/git_Projects/lumrik in 0.408 sec
-Sep-11 15:06:06.306 [main] INFO  com.askimed.nf.test.lang.dependencies.DependencyResolver - Found 0 files containing tests.
-Sep-11 15:06:06.306 [main] DEBUG com.askimed.nf.test.lang.dependencies.DependencyResolver - Found files: []
-Sep-11 15:06:06.308 [main] INFO  com.askimed.nf.test.commands.RunTestsCommand - Found 0 tests to execute.
