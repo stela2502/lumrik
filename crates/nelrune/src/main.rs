@@ -189,6 +189,18 @@ fn run(args: Cli) -> Result<()> {
         .context("writing additional feature tables")?;
     progress.stop_timer("nelrune/writing");
 
+    let bam_records_seen = data.report.get_issue_count("bam_records_seen");
+    let quantified_bam_records = data.report.get_issue_count("cell_umi from BAM tags");
+    let compatible_bam_records = data.report.get_issue_count("Compatible");
+    let unmapped_bam_records = data.report.get_issue_count("unmapped");
+    progress.set_quantification_summary(
+        bam_records_seen,
+        quantified_bam_records,
+        compatible_bam_records,
+        unmapped_bam_records,
+        retained_cells.len(),
+    );
+
     // Preserve Nelrune's broad orchestration timings in the final report too.
     data.report.merge(progress.mapping_info());
 
@@ -205,7 +217,6 @@ fn run(args: Cli) -> Result<()> {
 
     progress.finish();
 
-    eprintln!("[nelrune] detected {} cells", retained_cells.len(),);
     eprintln!(
         "[nelrune] complete: {} reads in {:.1}s ({:.0} reads/s overall, {:.0} reads/s steady after first progress)",
         progress.reads_seen(),
@@ -253,7 +264,7 @@ fn run_illumina_input(
          */
 
         if first_progress_seen {
-            progress.stage(format!("normalizing {}", r1_path.display()));
+            progress.stage(format!("normalizing {}", display_name(r1_path)));
         }
 
         progress.input_file(r1_path.to_string_lossy());
@@ -275,7 +286,7 @@ fn run_illumina_input(
             |stats| {
                 if !first_progress_seen {
                     first_progress_seen = true;
-                    progress.stage(format!("normalizing {}", r1_path.display()));
+                    progress.stage(format!("normalizing {}", display_name(r1_path)));
                 }
                 progress.update_from_mapping_info(stats);
             },
@@ -300,7 +311,7 @@ fn run_ont_input(
     sink: &mut MapperBamSink,
     progress: &mut RunProgress,
 ) -> Result<(usize, FeatureTagCounts)> {
-    progress.stage(format!("preparing {}", bam_input.display()));
+    progress.stage(format!("preparing {}", display_name(bam_input)));
 
     progress.input_file(bam_input.to_string_lossy());
 
@@ -338,7 +349,7 @@ fn run_ont_input(
         |stats| {
             if !first_progress_seen {
                 first_progress_seen = true;
-                progress.stage(format!("normalizing {}", bam_input.display()));
+                progress.stage(format!("normalizing {}", display_name(bam_input)));
             }
             progress.update_from_mapping_info(stats);
         },
@@ -352,6 +363,13 @@ fn run_ont_input(
     let feature_counts = normalizer.take_feature_tag_counts();
 
     Ok((submitted, feature_counts))
+}
+
+fn display_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_else(|| path.to_str().unwrap_or("-"))
+        .to_string()
 }
 
 struct MapperBamSink {

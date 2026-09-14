@@ -36,12 +36,32 @@ pub struct RunStatus {
     pub stage: String,
     pub reads_processed: usize,
     pub reads_per_second: f64,
+    pub average_reads_per_second: f64,
+    pub steady_reads_per_second: f64,
+    pub mapper_reads: usize,
+    pub mapper_export_pct: f64,
+    pub accepted_pairs: usize,
+    pub failed_pairs: usize,
+    pub candidate_pairs: usize,
+    pub feature_tag_matches: usize,
+    pub paired_r1_insert_found: usize,
+    pub no_usable_paired_r1_insert: usize,
+    pub forward_molecules: usize,
+    pub reverse_molecules: usize,
     pub no_cell_umi: usize,
+    pub no_cell_umi_pct: f64,
     pub duplicates: usize,
     pub unique_genomic: usize,
+    pub unique_genomic_pct: f64,
     pub unique_feature: usize,
+    pub unique_feature_pct: f64,
     pub duplicate_pct: f64,
     pub unique_yield_pct: f64,
+    pub bam_records_seen: usize,
+    pub quantified_bam_records: usize,
+    pub compatible_bam_records: usize,
+    pub unmapped_bam_records: usize,
+    pub retained_cells: Option<usize>,
     pub process_rss_mib: f64,
     pub process_peak_rss_mib: f64,
     pub system_available_mib: f64,
@@ -63,12 +83,32 @@ impl Default for RunStatus {
             stage: "startup".to_string(),
             reads_processed: 0,
             reads_per_second: 0.0,
+            average_reads_per_second: 0.0,
+            steady_reads_per_second: 0.0,
+            mapper_reads: 0,
+            mapper_export_pct: 0.0,
+            accepted_pairs: 0,
+            failed_pairs: 0,
+            candidate_pairs: 0,
+            feature_tag_matches: 0,
+            paired_r1_insert_found: 0,
+            no_usable_paired_r1_insert: 0,
+            forward_molecules: 0,
+            reverse_molecules: 0,
             no_cell_umi: 0,
+            no_cell_umi_pct: 0.0,
             duplicates: 0,
             unique_genomic: 0,
+            unique_genomic_pct: 0.0,
             unique_feature: 0,
+            unique_feature_pct: 0.0,
             duplicate_pct: 0.0,
             unique_yield_pct: 0.0,
+            bam_records_seen: 0,
+            quantified_bam_records: 0,
+            compatible_bam_records: 0,
+            unmapped_bam_records: 0,
+            retained_cells: None,
             process_rss_mib: 0.0,
             process_peak_rss_mib: 0.0,
             system_available_mib: 0.0,
@@ -128,6 +168,14 @@ impl RunProgress {
         let duplicates = info.get_issue_count("duplicate");
         let unique_genomic = info.get_issue_count("unique_genomic");
         let unique_feature = info.get_issue_count("unique_feature");
+        let accepted_pairs = info.get_issue_count("accepted_pairs");
+        let failed_pairs = info.get_issue_count("failed_pairs");
+        let candidate_pairs = info.get_issue_count("candidate_pairs");
+        let feature_tag_matches = info.get_issue_count("feature_tag_match");
+        let paired_r1_insert_found = info.get_issue_count("paired_r1_insert_found");
+        let no_usable_paired_r1_insert = info.get_issue_count("no_usable_paired_r1_insert");
+        let forward_molecules = info.get_issue_count("forward_molecules");
+        let reverse_molecules = info.get_issue_count("reverse_molecules");
 
         let pct = |n: usize| {
             if reads == 0 {
@@ -136,7 +184,11 @@ impl RunProgress {
                 100.0 * n as f64 / reads as f64
             }
         };
+        let no_cell_umi_pct = pct(no_cell_umi);
         let duplicate_pct = pct(duplicates);
+        let unique_genomic_pct = pct(unique_genomic);
+        let unique_feature_pct = pct(unique_feature);
+        let mapper_export_pct = unique_genomic_pct;
         let unique_yield_pct = pct(unique_genomic.saturating_add(unique_feature));
         let memory = memory_status();
         let process_rss_mib = memory.process_rss_mib;
@@ -161,10 +213,25 @@ impl RunProgress {
         if let Ok(mut state) = self.state.write() {
             state.reads_processed = reads;
             state.reads_per_second = rate;
+            state.average_reads_per_second = self.average_reads_per_second();
+            state.steady_reads_per_second = self.processing_reads_per_second();
+            state.mapper_reads = unique_genomic;
+            state.mapper_export_pct = mapper_export_pct;
+            state.accepted_pairs = accepted_pairs;
+            state.failed_pairs = failed_pairs;
+            state.candidate_pairs = candidate_pairs;
+            state.feature_tag_matches = feature_tag_matches;
+            state.paired_r1_insert_found = paired_r1_insert_found;
+            state.no_usable_paired_r1_insert = no_usable_paired_r1_insert;
+            state.forward_molecules = forward_molecules;
+            state.reverse_molecules = reverse_molecules;
             state.no_cell_umi = no_cell_umi;
+            state.no_cell_umi_pct = no_cell_umi_pct;
             state.duplicates = duplicates;
             state.unique_genomic = unique_genomic;
+            state.unique_genomic_pct = unique_genomic_pct;
             state.unique_feature = unique_feature;
+            state.unique_feature_pct = unique_feature_pct;
             state.duplicate_pct = duplicate_pct;
             state.unique_yield_pct = unique_yield_pct;
             state.process_rss_mib = process_rss_mib;
@@ -284,11 +351,39 @@ impl RunProgress {
         self.reads_seen.saturating_sub(self.processing_start_reads) as f64 / elapsed
     }
 
+    pub fn set_quantification_summary(
+        &self,
+        bam_records_seen: usize,
+        quantified_bam_records: usize,
+        compatible_bam_records: usize,
+        unmapped_bam_records: usize,
+        retained_cells: usize,
+    ) {
+        if let Ok(mut state) = self.state.write() {
+            state.bam_records_seen = bam_records_seen;
+            state.quantified_bam_records = quantified_bam_records;
+            state.compatible_bam_records = compatible_bam_records;
+            state.unmapped_bam_records = unmapped_bam_records;
+            state.retained_cells = Some(retained_cells);
+        }
+
+        let message = format!(
+            "quantification: {bam_records_seen} BAM records | {quantified_bam_records} with cell/UMI tags | {compatible_bam_records} compatible | {unmapped_bam_records} unmapped | {retained_cells} cells retained"
+        );
+        eprintln!("[nelrune] {message}");
+        self.log_line(&message);
+    }
+
     pub fn input_file(&self, file: impl AsRef<str>) {
         let file = file.as_ref();
         self.log_line(&format!("input: {file}"));
+        let display = Path::new(file)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(file)
+            .to_string();
         if let Ok(mut state) = self.state.write() {
-            state.input_file = Some(file.to_string());
+            state.input_file = Some(display);
         }
     }
 
@@ -307,6 +402,8 @@ impl RunProgress {
         if let Ok(mut state) = self.state.write() {
             state.reads_processed = self.reads_seen;
             state.reads_per_second = rate;
+            state.average_reads_per_second = rate;
+            state.steady_reads_per_second = self.processing_reads_per_second();
             state.finished_unix_ms = Some(finished_unix_ms);
             state.stage = "finished".to_string();
         }
@@ -342,59 +439,76 @@ impl RunProgress {
 
 impl ServerContent for RunStatus {
     fn server_snapshot(&self) -> ServerSnapshot {
+        let pct = |n: usize| {
+            if self.reads_processed == 0 {
+                0.0
+            } else {
+                100.0 * n as f64 / self.reads_processed as f64
+            }
+        };
+        let bam_pct = |n: usize| {
+            if self.bam_records_seen == 0 {
+                0.0
+            } else {
+                100.0 * n as f64 / self.bam_records_seen as f64
+            }
+        };
+
         ServerSnapshot {
             title: "Nelrune".to_string(),
-            subtitle: "Live single-cell processing status".to_string(),
+            subtitle: "Live single-cell normalization, mapping and quantification".to_string(),
             started_unix_ms: self.started_unix_ms,
             finished_unix_ms: self.finished_unix_ms,
             stage: self.stage.clone(),
             public_url: self.public_url.clone(),
             sections: vec![
                 StatusSection::new(
-                    "Processing",
+                    "Throughput",
                     vec![
                         StatusMetric::new("Reads processed", self.reads_processed.to_string()),
-                        StatusMetric::new(
-                            "Reads / second",
-                            format!("{:.0}", self.reads_per_second),
-                        ),
-                        StatusMetric::new(
-                            "Current FASTQ",
-                            self.input_file.clone().unwrap_or_else(|| "-".to_string()),
-                        ),
+                        StatusMetric::new("Current reads / second", format!("{:.0}", self.reads_per_second)),
+                        StatusMetric::new("Steady reads / second", format!("{:.0}", self.steady_reads_per_second)),
+                        StatusMetric::new("Run-average reads / second", format!("{:.0}", self.average_reads_per_second)),
+                        StatusMetric::new("Current FASTQ", self.input_file.clone().unwrap_or_else(|| "-".to_string())),
+                    ],
+                ),
+                StatusSection::new(
+                    "Read routing",
+                    vec![
+                        StatusMetric::new("Accepted genomic molecules", format!("{} ({:.2}%)", self.accepted_pairs, pct(self.accepted_pairs))),
+                        StatusMetric::new("Exported to mapper", format!("{} ({:.2}%)", self.mapper_reads, self.mapper_export_pct)),
+                        StatusMetric::new("Feature-tag molecules", format!("{} ({:.2}%)", self.unique_feature, self.unique_feature_pct)),
+                        StatusMetric::new("Feature-tag matches", format!("{} ({:.2}%)", self.feature_tag_matches, pct(self.feature_tag_matches))),
+                        StatusMetric::new("Rejected pairs", format!("{} ({:.2}%)", self.failed_pairs, pct(self.failed_pairs))),
+                        StatusMetric::new("Cell / UMI not detected", format!("{} ({:.2}%)", self.no_cell_umi, self.no_cell_umi_pct)),
                     ],
                 ),
                 StatusSection::new(
                     "Molecules",
                     vec![
-                        StatusMetric::new("Cell / UMI not detected", self.no_cell_umi.to_string()),
-                        StatusMetric::new("Duplicates", self.duplicates.to_string()),
-                        StatusMetric::new("Unique genomic", self.unique_genomic.to_string()),
-                        StatusMetric::new("Unique feature", self.unique_feature.to_string()),
-                        StatusMetric::new(
-                            "Duplicate fraction",
-                            format!("{:.2}%", self.duplicate_pct),
-                        ),
-                        StatusMetric::new(
-                            "Unique molecule yield",
-                            format!("{:.2}%", self.unique_yield_pct),
-                        ),
+                        StatusMetric::new("Candidate molecules", format!("{} ({:.2}%)", self.candidate_pairs, pct(self.candidate_pairs))),
+                        StatusMetric::new("Duplicates", format!("{} ({:.2}%)", self.duplicates, self.duplicate_pct)),
+                        StatusMetric::new("Unique molecule yield", format!("{:.2}%", self.unique_yield_pct)),
+                        StatusMetric::new("Paired R1 insert found", format!("{} ({:.2}%)", self.paired_r1_insert_found, pct(self.paired_r1_insert_found))),
+                        StatusMetric::new("No usable paired R1 insert", format!("{} ({:.2}%)", self.no_usable_paired_r1_insert, pct(self.no_usable_paired_r1_insert))),
+                        StatusMetric::new("Forward / reverse", format!("{} / {}", self.forward_molecules, self.reverse_molecules)),
+                    ],
+                ),
+                StatusSection::new(
+                    "Mapper / quantification",
+                    vec![
+                        StatusMetric::new("BAM records seen", self.bam_records_seen.to_string()),
+                        StatusMetric::new("BAM records with cell / UMI", format!("{} ({:.2}%)", self.quantified_bam_records, bam_pct(self.quantified_bam_records))),
+                        StatusMetric::new("Compatible", format!("{} ({:.2}%)", self.compatible_bam_records, bam_pct(self.compatible_bam_records))),
+                        StatusMetric::new("Unmapped", format!("{} ({:.2}%)", self.unmapped_bam_records, bam_pct(self.unmapped_bam_records))),
+                        StatusMetric::new("Cells retained", self.retained_cells.map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
                     ],
                 ),
                 StatusSection::new(
                     "Memory",
                     vec![
-                        StatusMetric::new(
-                            "Process RSS / peak",
-                            format!(
-                                "{:.0} / {:.0} MiB",
-                                self.process_rss_mib, self.process_peak_rss_mib
-                            ),
-                        ),
-                        StatusMetric::new(
-                            "System memory available",
-                            format!("{:.0} MiB", self.system_available_mib),
-                        ),
+                        StatusMetric::new("Process RSS / peak", format!("{:.0} / {:.0} MiB", self.process_rss_mib, self.process_peak_rss_mib)),
+                        StatusMetric::new("System memory available", format!("{:.0} MiB", self.system_available_mib)),
                     ],
                 ),
             ],

@@ -4,8 +4,8 @@ set -euo pipefail
 # ============================================================
 # Nelrune local BD Rhapsody smoke test
 #
-# Processes at most 100,000 RAW read pairs PER R1/R2 input pair.
-# With the two lanes below that means at most 200,000 raw pairs.
+# Processes at most MAX_READS raw read pairs PER R1/R2 input pair.
+# The default is 5,000,000 per pair (10,000,000 total for the two lanes below).
 # ============================================================
 
 ROOT="/data2/Elena"
@@ -161,13 +161,6 @@ if [[ -n "$VCF" ]]; then
         echo "ERROR: VCF was supplied but GENOME is empty." >&2
         exit 1
     fi
-fi
-
-if (( ${#ADDITIONAL_FEATURES[@]} > 0 )); then
-    OPTIONAL_ARGS+=(
-        --additional-features
-        "${ADDITIONAL_FEATURES[@]}"
-    )
 fi
 
 if (( ${#ADDITIONAL_FEATURES[@]} > 0 )); then

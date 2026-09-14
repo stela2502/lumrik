@@ -183,11 +183,9 @@ impl fmt::Display for MappingInfo {
             let total = if self.total > 0 {
                 self.total
             } else {
-                self.error_counts
-                    .get("reads_processed")
-                    .copied()
-                    .filter(|&n| n > 0)
-                    .unwrap_or(1)
+                self.get_issue_count("reads_processed")
+                    .max(self.get_issue_count("bam_records_seen"))
+                    .max(1)
             };
             writeln!(
                 f,
@@ -217,11 +215,9 @@ impl fmt::Display for MappingInfo {
             let total = if self.total > 0 {
                 self.total
             } else {
-                self.error_counts
-                    .get("reads_processed")
-                    .copied()
-                    .filter(|&n| n > 0)
-                    .unwrap_or(1)
+                self.get_issue_count("reads_processed")
+                    .max(self.get_issue_count("bam_records_seen"))
+                    .max(1)
             };
             writeln!(
                 f,
@@ -803,6 +799,38 @@ mod tests {
         m2.ok_reads = 1;
         let s2 = format!("{m2}");
         assert!(s2.contains("\nCounts\n"));
+    }
+
+    #[test]
+    fn read_type_fractions_use_reads_processed_counter_as_denominator() {
+        let mut mi = MappingInfo::new(None, 0.0, 0);
+        mi.report_n("reads_processed", 1_000);
+        mi.report_n("unique_genomic", 250);
+        mi.report_n("duplicate", 100);
+
+        let rendered = format!("{mi}");
+
+        assert!(rendered.contains("Read types (n=1,000)"));
+        assert!(rendered.contains("reads_processed:"));
+        assert!(rendered.contains("100.00"));
+        assert!(rendered.contains("unique_genomic:"));
+        assert!(rendered.contains("25.00"));
+        assert!(rendered.contains("duplicate:"));
+        assert!(rendered.contains("10.00"));
+    }
+
+    #[test]
+    fn read_type_fractions_use_bam_records_seen_when_no_fastq_total_exists() {
+        let mut mi = MappingInfo::new(None, 0.0, 0);
+        mi.report_n("bam_records_seen", 2_000);
+        mi.report_n("unmapped", 500);
+
+        let rendered = format!("{mi}");
+
+        assert!(rendered.contains("Read types (n=2,000)"));
+        assert!(rendered.contains("bam_records_seen:"));
+        assert!(rendered.contains("unmapped:"));
+        assert!(rendered.contains("25.00"));
     }
 
     #[test]

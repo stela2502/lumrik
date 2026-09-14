@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 
 echo "HOST=$(hostname)"
@@ -10,7 +11,7 @@ for exe in STAR gtf-splice-index nelrune; do
 done
 
 
-LOCAL="/home/stefanl/NAS/NELRUNE"
+LOCAL="${LOCAL:-$HOME/sens05_home/NAS/NELRUNE}"
 
 # ============================================================
 # Nelrune test reference configuration
@@ -20,8 +21,8 @@ LOCAL="/home/stefanl/NAS/NELRUNE"
 # Reference genome
 # ------------------------------------------------------------
 
-GENOME="/scale/gr01/shared/common/genome/genomes/mouse/GRCm38.p6/GRCm38.p6.genome.fa"
-GTF="/scale/gr01/shared/common/genome/genomes/mouse/GRCm38.p6/gencode.vM19.chr_patch_hapl_scaff.annotation.gtf"
+GENOME="${GENOME:-$HOME/sens05_shared/common/genome/genomes/mouse/GRCm38.p6/GRCm38.p6.genome.fa}"
+GTF="${GTF:-$HOME/sens05_shared/common/genome/genomes/mouse/GRCm38.p6/gencode.vM19.chr_patch_hapl_scaff.annotation.gtf}"
 
 
 # ------------------------------------------------------------
@@ -39,7 +40,7 @@ SPLICE_INDEX="${LOCAL}/splice_index.idx"
 # Optional SNP calling
 # ------------------------------------------------------------
 
-#VCF="/path/to/variants.vcf.gz"
+VCF="${VCF:-}"
 
 
 
@@ -56,7 +57,7 @@ SPLICE_INDEX="${LOCAL}/splice_index.idx"
 #/home/stefanl/shared/jyuan/no_backup/giorgia_VDJ_single_cell_2026_06_01/DataDelivery_2026-05-29_13-28-30_snpseq01679/files/ZD-4631/20260522_LH00179_0469_B23K5C2LT3/Sample_ZD-4631-PCLaneG/ZD-4631-PCLaneG_S84_L007_R2_001.fastq.gz
 
 
-FASTQ_ROOT="/home/stefanl/shared/jyuan/no_backup/giorgia_VDJ_single_cell_2026_06_01/DataDelivery_2026-05-29_13-28-30_snpseq01679/files/ZD-4631/20260522_LH00179_0469_B23K5C2LT3"
+FASTQ_ROOT="${FASTQ_ROOT:-$HOME/sens05_shared/jyuan/no_backup/giorgia_VDJ_single_cell_2026_06_01/DataDelivery_2026-05-29_13-28-30_snpseq01679/files/ZD-4631/20260522_LH00179_0469_B23K5C2LT3}"
 
 R1=(
 
@@ -97,15 +98,23 @@ ADDITIONAL_FEATURES=(
 # Output
 # ------------------------------------------------------------
 
-OUT="./nelrune_test_out"
+OUT="${OUT:-./nelrune_test_out}"
 
 
 # ------------------------------------------------------------
 # Programs
 # ------------------------------------------------------------
 
-NELRUNE="/scale/gr01/shared/common/software/Rustody/1.5/bin/nelrune"
-STAR="STAR"
+if [[ -n "${NELRUNE:-}" ]]; then
+    :
+elif [[ -x "./target/x86_64-unknown-linux-musl/release/nelrune" ]]; then
+    NELRUNE="./target/x86_64-unknown-linux-musl/release/nelrune"
+elif [[ -x "./target/release/nelrune" ]]; then
+    NELRUNE="./target/release/nelrune"
+else
+    NELRUNE="$(command -v nelrune || true)"
+fi
+STAR="${STAR:-STAR}"
 
 # ============================================================
 # Nelrune server settings
@@ -115,15 +124,38 @@ STAR="STAR"
 #
 # The server binds to 0.0.0.0 on the compute node, so this port
 # must be unused on that node.
-HEALTH_PORT=8080
+HEALTH_PORT="${HEALTH_PORT:-8080}"
 
 
 # ------------------------------------------------------------
 # Resources
 # ------------------------------------------------------------
 
-THREADS=16
+THREADS="${THREADS:-16}"
+MAX_READS="${MAX_READS:-0}"
 
+
+# ------------------------------------------------------------
+# Sanity checks
+# ------------------------------------------------------------
+
+if [[ -z "$NELRUNE" || ! -x "$NELRUNE" ]]; then
+    echo "ERROR: nelrune binary not found/executable: ${NELRUNE:-<unset>}" >&2
+    exit 1
+fi
+
+for f in "$GENOME" "$GTF"; do
+    [[ -f "$f" ]] || { echo "ERROR: reference file not found: $f" >&2; exit 1; }
+done
+
+if (( ${#R1[@]} != ${#R2[@]} )); then
+    echo "ERROR: R1/R2 count mismatch: ${#R1[@]} vs ${#R2[@]}" >&2
+    exit 1
+fi
+
+for f in "${R1[@]}" "${R2[@]}"; do
+    [[ -f "$f" ]] || { echo "ERROR: FASTQ not found: $f" >&2; exit 1; }
+done
 
 # ------------------------------------------------------------
 # STAR index
@@ -195,7 +227,7 @@ if [[ -n "$GENOME" ]]; then
         --genome "$GENOME"
     )
 fi
-if (( ${#FAST_FEATURES[@]} > 0 )); then
+if (( ${#ADDITIONAL_FEATURES[@]} > 0 )); then
     OPTIONAL_ARGS+=(
         --additional-features 
         "${ADDITIONAL_FEATURES[@]}"
@@ -204,6 +236,11 @@ fi
 if [[ -n "$HEALTH_PORT" ]]; then
     OPTIONAL_ARGS+=(
         --health-port "$HEALTH_PORT"
+    )
+fi
+if (( MAX_READS > 0 )); then
+    OPTIONAL_ARGS+=(
+        --max-reads "$MAX_READS"
     )
 fi
 

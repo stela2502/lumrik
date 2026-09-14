@@ -333,6 +333,8 @@ impl BamCollector {
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
         bulk_cell_id: u64,
     ) -> Result<bool> {
+        data.report.report_n("bam_records_seen", group.records().len());
+
         let qname = std::str::from_utf8(group.qname())
             .context("BAM contains a non-UTF8 QNAME")?
             .to_owned();
