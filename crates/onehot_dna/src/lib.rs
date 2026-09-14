@@ -152,6 +152,181 @@ impl<const N: usize> OneHot<N> {
     pub fn within(self, other: Self, max_mismatches: u32) -> bool {
         self.mismatches(other) <= max_mismatches
     }
+
+    /// Reverse-complement this packed sequence without decoding it.
+    ///
+    /// The one-hot nibble encoding is deliberately symmetric:
+    /// `A=0001`, `C=0010`, `G=0100`, `T=1000`. Reversing all meaningful
+    /// bits therefore both reverses the order of the base nibbles and
+    /// complements each base in one operation. Unknown/zero nibbles remain
+    /// zero.
+    #[inline]
+    pub fn reverse_complement(self) -> Self {
+        if N == 0 {
+            return self;
+        }
+
+        let meaningful_bits = N * 4;
+        Self {
+            bits: self.bits.reverse_bits() >> (128 - meaningful_bits),
+        }
+    }
+}
+
+/// Packed one-hot representation of an arbitrarily long DNA sequence.
+///
+/// This is the read-sized companion to [`OneHot<N>`]. Bases are packed with
+/// exactly the same four-bit encoding, 32 bases per `u128`. Construct this
+/// once for a read and then extract fixed-size [`OneHot<N>`] windows in O(1)
+/// without allocating or re-encoding substrings.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OneHotSequence {
+    words: Vec<u128>,
+    len: usize,
+}
+
+impl OneHotSequence {
+    pub const BASES_PER_WORD: usize = 32;
+
+    /// Pack an arbitrary-length sequence once.
+    pub fn from_bytes(seq: &[u8]) -> Self {
+        let mut words = vec![0u128; seq.len().div_ceil(Self::BASES_PER_WORD)];
+
+        for (i, base) in seq.iter().copied().enumerate() {
+            let word = i / Self::BASES_PER_WORD;
+            let within = i % Self::BASES_PER_WORD;
+            words[word] |= encode_base(base) << (within * 4);
+        }
+
+        Self { words, len: seq.len() }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Expose the packed storage for callers that need to inspect/cache it.
+    #[inline]
+    pub fn words(&self) -> &[u128] {
+        &self.words
+    }
+
+    /// Extract a fixed-size window from the packed sequence.
+    ///
+    /// A window spans at most two backing words because `OneHot<N>` itself is
+    /// limited to 32 bases. No sequence allocation or per-base encoding occurs.
+    #[inline]
+    pub fn window<const N: usize>(&self, start: usize) -> Result<OneHot<N>, OneHotError> {
+        if N > OneHot::<N>::MAX_LEN {
+            return Err(OneHotError::TooLong {
+                max: OneHot::<N>::MAX_LEN,
+                observed: N,
+            });
+        }
+
+        let end = start.checked_add(N).ok_or(OneHotError::WrongLength {
+            expected: N,
+            observed: 0,
+        })?;
+        if end > self.len {
+            return Err(OneHotError::WrongLength {
+                expected: N,
+                observed: self.len.saturating_sub(start),
+            });
+        }
+        if N == 0 {
+            return Ok(OneHot::from_bits(0));
+        }
+
+        let word_index = start / Self::BASES_PER_WORD;
+        let bit_shift = (start % Self::BASES_PER_WORD) * 4;
+        let mut bits = self.words[word_index] >> bit_shift;
+
+        if bit_shift != 0 && end > (word_index + 1) * Self::BASES_PER_WORD {
+            bits |= self.words[word_index + 1] << (128 - bit_shift);
+        }
+
+        if N < OneHot::<N>::MAX_LEN {
+            bits &= (1u128 << (N * 4)) - 1;
+        }
+
+        Ok(OneHot::from_bits(bits))
+    }
+
+    /// Extract a window in reverse-complement orientation without constructing
+    /// a reverse-complemented read.
+    ///
+    /// `start` is expressed in reverse-complement coordinates. The matching
+    /// forward window is mirrored in the original packed sequence and then
+    /// reverse-complemented with a single bit reversal.
+    #[inline]
+    pub fn reverse_complement_window<const N: usize>(
+        &self,
+        start: usize,
+    ) -> Result<OneHot<N>, OneHotError> {
+        let end = start.checked_add(N).ok_or(OneHotError::WrongLength {
+            expected: N,
+            observed: 0,
+        })?;
+        if end > self.len {
+            return Err(OneHotError::WrongLength {
+                expected: N,
+                observed: self.len.saturating_sub(start),
+            });
+        }
+
+        let forward_start = self.len - end;
+        Ok(self.window::<N>(forward_start)?.reverse_complement())
+    }
+
+    /// Compare a packed forward window directly with an already packed target.
+    #[inline]
+    pub fn mismatches_at<const N: usize>(
+        &self,
+        start: usize,
+        target: OneHot<N>,
+    ) -> Result<u32, OneHotError> {
+        Ok(self.window::<N>(start)?.mismatches(target))
+    }
+
+    /// Compare a reverse-complement-oriented packed window with a target.
+    #[inline]
+    pub fn reverse_complement_mismatches_at<const N: usize>(
+        &self,
+        start: usize,
+        target: OneHot<N>,
+    ) -> Result<u32, OneHotError> {
+        Ok(self
+            .reverse_complement_window::<N>(start)?
+            .mismatches(target))
+    }
+
+    /// Decode the packed sequence. Intended for diagnostics/tests, not hot loops.
+    pub fn to_dna_string(&self) -> String {
+        let mut out = String::with_capacity(self.len);
+        for i in 0..self.len {
+            let word = self.words[i / Self::BASES_PER_WORD];
+            let nibble = ((word >> ((i % Self::BASES_PER_WORD) * 4)) & 0b1111) as u8;
+            out.push(decode_nibble(nibble) as char);
+        }
+        out
+    }
+}
+
+impl fmt::Debug for OneHotSequence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OneHotSequence")
+            .field("len", &self.len)
+            .field("words", &self.words.len())
+            .field("seq", &self.to_dna_string())
+            .finish()
+    }
 }
 
 impl<const N: usize> fmt::Debug for OneHot<N> {
@@ -329,5 +504,52 @@ mod tests {
         let read = b"XXACGTACGTNYY";
         let x = OneHot::<9>::from_window(read, 2).unwrap();
         assert_eq!(x.to_dna_string(), "ACGTACGTN");
+    }
+
+    #[test]
+    fn reverse_complement_is_pure_bit_operation() {
+        let x = OneHot::<8>::from_bytes(b"ACGTNAGT").unwrap();
+        assert_eq!(x.reverse_complement().to_dna_string(), "ACTNACGT");
+        assert_eq!(x.reverse_complement().reverse_complement(), x);
+    }
+
+    #[test]
+    fn packed_sequence_extracts_windows_across_word_boundaries() {
+        let seq = b"ACGTACGTACGTACGTACGTACGTACGTACGTTGCATGCA";
+        let packed = OneHotSequence::from_bytes(seq);
+
+        assert_eq!(packed.len(), seq.len());
+        assert_eq!(packed.to_dna_string().as_bytes(), seq);
+        assert_eq!(
+            packed.window::<9>(28).unwrap().to_dna_string().as_bytes(),
+            &seq[28..37]
+        );
+    }
+
+    #[test]
+    fn packed_sequence_reverse_complement_windows_use_mirrored_coordinates() {
+        let seq = b"AAAACCCCGGGGTTTTACGTN";
+        let packed = OneHotSequence::from_bytes(seq);
+        let rc = b"NACGTAAAACCCCGGGGTTTT";
+
+        for start in 0..=(rc.len() - 8) {
+            assert_eq!(
+                packed
+                    .reverse_complement_window::<8>(start)
+                    .unwrap()
+                    .to_dna_string()
+                    .as_bytes(),
+                &rc[start..start + 8]
+            );
+        }
+    }
+
+    #[test]
+    fn packed_mismatch_scans_reuse_one_encoding() {
+        let packed = OneHotSequence::from_bytes(b"TTTTGTGAGACAAAAA");
+        let linker = OneHot::<8>::from_bytes(b"GTGAGACA").unwrap();
+
+        assert_eq!(packed.mismatches_at(4, linker).unwrap(), 0);
+        assert!(packed.mismatches_at(3, linker).unwrap() > 0);
     }
 }

@@ -11,3 +11,4 @@ perf.data*
 .nf-test.log
 Log.out
 nelrune_test_out/
+bd_diagnostics.tsv

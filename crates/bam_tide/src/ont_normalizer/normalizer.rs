@@ -262,13 +262,18 @@ impl OntNormalizer {
 
                 self.process_chunk(&chunk, &mut output)?;
 
+                // Publish normalization progress before handing the batch to the
+                // downstream mapper. Mapper submission/draining may block while STAR
+                // warms up or applies backpressure; the health server must still show
+                // that this chunk has already been processed.
+                report_progress(&self.stats);
+
                 NgsNormalizerSupport::prepare_emit_batch(&mut output, &mut self.read_tags)?;
 
                 if !output.is_empty() && !emit(&output)? {
                     return Ok(());
                 }
 
-                report_progress(&self.stats);
                 chunk.clear();
             }
         }
@@ -278,13 +283,13 @@ impl OntNormalizer {
 
             self.process_chunk(&chunk, &mut output)?;
 
+            report_progress(&self.stats);
+
             NgsNormalizerSupport::prepare_emit_batch(&mut output, &mut self.read_tags)?;
 
             if !output.is_empty() && !emit(&output)? {
                 return Ok(());
             }
-
-            report_progress(&self.stats);
         }
 
         Ok(())

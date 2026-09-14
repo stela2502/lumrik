@@ -358,6 +358,32 @@ fn test_bd_v2_384_roundtrip_synthesize_detect() {
 }
 
 #[test]
+fn test_bd_v2_384_detection_returns_match_diagnostics() {
+    let grammar = TestData::bd_v2_384_grammar("bd-diagnostics");
+    let detector = PrimerDetector::from_grammar(grammar.clone()).unwrap();
+
+    let cell = TestData::bd_v2_384_cell(0);
+    let umi = b"AACCGG";
+    let mut seq = grammar.synthesize(&cell, umi).unwrap();
+    seq.extend_from_slice(b"GATCGATC");
+    let qual = TestData::qual(seq.len());
+
+    let (hit, diagnostics) = detector
+        .detect_first_with_diagnostics(&seq, &qual)
+        .unwrap();
+    let hit = hit.expect("BD primer should match");
+    let bd = diagnostics
+        .and_then(|diagnostics| diagnostics.bd)
+        .expect("BD diagnostics should accompany the match");
+
+    assert_eq!(hit.bd_cell_id, Some(1));
+    assert_eq!(bd.shift, 0);
+    assert_eq!(&bd.linker_signature, b"GTGAGACA");
+    assert_eq!(bd.linker_mismatches, 0);
+    assert_eq!((bd.c1_mismatches, bd.c2_mismatches, bd.c3_mismatches), (0, 0, 0));
+}
+
+#[test]
 fn test_bd_v2_384_invalid_cell_is_translated_to_valid_cell() {
     let grammar = TestData::bd_v2_384_grammar("bd-repair");
     let mut detector = PrimerDetector::from_grammar(grammar.clone()).unwrap();
@@ -765,6 +791,12 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
 
         let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
 
+        // Exercise the production-tolerant path: both fixed linker regions
+        // carry one sequencing error as well as the damaged barcode base.
+        // BD v2 cassette layout is C1(9) + L1(4) + C2(9) + L2(4) + C3(9).
+        primer[9 + 2] = b'A';
+        primer[9 + 4 + 9 + 2] = b'T';
+
         primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
 
         qual.extend(std::iter::repeat_n(b'I', primer.len()));
@@ -805,6 +837,12 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy_long() {
 
         let umi = detector.grammar().umi_from_u64(i as u64);
         let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
+
+        // Exercise the production-tolerant path: both fixed linker regions
+        // carry one sequencing error as well as the damaged barcode base.
+        // BD v2 cassette layout is C1(9) + L1(4) + C2(9) + L2(4) + C3(9).
+        primer[9 + 2] = b'A';
+        primer[9 + 4 + 9 + 2] = b'T';
 
         primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
         qual.extend(std::iter::repeat_n(b'I', primer.len()));

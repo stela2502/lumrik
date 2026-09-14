@@ -46,6 +46,8 @@ impl PrimerCli {
             detector = detector.with_whitelist_path(path, self.whitelist_mismatches)?;
         }
 
+        detector = detector.with_reverse_complement_detection(self.detect_reverse_complement);
+
         Ok(detector)
     }
 }

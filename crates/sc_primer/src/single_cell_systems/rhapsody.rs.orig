@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use onehot_dna::{OneHot, OneHotSequence};
-
 use crate::error::{PrimerError, PrimerResult};
 use crate::single_cell_systems::models::Range;
 use crate::single_cell_systems::traits::CellIdGenerator;
@@ -14,10 +12,6 @@ use crate::whitelist_hash::WhitelistHash;
 
 const BD_V2_LINKER_1: &[u8; 4] = b"GTGA";
 const BD_V2_LINKER_2: &[u8; 4] = b"GACA";
-const BD_V2_LINKERS: &[u8; 8] = b"GTGAGACA";
-const BD_V2_MAX_LINKER_MISMATCHES: u32 = 2;
-const BD_V2_LINKER_1_ONEHOT: OneHot<4> = OneHot::from_bits(0x1484);
-const BD_V2_LINKER_2_ONEHOT: OneHot<4> = OneHot::from_bits(0x1214);
 
 fn nearest_hamming(query: &[u8], whitelist: &[&'static [u8; 9]]) -> u32 {
     whitelist
@@ -48,15 +42,6 @@ pub enum BdCellVersion {
     V1,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RhapsodyCallDiagnostics {
-    pub linker_signature: [u8; 8],
-    pub linker_mismatches: u8,
-    pub c1_mismatches: u8,
-    pub c2_mismatches: u8,
-    pub c3_mismatches: u8,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RhapsodyCellCall {
     pub version: BdCellVersion,
@@ -71,13 +56,6 @@ pub struct RhapsodyCellCall {
     pub c2: (usize, usize),
     pub c3: (usize, usize),
     pub umi: (usize, usize),
-    pub(crate) diagnostics: Option<RhapsodyCallDiagnostics>,
-}
-
-impl RhapsodyCellCall {
-    pub fn diagnostics(&self) -> Option<RhapsodyCallDiagnostics> {
-        self.diagnostics
-    }
 }
 
 impl fmt::Display for RhapsodyCellCall {
@@ -118,8 +96,6 @@ impl BdMismatchProfile {
         self.c1_mismatches + self.c2_mismatches + self.c3_mismatches
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RhapsodyWhitelist {
     version: BdCellVersion,
     block_size: u64,
@@ -194,7 +170,6 @@ impl RhapsodyCellCall {
             c2: (0, 0),
             c3: (0, 0),
             umi: (0, 0),
-            diagnostics: None,
         }
     }
 }
@@ -291,105 +266,10 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> Option<RhapsodyCellCall> {
-        if matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
-            let packed = OneHotSequence::from_bytes(seq);
-            return self.call_with_packed(seq, qual, &packed, offset, shift_start, shift_end);
-        }
-
         for shift in shift_start..=shift_end {
             if let Some(call) = self.call_exact_shift(seq, qual, offset, shift) {
                 return Some(call);
             }
-        }
-        None
-    }
-
-    /// BD v2 call using a read-sized OneHotSequence prepared by the caller.
-    /// This avoids re-packing the same read at every candidate start.
-    pub fn call_with_packed(
-        &self,
-        seq: &[u8],
-        qual: &[u8],
-        packed: &OneHotSequence,
-        offset: usize,
-        shift_start: usize,
-        shift_end: usize,
-    ) -> Option<RhapsodyCellCall> {
-        for shift in shift_start..=shift_end {
-            if let Some(call) = self.call_exact_shift_packed(seq, qual, packed, offset, shift) {
-                return Some(call);
-            }
-        }
-        None
-    }
-
-    /// Find the next plausible BD v2 cassette start using only the packed
-    /// linker windows. This is the cheap read-wide search primitive shared by
-    /// the production detector and diagnostics. Whitelist resolution is not
-    /// attempted here.
-    pub fn next_candidate_start_packed(
-        &self,
-        packed: &OneHotSequence,
-        from: usize,
-        shift_start: usize,
-        shift_end: usize,
-    ) -> Option<usize> {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
-            return None;
-        }
-
-        let last = packed.len().checked_sub(self.version.unshifted_consumed_len())?;
-        for outer in from..=last {
-            for shift in shift_start..=shift_end {
-                let Some(base) = outer.checked_add(shift) else {
-                    continue;
-                };
-                let Some(distance) = self.v2_linker_mismatches_at(packed, base) else {
-                    continue;
-                };
-                if distance <= BD_V2_MAX_LINKER_MISMATCHES {
-                    return Some(outer);
-                }
-            }
-        }
-        None
-    }
-
-    /// Scan a complete BD v2 read with the cheap linker gate and only resolve
-    /// C1/C2/C3 for offsets that pass it. The read is packed once.
-    pub fn scan_first(
-        &self,
-        seq: &[u8],
-        qual: &[u8],
-        shift_start: usize,
-        shift_end: usize,
-    ) -> Option<RhapsodyCellCall> {
-        if seq.len() != qual.len() {
-            return None;
-        }
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
-            return self.call(seq, qual, 0, shift_start, shift_end);
-        }
-
-        let packed = OneHotSequence::from_bytes(seq);
-        let mut cursor = 0usize;
-        while let Some(offset) = self.next_candidate_start_packed(
-            &packed,
-            cursor,
-            shift_start,
-            shift_end,
-        ) {
-            if let Some(call) = self.call_with_packed(
-                seq,
-                qual,
-                &packed,
-                offset,
-                shift_start,
-                shift_end,
-            ) {
-                return Some(call);
-            }
-            cursor = offset.saturating_add(1);
         }
         None
     }
@@ -444,30 +324,23 @@ impl RhapsodyWhitelist {
             let c2 = &seq[coords.c2.0..coords.c2.1];
             let c3 = &seq[coords.c3.0..coords.c3.1];
 
-            if !self.v2_linkers_pass(seq, &coords) {
+            if self.index_c1(c1).is_none() {
                 whitelist_reason = Some(
-                    "BD_CELL: combined 8 bp linker has more than two mismatches".to_string(),
-                );
-                continue;
-            }
-
-            if self.index_c1_unique(c1).is_none() {
-                whitelist_reason = Some(
-                    "BD_CELL: C1 unique-nearest whitelist assignment was ambiguous"
+                    "BD_CELL: C1 one-mismatch whitelist correction failed or was ambiguous"
                         .to_string(),
                 );
                 continue;
             }
-            if self.index_c2_unique(c2).is_none() {
+            if self.index_c2(c2).is_none() {
                 whitelist_reason = Some(
-                    "BD_CELL: C2 unique-nearest whitelist assignment was ambiguous"
+                    "BD_CELL: C2 one-mismatch whitelist correction failed or was ambiguous"
                         .to_string(),
                 );
                 continue;
             }
-            if self.index_c3_unique(c3).is_none() {
+            if self.index_c3(c3).is_none() {
                 whitelist_reason = Some(
-                    "BD_CELL: C3 unique-nearest whitelist assignment was ambiguous"
+                    "BD_CELL: C3 one-mismatch whitelist correction failed or was ambiguous"
                         .to_string(),
                 );
                 continue;
@@ -583,156 +456,6 @@ impl RhapsodyWhitelist {
         best
     }
 
-    fn v2_call_diagnostics(
-        &self,
-        seq: &[u8],
-        coords: &BdCoords,
-        c1_idx: u64,
-        c2_idx: u64,
-        c3_idx: u64,
-    ) -> Option<RhapsodyCallDiagnostics> {
-        let linker1 = seq.get(coords.c1.1..coords.c2.0)?;
-        let linker2 = seq.get(coords.c2.1..coords.c3.0)?;
-        if linker1.len() != 4 || linker2.len() != 4 {
-            return None;
-        }
-
-        let mut linker_signature = [0u8; 8];
-        linker_signature[..4].copy_from_slice(linker1);
-        linker_signature[4..].copy_from_slice(linker2);
-
-        let observed_linker = OneHot::<8>::from_bytes(&linker_signature).ok()?;
-        let expected_linker = OneHot::<8>::from_bytes(BD_V2_LINKERS).ok()?;
-        let c1 = OneHot::<9>::from_bytes(seq.get(coords.c1.0..coords.c1.1)?).ok()?;
-        let c2 = OneHot::<9>::from_bytes(seq.get(coords.c2.0..coords.c2.1)?).ok()?;
-        let c3 = OneHot::<9>::from_bytes(seq.get(coords.c3.0..coords.c3.1)?).ok()?;
-        let c1_expected = OneHot::<9>::from_bytes(*self.c1.get(c1_idx as usize)?).ok()?;
-        let c2_expected = OneHot::<9>::from_bytes(*self.c2.get(c2_idx as usize)?).ok()?;
-        let c3_expected = OneHot::<9>::from_bytes(*self.c3.get(c3_idx as usize)?).ok()?;
-
-        Some(RhapsodyCallDiagnostics {
-            linker_signature,
-            linker_mismatches: observed_linker.mismatches(expected_linker) as u8,
-            c1_mismatches: c1.mismatches(c1_expected) as u8,
-            c2_mismatches: c2.mismatches(c2_expected) as u8,
-            c3_mismatches: c3.mismatches(c3_expected) as u8,
-        })
-    }
-
-    #[inline]
-    fn v2_linker_mismatches_at(&self, packed: &OneHotSequence, base: usize) -> Option<u32> {
-        let linker1 = packed.window::<4>(base.checked_add(9)?).ok()?;
-        let linker2 = packed.window::<4>(base.checked_add(22)?).ok()?;
-        Some(
-            linker1.mismatches(BD_V2_LINKER_1_ONEHOT)
-                + linker2.mismatches(BD_V2_LINKER_2_ONEHOT),
-        )
-    }
-
-    #[inline]
-    fn index_block_unique_onehot(
-        query: OneHot<9>,
-        whitelist: &WhitelistHash<9>,
-    ) -> Option<(u64, u32)> {
-        let (idx, distance) = whitelist.unique_nearest_routed_onehot(query)?;
-        Some((idx as u64, distance))
-    }
-
-    fn call_exact_shift_packed(
-        &self,
-        seq: &[u8],
-        qual: &[u8],
-        packed: &OneHotSequence,
-        offset: usize,
-        shift: usize,
-    ) -> Option<RhapsodyCellCall> {
-        let base = offset.checked_add(shift)?;
-        let coords = self.coords(base)?;
-        let consumed = coords.consumed.checked_sub(offset)?;
-        if seq.len() < coords.umi.1 || qual.len() < coords.umi.1 {
-            return None;
-        }
-
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
-            return self.call_exact_shift(seq, qual, offset, shift);
-        }
-
-        let linker_mismatches = self.v2_linker_mismatches_at(packed, base)?;
-        if linker_mismatches > BD_V2_MAX_LINKER_MISMATCHES {
-            return None;
-        }
-
-        let (c1_idx, c1_mismatches) = Self::index_block_unique_onehot(
-            packed.window::<9>(coords.c1.0).ok()?,
-            &self.c1_fuzzy,
-        )?;
-        let (c2_idx, c2_mismatches) = Self::index_block_unique_onehot(
-            packed.window::<9>(coords.c2.0).ok()?,
-            &self.c2_fuzzy,
-        )?;
-        let (c3_idx, c3_mismatches) = Self::index_block_unique_onehot(
-            packed.window::<9>(coords.c3.0).ok()?,
-            &self.c3_fuzzy,
-        )?;
-
-        let mut linker_signature = [0u8; 8];
-        linker_signature[..4].copy_from_slice(seq.get(coords.c1.1..coords.c2.0)?);
-        linker_signature[4..].copy_from_slice(seq.get(coords.c2.1..coords.c3.0)?);
-        let diagnostics = Some(RhapsodyCallDiagnostics {
-            linker_signature,
-            linker_mismatches: linker_mismatches as u8,
-            c1_mismatches: c1_mismatches as u8,
-            c2_mismatches: c2_mismatches as u8,
-            c3_mismatches: c3_mismatches as u8,
-        });
-
-        let cell_id =
-            c1_idx * self.block_size * self.block_size + c2_idx * self.block_size + c3_idx + 1;
-
-        let mut cell_seq = Vec::with_capacity(27);
-        let mut cell_qual = Vec::with_capacity(27);
-        self.extend_part(
-            &mut cell_seq,
-            &mut cell_qual,
-            seq,
-            qual,
-            coords.c1,
-            Some(self.c1[c1_idx as usize]),
-        );
-        self.extend_part(
-            &mut cell_seq,
-            &mut cell_qual,
-            seq,
-            qual,
-            coords.c2,
-            Some(self.c2[c2_idx as usize]),
-        );
-        self.extend_part(
-            &mut cell_seq,
-            &mut cell_qual,
-            seq,
-            qual,
-            coords.c3,
-            Some(self.c3[c3_idx as usize]),
-        );
-
-        Some(RhapsodyCellCall {
-            version: self.version,
-            cell_id,
-            cell_seq,
-            cell_qual,
-            umi_seq: seq[coords.umi.0..coords.umi.1].to_vec(),
-            umi_qual: qual[coords.umi.0..coords.umi.1].to_vec(),
-            shift,
-            consumed,
-            c1: coords.c1,
-            c2: coords.c2,
-            c3: coords.c3,
-            umi: coords.umi,
-            diagnostics,
-        })
-    }
-
     pub fn call_exact_shift(
         &self,
         seq: &[u8],
@@ -751,36 +474,13 @@ impl RhapsodyWhitelist {
             return None;
         }
 
-        // The two 4 bp BD v2 linkers are our cheap structural gate. Reads with
-        // more than two mismatches across the combined 8 bp linker are not
-        // worth attempting to rescue. Once that gate passes, the cassette is
-        // considered bona fide and each 9 bp cell block is assigned to its
-        // unique nearest whitelist entry. There is deliberately no additional
-        // barcode mismatch cutoff: only a tied nearest neighbour is rejected.
-        let (c1_idx, c2_idx, c3_idx) = match self.version {
-            BdCellVersion::V2_96 | BdCellVersion::V2_384 => {
-                if !self.v2_linkers_pass(seq, &coords) {
-                    return None;
-                }
-                (
-                    self.index_c1_unique(&seq[coords.c1.0..coords.c1.1])?,
-                    self.index_c2_unique(&seq[coords.c2.0..coords.c2.1])?,
-                    self.index_c3_unique(&seq[coords.c3.0..coords.c3.1])?,
-                )
-            }
-            BdCellVersion::V1 => (
-                self.index_c1(&seq[coords.c1.0..coords.c1.1])?,
-                self.index_c2(&seq[coords.c2.0..coords.c2.1])?,
-                self.index_c3(&seq[coords.c3.0..coords.c3.1])?,
-            ),
-        };
-
-        let diagnostics = match self.version {
-            BdCellVersion::V2_96 | BdCellVersion::V2_384 => {
-                self.v2_call_diagnostics(seq, &coords, c1_idx, c2_idx, c3_idx)
-            }
-            BdCellVersion::V1 => None,
-        };
+        // BD v2 cell calling is deliberately whitelist-driven. Linker bases are
+        // not an acceptance criterion: real reads can contain linker sequencing
+        // errors. Resolve every barcode block with the fuzzy whitelist matcher
+        // and accept the cassette when all three blocks resolve uniquely.
+        let c1_idx = self.index_c1(&seq[coords.c1.0..coords.c1.1])?;
+        let c2_idx = self.index_c2(&seq[coords.c2.0..coords.c2.1])?;
+        let c3_idx = self.index_c3(&seq[coords.c3.0..coords.c3.1])?;
 
         let cell_id =
             c1_idx * self.block_size * self.block_size + c2_idx * self.block_size + c3_idx + 1;
@@ -828,7 +528,6 @@ impl RhapsodyWhitelist {
             c2: coords.c2,
             c3: coords.c3,
             umi: coords.umi,
-            diagnostics,
         })
     }
 
@@ -856,49 +555,6 @@ impl RhapsodyWhitelist {
 
     pub fn index_c3(&self, seq: &[u8]) -> Option<u64> {
         Self::index_block_slow(seq, &self.c3_fuzzy, 1)
-    }
-
-    #[inline]
-    fn index_block_unique(seq: &[u8], whitelist: &WhitelistHash<9>) -> Option<u64> {
-        let (idx, _dist) = whitelist.unique_nearest(seq)?;
-        Some(idx as u64)
-    }
-
-    #[inline]
-    fn index_c1_unique(&self, seq: &[u8]) -> Option<u64> {
-        Self::index_block_unique(seq, &self.c1_fuzzy)
-    }
-
-    #[inline]
-    fn index_c2_unique(&self, seq: &[u8]) -> Option<u64> {
-        Self::index_block_unique(seq, &self.c2_fuzzy)
-    }
-
-    #[inline]
-    fn index_c3_unique(&self, seq: &[u8]) -> Option<u64> {
-        Self::index_block_unique(seq, &self.c3_fuzzy)
-    }
-
-    #[inline]
-    fn v2_linkers_pass(&self, seq: &[u8], coords: &BdCoords) -> bool {
-        let linker1_start = coords.c1.1;
-        let linker1_end = coords.c2.0;
-        let linker2_start = coords.c2.1;
-        let linker2_end = coords.c3.0;
-        if linker1_end - linker1_start != 4 || linker2_end - linker2_start != 4 {
-            return false;
-        }
-
-        let mut observed = [0u8; 8];
-        observed[..4].copy_from_slice(&seq[linker1_start..linker1_end]);
-        observed[4..].copy_from_slice(&seq[linker2_start..linker2_end]);
-
-        let Ok(observed) = OneHot::<8>::from_bytes(&observed) else {
-            return false;
-        };
-        let expected = OneHot::<8>::from_bytes(BD_V2_LINKERS)
-            .expect("builtin BD v2 linker must encode");
-        observed.mismatches(expected) <= BD_V2_MAX_LINKER_MISMATCHES
     }
 
     pub fn create_cell_cassette(&self, c1_idx: usize, c2_idx: usize, c3_idx: usize) -> Vec<u8> {
@@ -974,7 +630,6 @@ impl RhapsodyWhitelist {
 mod tests {
     use super::*;
     use crate::{Chemistry, PrimerDetector};
-    use crate::Orientation;
 
     fn qual(len: usize) -> Vec<u8> {
         vec![40; len]
@@ -1078,35 +733,6 @@ mod tests {
     }
 
     #[test]
-    fn bd_v2_384_rejects_when_combined_linkers_have_three_mismatches() {
-        let wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384);
-        let mut seq = bd_v2_384_real_r1_with_prefix(0, false);
-        // Linker1 starts at 9, linker2 at 22. Introduce three total errors.
-        seq[9] = b'A';
-        seq[10] = b'A';
-        seq[22] = b'A';
-        let qual = qual(seq.len());
-        assert!(wl.call(&seq, &qual, 0, 0, 0).is_none());
-    }
-
-    #[test]
-    fn bd_v2_384_recovers_unique_cell_block_beyond_one_mismatch() {
-        let wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384);
-        let mut seq = bd_v2_384_real_r1_with_prefix(0, false);
-        let expected = wl.call(&seq, &qual(seq.len()), 0, 0, 0).unwrap();
-
-        // Damage two positions in C1. The linker gate remains perfect and the
-        // unique nearest whitelist entry must still recover the same cell.
-        seq[0] = if seq[0] == b'A' { b'C' } else { b'A' };
-        seq[1] = if seq[1] == b'A' { b'C' } else { b'A' };
-        let rescued = wl
-            .call(&seq, &qual(seq.len()), 0, 0, 0)
-            .expect("unique nearest C1 should be rescued beyond one mismatch");
-        assert_eq!(rescued.cell_id, expected.cell_id);
-        assert_eq!(rescued.cell_seq, expected.cell_seq);
-    }
-
-    #[test]
     fn bd_v2_384_fails_without_required_shift() {
         let wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384);
 
@@ -1187,68 +813,63 @@ mod tests {
     }
 
     #[test]
-    fn bd_v2_384_detect_all_is_positional() {
+    fn bd_v2_384_detect_all_multimer_with_mutations() {
         let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
-        let wl = RhapsodyWhitelist::bd_v2_384();
 
         let mut seq = Vec::new();
         let mut qual = Vec::new();
 
-        for cell_id in [1u64, 2u64] {
+        let mut expected_ids = Vec::new();
+
+        for i in 0..100 {
+            let cell_id = (i + 1) as u64;
+            let umi = format!("{:06}", i)
+                .replace('0', "A")
+                .replace('1', "C")
+                .replace('2', "G")
+                .replace('3', "T")
+                .into_bytes();
+
+            let wl = RhapsodyWhitelist::bd_v2_384();
+
             let (c1, c2, c3) = wl
                 .cell_id_to_parts_ids(cell_id)
                 .expect("Used a wrong cell id - lib error!");
+
             let cell_seq_primer = wl.create_cell_cassette(c1, c2, c3);
+
             let mut primer = detector
                 .grammar()
-                .synthesize(&cell_seq_primer, b"ACGTAC")
+                .synthesize(&cell_seq_primer, &umi)
                 .expect("Primer creation failed!");
+
+            // Add some insert sequence.
             primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
+
             seq.extend_from_slice(&primer);
             qual.extend(std::iter::repeat_n(b'I', primer.len()));
+
+            expected_ids.push(cell_id);
         }
 
         let hits = detector.detect_all(&seq, &qual).unwrap();
-        assert_eq!(hits.len(), 1, "BD detection must not wander downstream");
-        assert_eq!(hits[0].bd_cell_id, Some(1));
-    }
 
-    #[test]
-    fn bd_v2_384_accepts_shift_four_in_both_orientations() {
-        let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
-        let wl = RhapsodyWhitelist::bd_v2_384();
-        let (c1, c2, c3) = wl.cell_id_to_parts_ids(1).unwrap();
-        let cell = wl.create_cell_cassette(c1, c2, c3);
-        let primer = detector.grammar().synthesize(&cell, b"ACGTAC").unwrap();
-
-        let mut shifted = b"ACGT".to_vec();
-        shifted.extend_from_slice(&primer);
-        shifted.extend_from_slice(b"GATCGATCGATC");
-        let q = qual(shifted.len());
-        let forward = detector.detect_first(&shifted, &q).unwrap().unwrap();
-        assert_eq!(forward.orientation, Orientation::Forward);
-        assert_eq!(forward.bd_cell_id, Some(1));
-
-        let rc = PrimerDetector::reverse_complement(&shifted);
-        let rcq = qual(rc.len());
-        let reverse = detector.detect_first(&rc, &rcq).unwrap().unwrap();
-        assert_eq!(reverse.orientation, Orientation::ReverseComplement);
-        assert_eq!(reverse.bd_cell_id, Some(1));
-    }
-
-    #[test]
-    fn mouse_igk_transcript_must_not_match_bd_v2_384() {
-        let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384).unwrap();
-        let seq = b"ANAGGAAACTCATGGTGCGTGGATCTGGCAATGAGCCTGCCGCCACTATCAGTCGTGGCATATGTGAGTCGTGATTATAGAGAGAGAGACCAAAATTCAAAGAGAAAATGGATTTTCAGGTGCAGATTTTCAGCTTCCTGCTAATCAGTGC";
-        let q = qual(seq.len());
-
-        let hit = detector.detect_first(seq, &q).unwrap();
-        assert!(
-            hit.is_none(),
-            "BLAST-confirmed mouse Igk transcript must never be accepted as a BD cell cassette: {hit:?}"
+        assert_eq!(
+            hits.len(),
+            expected_ids.len(),
+            "expected {} hits, got {}",
+            expected_ids.len(),
+            hits.len()
         );
-    }
 
+        for (i, hit) in hits.iter().enumerate() {
+            assert_eq!(
+                hit.bd_cell_id,
+                Some(expected_ids[i]),
+                "wrong cell id for hit {i}"
+            );
+        }
+    }
     #[test]
     fn canonical_sequence_roundtrips_to_positional_cell_id() {
         let wl = RhapsodyWhitelist::bd_v2_384();

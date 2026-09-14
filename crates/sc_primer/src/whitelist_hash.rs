@@ -89,6 +89,7 @@ impl WhitelistBucket {
 pub struct WhitelistHash<const N: usize> {
     entries: Vec<OneHot<N>>,
     exact: HashMap<u64, u32>,
+    exact_onehot: HashMap<u128, u32>,
     data: [WhitelistBucket; 256],
     layout: WhitelistLayout,
     max_mismatches: u32,
@@ -100,6 +101,7 @@ impl<const N: usize> WhitelistHash<N> {
         Ok(Self {
             entries: Vec::with_capacity(capacity),
             exact: HashMap::with_capacity(capacity),
+            exact_onehot: HashMap::with_capacity(capacity),
             data: std::array::from_fn(|_| WhitelistBucket::new(layout.parts.len())),
             layout,
             max_mismatches,
@@ -171,6 +173,7 @@ impl<const N: usize> WhitelistHash<N> {
             .map_err(|_| "whitelist has more than u32::MAX entries".to_string())?;
         self.entries.push(one_hot);
         self.exact.insert(packed, id);
+        self.exact_onehot.insert(one_hot.bits(), id);
 
         for (position, part) in self.layout.parts.iter().copied().enumerate() {
             let key = Self::encode_part(seq, part)
@@ -217,6 +220,28 @@ impl<const N: usize> WhitelistHash<N> {
         Some(packed)
     }
 
+    #[inline]
+    fn encode_onehot_part(query: OneHot<N>, part: HashPart) -> Option<u8> {
+        let end = part.start.checked_add(part.len)?;
+        if end > N || part.len == 0 || part.len > 4 {
+            return None;
+        }
+
+        let mut packed = 0u8;
+        for position in part.start..end {
+            let nibble = ((query.bits() >> (position * 4)) & 0b1111) as u8;
+            let base = match nibble {
+                0b0001 => 0,
+                0b0010 => 1,
+                0b0100 => 2,
+                0b1000 => 3,
+                _ => return None,
+            };
+            packed = (packed << 2) | base;
+        }
+        Some(packed)
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -247,6 +272,113 @@ impl<const N: usize> WhitelistHash<N> {
 
     pub fn best_match_default(&self, seq: &[u8]) -> Option<(usize, u32)> {
         self.best_match(seq, self.max_mismatches)
+    }
+
+    /// Find the unique nearest whitelist entry without imposing a mismatch
+    /// radius. Exact A/C/G/T queries retain the O(1) packed lookup; otherwise
+    /// every whitelist entry is compared with the complete OneHot sequence.
+    ///
+    /// This is intended for small, strongly pre-gated whitelists such as the
+    /// BD Rhapsody C1/C2/C3 blocks. A tied nearest neighbour is rejected.
+    pub fn unique_nearest(&self, seq: &[u8]) -> Option<(usize, u32)> {
+        if seq.len() != N {
+            return None;
+        }
+
+        let query = OneHot::<N>::from_bytes(seq).ok()?;
+        self.unique_nearest_onehot(query)
+    }
+
+    /// Find the unique nearest whitelist entry from an already packed query.
+    /// This is the zero-reencoding path used by read-sized OneHotSequence
+    /// scanners. Exact hits remain O(1); only non-exact queries scan the
+    /// complete small whitelist.
+    #[inline]
+    pub fn unique_nearest_onehot(&self, query: OneHot<N>) -> Option<(usize, u32)> {
+        if let Some(index) = self.exact_onehot.get(&query.bits()).copied() {
+            return Some((index as usize, 0));
+        }
+        self.scan_all(query, N as u32)
+    }
+
+    /// Find the unique nearest whitelist entry using the positional hash as a
+    /// candidate router, without imposing a final mismatch radius.
+    ///
+    /// At least one positional hash part must match exactly. This is the
+    /// CellHash-style rescue path used by BD after its linker gate: a damaged
+    /// barcode may still be rescued from candidates routed by an intact 4 bp
+    /// part, but a query that damages every routing part is rejected rather
+    /// than triggering a full whitelist scan.
+    #[inline]
+    pub fn unique_nearest_routed_onehot(&self, query: OneHot<N>) -> Option<(usize, u32)> {
+        if let Some(index) = self.exact_onehot.get(&query.bits()).copied() {
+            return Some((index as usize, 0));
+        }
+
+        const MAX_PARTS: usize = 8;
+        let mut lists: [Option<&[u32]>; MAX_PARTS] = [None; MAX_PARTS];
+        let mut active = 0usize;
+
+        for (position, part) in self.layout.parts.iter().copied().enumerate() {
+            let Some(key) = Self::encode_onehot_part(query, part) else {
+                continue;
+            };
+            let list = &self.data[key as usize].positions[position];
+            if list.is_empty() {
+                continue;
+            }
+            lists[active] = Some(list);
+            active += 1;
+        }
+
+        // No intact positional hash part means no cheap candidate evidence.
+        // Deliberately do not fall back to an all-entry nearest-neighbour scan.
+        if active == 0 {
+            return None;
+        }
+
+        let mut offsets = [0usize; MAX_PARTS];
+        let mut best_index = None;
+        let mut best_dist = N as u32 + 1;
+        let mut tied = false;
+
+        loop {
+            let mut next_id = None;
+            for slot in 0..active {
+                let list = lists[slot].expect("active list");
+                if let Some(&id) = list.get(offsets[slot]) {
+                    next_id = Some(next_id.map_or(id, |current: u32| current.min(id)));
+                }
+            }
+            let Some(id) = next_id else {
+                break;
+            };
+
+            // Advance every routing list containing this id so each candidate
+            // is evaluated exactly once even when both 4 bp parts vote for it.
+            for slot in 0..active {
+                let list = lists[slot].expect("active list");
+                if list.get(offsets[slot]).copied() == Some(id) {
+                    offsets[slot] += 1;
+                }
+            }
+
+            let candidate = *self.entries.get(id as usize)?;
+            let dist = query.mismatches(candidate);
+            if dist < best_dist {
+                best_index = Some(id as usize);
+                best_dist = dist;
+                tied = false;
+            } else if dist == best_dist && best_index != Some(id as usize) {
+                tied = true;
+            }
+        }
+
+        if tied {
+            None
+        } else {
+            best_index.map(|index| (index, best_dist))
+        }
     }
 
     /// Find the unique best whitelist entry within `max_mismatches`.
@@ -531,6 +663,52 @@ mod tests {
     fn equal_distance_tie_is_rejected() {
         let hash = WhitelistHash::<8>::from_sequences(&[b"ACGTTGCA", b"ACGATGCA"], 1).unwrap();
         assert_eq!(hash.best_match_default(b"ACGCTGCA"), None);
+    }
+
+    #[test]
+    fn unique_nearest_can_rescue_beyond_configured_radius() {
+        let hash = WhitelistHash::<8>::from_sequences(&[b"ACGTTGCA", b"TTTTTTTT"], 1).unwrap();
+        assert_eq!(hash.best_match_default(b"ACGATGTA"), None);
+        assert_eq!(hash.unique_nearest(b"ACGATGTA"), Some((0, 2)));
+    }
+
+    #[test]
+    fn unique_nearest_rejects_ties_without_a_radius() {
+        let hash = WhitelistHash::<8>::from_sequences(&[b"ACGTTGCA", b"ACGATGCA"], 1).unwrap();
+        assert_eq!(hash.unique_nearest(b"ACGCTGCA"), None);
+    }
+
+    #[test]
+    fn unique_nearest_onehot_matches_byte_api() {
+        let hash = WhitelistHash::<9>::from_sequences(&[b"ACGTTGCAA", b"TTTTTTTTT"], 1).unwrap();
+        let query = OneHot::<9>::from_bytes(b"ACGATGTAA").unwrap();
+        assert_eq!(hash.unique_nearest_onehot(query), hash.unique_nearest(b"ACGATGTAA"));
+    }
+
+    #[test]
+    fn routed_unique_nearest_rescues_from_one_intact_hash_part() {
+        let hash = WhitelistHash::<9>::from_sequences(
+            &[b"ACGTATGCA", b"TTTTATTTT"],
+            1,
+        )
+        .unwrap();
+        let query = OneHot::<9>::from_bytes(b"ACGTCTGTA").unwrap();
+
+        // Two mismatches are allowed here because the intact leading ACGT
+        // routing part restricts the candidate set before full-distance
+        // comparison.
+        assert_eq!(hash.unique_nearest_routed_onehot(query), Some((0, 2)));
+    }
+
+    #[test]
+    fn routed_unique_nearest_rejects_when_all_hash_parts_are_damaged() {
+        let hash = WhitelistHash::<9>::from_sequences(&[b"ACGTATGCA"], 1).unwrap();
+        let query = OneHot::<9>::from_bytes(b"ACGAATGTA").unwrap();
+
+        // N=9 routes on bases 0..4 and 5..9. Both four-base routing parts
+        // contain a mismatch here, so there is deliberately no expensive
+        // all-whitelist fallback.
+        assert_eq!(hash.unique_nearest_routed_onehot(query), None);
     }
 
     #[test]

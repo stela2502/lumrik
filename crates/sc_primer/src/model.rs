@@ -38,6 +38,21 @@ impl fmt::Display for PrimerSegment {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BdPrimerDiagnostics {
+    pub shift: usize,
+    pub linker_signature: [u8; 8],
+    pub linker_mismatches: u8,
+    pub c1_mismatches: u8,
+    pub c2_mismatches: u8,
+    pub c3_mismatches: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PrimerMatchDiagnostics {
+    pub bd: Option<BdPrimerDiagnostics>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrimerMatch {
     pub chemistry_name: String,
@@ -48,6 +63,7 @@ pub struct PrimerMatch {
     pub insert_end: usize,
     pub bd_cell_id: Option<u64>,
     pub cell_seq: Option<Vec<u8>>,
+    pub diagnostics: PrimerMatchDiagnostics,
     pub segments: Vec<PrimerSegment>,
 }
 
@@ -161,6 +177,7 @@ impl PrimerMatch {
             insert_end: 0,
             bd_cell_id: None,
             cell_seq: None,
+            diagnostics: PrimerMatchDiagnostics::default(),
             segments: Vec::new(),
         }
     }

@@ -88,3 +88,22 @@ fn identify_primers_accepts_sequence_file_and_summarizes_errors() {
 
     let _ = std::fs::remove_file(path);
 }
+
+
+#[test]
+fn identify_primers_recovers_reverse_complement_bd_igk_read() {
+    const REVERSE_IGK: &str = "ANAGGAAACTCTGGTGCGTGGCTCACCTAATGACGACGTGTCCACATTCGTAGTCCCCAGGCGTGGAGTCGTGATTATACTCTCTCTCCTGGCTCTCAGCTCAGGGGCCATTTCCCAGGCTGTTGTGACTCAGGAATCTGCACTCACCACA";
+
+    let mut cmd = Command::cargo_bin("identify_primers").unwrap();
+    cmd.args(["--chemistry", "bd-v2-384", "--seq", REVERSE_IGK]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("orientation: ReverseComplement"))
+        .stdout(predicate::str::contains(
+            "cell_seq: GAGCCTGAGGTGCCTGGAGAGTATGAT",
+        ))
+        .stdout(predicate::str::contains(
+            "summary: 1 complete primer match(es)",
+        ));
+}

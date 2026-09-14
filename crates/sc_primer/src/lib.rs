@@ -13,7 +13,12 @@ pub use cli::PrimerCli;
 pub use detector::PrimerDetector;
 pub use error::{PrimerError, PrimerResult};
 pub use grammar::{Grammar, GrammarOp, MoleculeIdentity};
-pub use model::{Orientation, PrimerMatch, PrimerSegment, PrimerSlice};
-pub use single_cell_systems::rhapsody::{BdCellVersion, RhapsodyCellCall, RhapsodyWhitelist};
+pub use model::{
+    BdPrimerDiagnostics, Orientation, PrimerMatch, PrimerMatchDiagnostics, PrimerSegment,
+    PrimerSlice,
+};
+pub use single_cell_systems::rhapsody::{
+    BdCellVersion, BdMismatchProfile, RhapsodyCellCall, RhapsodyWhitelist,
+};
 
 pub use whitelist_hash::{HashPart, RuntimeWhitelistHash, WhitelistHash, WhitelistLayout};

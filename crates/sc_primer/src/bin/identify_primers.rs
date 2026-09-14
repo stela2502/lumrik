@@ -42,56 +42,64 @@ fn sequence_qual(seq: &[u8], qual: Option<&str>) -> Result<Vec<u8>, String> {
 }
 
 fn print_single(detector: &PrimerDetector, seq: &[u8], qual: &[u8]) -> Result<(), String> {
-    let attempts = detector.explain_all(seq, qual)?;
+    let hits = detector.detect_all(seq, qual)?;
 
-    if attempts.is_empty() {
-        println!("no primer attempts");
+    if hits.is_empty() {
+        println!("summary: no complete primer match");
+        println!("reason: {}", detector.explain_failure(seq, qual)?);
         return Ok(());
     }
 
-    let mut matched = 0usize;
+    for hit in &hits {
+        let oriented_offset = match hit.orientation {
+            sc_primer::Orientation::Forward => hit.primer_start,
+            sc_primer::Orientation::ReverseComplement => seq.len().saturating_sub(hit.primer_end),
+        };
+        let oriented_seq = match hit.orientation {
+            sc_primer::Orientation::Forward => seq.to_vec(),
+            sc_primer::Orientation::ReverseComplement => PrimerDetector::reverse_complement(seq),
+        };
+        let prefix = std::str::from_utf8(&oriented_seq[..oriented_offset]).unwrap_or("<non-utf8>");
+        let cell_seq = hit
+            .cell_seq
+            .as_deref()
+            .map(String::from_utf8_lossy)
+            .map(|s| s.into_owned())
+            .unwrap_or_default();
 
-    for attempt in &attempts {
-        if !attempt.ok {
-            continue;
-        }
-
-        matched += 1;
-        let prefix = std::str::from_utf8(&seq[..attempt.offset]).unwrap_or("<non-utf8>");
-        let cell_seq = attempt.cell_seq.as_deref().unwrap_or("");
         println!(
             "  prefix: {}bp [0..{}] {}\n  cell_seq: {}",
-            prefix, attempt.offset, attempt.offset, cell_seq,
+            prefix, oriented_offset, oriented_offset, cell_seq,
         );
         println!(
-            "offset: {} orientation: {:?} status: OK reason: {}",
-            attempt.offset, attempt.orientation, attempt.reason
+            "offset: {} orientation: {:?} status: OK reason: matched",
+            oriented_offset, hit.orientation
         );
 
-        for segment in &attempt.segments {
-            let dna = std::str::from_utf8(&seq[segment.range.start..segment.range.end])
-                .unwrap_or("<non-utf8>");
+        for segment in &hit.segments {
+            for range in &segment.ranges {
+                let oriented_range = match hit.orientation {
+                    sc_primer::Orientation::Forward => range.clone(),
+                    sc_primer::Orientation::ReverseComplement => {
+                        (seq.len() - range.end)..(seq.len() - range.start)
+                    }
+                };
+                let dna = std::str::from_utf8(&oriented_seq[oriented_range.clone()])
+                    .unwrap_or("<non-utf8>");
 
-            println!(
-                "  {}: {}bp [{}..{}] {} | {} | {}",
-                segment.name,
-                segment.range.end.saturating_sub(segment.range.start),
-                segment.range.start,
-                segment.range.end,
-                dna,
-                if segment.ok { "OK" } else { "FAIL" },
-                segment.reason
-            );
+                println!(
+                    "  {}: {}bp [{}..{}] {} | OK | matched",
+                    segment.name,
+                    oriented_range.end.saturating_sub(oriented_range.start),
+                    oriented_range.start,
+                    oriented_range.end,
+                    dna,
+                );
+            }
         }
     }
 
-    if matched == 0 {
-        println!("summary: no complete primer match");
-        println!("reason: {}", detector.explain_failure(seq, qual)?);
-    } else {
-        println!("summary: {matched} complete primer match(es)\n");
-    }
-
+    println!("summary: {} complete primer match(es)\n", hits.len());
     Ok(())
 }
 

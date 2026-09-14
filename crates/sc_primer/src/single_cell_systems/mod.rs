@@ -8,7 +8,7 @@ pub mod whitelists;
 
 pub use models::SingleCellSystem;
 
-pub use rhapsody::{BdCellVersion, RhapsodyCellCall, RhapsodyWhitelist};
+pub use rhapsody::{BdCellVersion, BdMismatchProfile, RhapsodyCellCall, RhapsodyWhitelist};
 
 pub use tenx::{TenxCellCall, TenxVersion, TenxWhitelist};
 

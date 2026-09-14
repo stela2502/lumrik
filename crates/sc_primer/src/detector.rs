@@ -1,11 +1,15 @@
 use crate::chemistry::Chemistry;
 use crate::error::{PrimerError, PrimerResult};
 use crate::grammar::{Grammar, GrammarOp};
-use crate::model::{Orientation, PrimerAttempt, PrimerMatch, PrimerSegmentAttempt};
+use crate::model::{
+    BdPrimerDiagnostics, Orientation, PrimerAttempt, PrimerMatch, PrimerMatchDiagnostics,
+    PrimerSegmentAttempt,
+};
 
 use crate::single_cell_systems::*;
 
 use int_to_str::IntToStr;
+use onehot_dna::OneHotSequence;
 use read_tag_table::ReadTagRecord;
 
 use std::collections::HashMap;
@@ -38,6 +42,11 @@ impl PrimerDetector {
             primer_translation: HashMap::new(),
             umi_translation: HashMap::new(),
         })
+    }
+
+    pub fn with_reverse_complement_detection(mut self, enabled: bool) -> Self {
+        self.detect_reverse_complement = enabled;
+        self
     }
 
     /// Replace/install the cell whitelist from a line-delimited text file.
@@ -267,16 +276,54 @@ impl PrimerDetector {
         Ok(None)
     }
 
+    /// Detect the first primer match and return the compact diagnostics that
+    /// were collected while producing that match. Callers uninterested in
+    /// diagnostics can continue using `detect_first`, or destructure this as
+    /// `(hit, _)` without re-running any matching work.
+    pub fn detect_first_with_diagnostics(
+        &self,
+        seq: &[u8],
+        qual: &[u8],
+    ) -> PrimerResult<(Option<PrimerMatch>, Option<PrimerMatchDiagnostics>)> {
+        let hit = self.detect_first(seq, qual)?;
+        let diagnostics = hit.as_ref().map(|hit| hit.diagnostics);
+        Ok((hit, diagnostics))
+    }
+
     pub fn detect_all(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Vec<PrimerMatch>> {
         Self::validate_read(seq, qual)?;
 
+        let hits = self.detect_all_forward(seq, qual, Orientation::Forward)?;
+        if !hits.is_empty() || !self.detect_reverse_complement {
+            return Ok(hits);
+        }
+
+        let rc_seq = Self::reverse_complement(seq);
+        let rc_qual = Self::reverse(qual);
+        let mut reverse_hits =
+            self.detect_all_forward(&rc_seq, &rc_qual, Orientation::ReverseComplement)?;
+
+        for hit in &mut reverse_hits {
+            hit.remap_reverse_coordinates(seq.len());
+        }
+
+        Ok(reverse_hits)
+    }
+
+    fn detect_all_forward(
+        &self,
+        seq: &[u8],
+        qual: &[u8],
+        orientation: Orientation,
+    ) -> PrimerResult<Vec<PrimerMatch>> {
         let mut hits = Vec::new();
         let mut cursor = 0usize;
+        let packed = self.leading_bd_search().map(|_| OneHotSequence::from_bytes(seq));
 
-        while let Some(offset) = self.next_candidate_start(seq, cursor) {
-            match self.try_from_start(seq, qual, offset, Orientation::Forward)? {
+        while let Some(offset) = self.next_candidate_start(seq, packed.as_ref(), cursor) {
+            match self.try_from_start_with_packed(seq, qual, offset, orientation, packed.as_ref())? {
                 Some(hit) => {
-                    // A successful match owns the whole primer span.  Continue
+                    // A successful match owns the whole primer span. Continue
                     // at its end instead of re-testing SEARCH shifts or other
                     // candidate starts inside the primer we just accepted.
                     cursor = hit.primer_end.max(offset.saturating_add(1));
@@ -299,9 +346,10 @@ impl PrimerDetector {
         orientation: Orientation,
     ) -> PrimerResult<Option<PrimerMatch>> {
         let mut cursor = 0usize;
+        let packed = self.leading_bd_search().map(|_| OneHotSequence::from_bytes(seq));
 
-        while let Some(offset) = self.next_candidate_start(seq, cursor) {
-            if let Some(hit) = self.try_from_start(seq, qual, offset, orientation)? {
+        while let Some(offset) = self.next_candidate_start(seq, packed.as_ref(), cursor) {
+            if let Some(hit) = self.try_from_start_with_packed(seq, qual, offset, orientation, packed.as_ref())? {
                 return Ok(Some(hit));
             }
             cursor = offset.saturating_add(1);
@@ -322,7 +370,12 @@ impl PrimerDetector {
 
     /// Return the next plausible grammar start without first materializing all
     /// offsets in the read.
-    fn next_candidate_start(&self, seq: &[u8], from: usize) -> Option<usize> {
+    fn next_candidate_start(
+        &self,
+        seq: &[u8],
+        _packed: Option<&OneHotSequence>,
+        from: usize,
+    ) -> Option<usize> {
         if let Some(anchor) = self.grammar.anchor_search() {
             return anchor.find_next_cell_start(seq, from);
         }
@@ -336,18 +389,15 @@ impl PrimerDetector {
             return (from == 0 && !seq.is_empty()).then_some(0);
         }
 
-        // Built-in BD v2 grammars start with SEARCH followed by BD_CELL.  Scan
-        // the two fixed BD linkers once and only invoke the costly whitelist
-        // matcher at positions that can actually be a cassette.
-        if let Some((search_start, search_end)) = self.leading_bd_search() {
-            if let Some(SingleCellSystem::Rhapsody(rhapsody)) = &self.single_cell_system {
-                if matches!(
-                    rhapsody.version(),
-                    BdCellVersion::V2_96 | BdCellVersion::V2_384
-                ) {
-                    return rhapsody.next_candidate_start(seq, from, search_start, search_end);
-                }
-            }
+        // Built-in BD read structures are positional, just like 10x. The
+        // leading SEARCH operation describes the small tolerated shift of the
+        // cassette itself (normally 0..=4); it must not turn the linker into a
+        // read-wide search index. This rule is applied identically to forward
+        // and reverse-complement detection.
+        if self.leading_bd_search().is_some()
+            && matches!(&self.single_cell_system, Some(SingleCellSystem::Rhapsody(_)))
+        {
+            return (from == 0 && !seq.is_empty()).then_some(0);
         }
 
         (from < seq.len()).then_some(from)
@@ -465,6 +515,17 @@ impl PrimerDetector {
         start: usize,
         orientation: Orientation,
     ) -> PrimerResult<Option<PrimerMatch>> {
+        self.try_from_start_with_packed(seq, qual, start, orientation, None)
+    }
+
+    fn try_from_start_with_packed(
+        &self,
+        seq: &[u8],
+        qual: &[u8],
+        start: usize,
+        orientation: Orientation,
+        packed: Option<&OneHotSequence>,
+    ) -> PrimerResult<Option<PrimerMatch>> {
         // Most candidate starts fail.  Do not clone the chemistry name for
         // every failed attempt; attach it only when the whole grammar matches.
         let mut primer_match = PrimerMatch::new(String::new(), orientation);
@@ -563,11 +624,36 @@ impl PrimerDetector {
                         return Ok(None);
                     }
 
-                    let Some(call) = rhapsody.call(seq, qual, pos, search.0, search.1) else {
+                    let call = match packed {
+                        Some(packed)
+                            if matches!(
+                                rhapsody.version(),
+                                BdCellVersion::V2_96 | BdCellVersion::V2_384
+                            ) => rhapsody.call_with_packed(
+                                seq,
+                                qual,
+                                packed,
+                                pos,
+                                search.0,
+                                search.1,
+                            ),
+                        _ => rhapsody.call(seq, qual, pos, search.0, search.1),
+                    };
+                    let Some(call) = call else {
                         return Ok(None);
                     };
 
                     primer_match.bd_cell_id = Some(call.cell_id);
+                    if let Some(diagnostics) = call.diagnostics {
+                        primer_match.diagnostics.bd = Some(BdPrimerDiagnostics {
+                            shift: call.shift,
+                            linker_signature: diagnostics.linker_signature,
+                            linker_mismatches: diagnostics.linker_mismatches,
+                            c1_mismatches: diagnostics.c1_mismatches,
+                            c2_mismatches: diagnostics.c2_mismatches,
+                            c3_mismatches: diagnostics.c3_mismatches,
+                        });
+                    }
 
                     // probably use full cassette if this is later used for synthesize()
                     primer_match.add_cell_seq(&call.cell_seq);
