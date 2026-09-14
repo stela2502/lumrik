@@ -684,9 +684,10 @@ fn benchmark_detect_all_bd_v2_384_multimer() {
     }
 
     let hits = detector.detect_all(&seq, &qual).unwrap();
-    assert_eq!(hits.len(), 100);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].bd_cell_id, Some(1));
 
-    bench("BD detect_all multimer", 10_000, 100, || {
+    bench("BD detect_all positional multimer", 10_000, 1, || {
         std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
     });
 }
@@ -714,9 +715,10 @@ fn benchmark_detect_all_bd_v2_384_multimer_long() {
     }
 
     let hits = detector.detect_all(&seq, &qual).unwrap();
-    assert_eq!(hits.len(), 100);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].bd_cell_id, Some(1));
 
-    bench("BD detect_all multimer [long]", 100_000, 100, || {
+    bench("BD detect_all positional multimer [long]", 100_000, 1, || {
         std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
     });
 }
@@ -794,11 +796,13 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
 
         let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
 
-        // Exercise the production-tolerant path: both fixed linker regions
-        // carry one sequencing error as well as the damaged barcode base.
-        // BD v2 cassette layout is C1(9) + L1(4) + C2(9) + L2(4) + C3(9).
-        primer[9 + 2] = b'A';
-        primer[9 + 4 + 9 + 2] = b'T';
+        // Grammar::synthesize() reserves four bases for SEARCH before the
+        // BD cassette. Damage one base in each linker at the actual cassette
+        // coordinates, in addition to the damaged barcode base above.
+        // Layout after SEARCH(4): C1(9) + L1(4) + C2(9) + L2(4) + C3(9).
+        const SEARCH_PREFIX: usize = 4;
+        primer[SEARCH_PREFIX + 9 + 2] = b'A';
+        primer[SEARCH_PREFIX + 9 + 4 + 9 + 2] = b'T';
 
         primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
 
@@ -807,12 +811,13 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
     }
 
     let hits = detector.detect_all(&seq, &qual).unwrap();
-    assert_eq!(hits.len(), hits_per_read);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].bd_cell_id, Some(1));
 
     bench(
-        "BD fuzzy detect_all multimer",
+        "BD fuzzy detect_all positional multimer",
         10_000,
-        hits_per_read,
+        1,
         || {
             std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
         },
@@ -841,11 +846,13 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy_long() {
         let umi = detector.grammar().umi_from_u64(i as u64);
         let mut primer = detector.grammar().synthesize(&cell, &umi).unwrap();
 
-        // Exercise the production-tolerant path: both fixed linker regions
-        // carry one sequencing error as well as the damaged barcode base.
-        // BD v2 cassette layout is C1(9) + L1(4) + C2(9) + L2(4) + C3(9).
-        primer[9 + 2] = b'A';
-        primer[9 + 4 + 9 + 2] = b'T';
+        // Grammar::synthesize() reserves four bases for SEARCH before the
+        // BD cassette. Damage one base in each linker at the actual cassette
+        // coordinates, in addition to the damaged barcode base above.
+        // Layout after SEARCH(4): C1(9) + L1(4) + C2(9) + L2(4) + C3(9).
+        const SEARCH_PREFIX: usize = 4;
+        primer[SEARCH_PREFIX + 9 + 2] = b'A';
+        primer[SEARCH_PREFIX + 9 + 4 + 9 + 2] = b'T';
 
         primer.extend_from_slice(b"GATCGATCGATCGATCGATCGATCGATCG");
         qual.extend(std::iter::repeat_n(b'I', primer.len()));
@@ -853,12 +860,13 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy_long() {
     }
 
     let hits = detector.detect_all(&seq, &qual).unwrap();
-    assert_eq!(hits.len(), hits_per_read);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].bd_cell_id, Some(1));
 
     bench(
-        "BD fuzzy detect_all multimer [long]",
+        "BD fuzzy detect_all positional multimer [long]",
         100_000,
-        hits_per_read,
+        1,
         || {
             std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
         },
@@ -908,17 +916,11 @@ fn bd_v2_384_detect_all_does_not_repeat_search_window_hits() {
 
     assert_eq!(
         hits.len(),
-        2,
-        "SEARCH shifts must not duplicate a physical primer"
+        1,
+        "BD detection must stay inside the leading SEARCH window"
     );
     assert_eq!(hits[0].bd_cell_id, Some(1));
-    assert_eq!(hits[1].bd_cell_id, Some(2));
-
-    for hit in &hits {
-        assert!(hit.primer_end > hit.primer_start);
-    }
-
-    assert_eq!(hits[0].insert_end, hits[1].primer_start);
+    assert!(hits[0].primer_end > hits[0].primer_start);
 }
 
 #[test]

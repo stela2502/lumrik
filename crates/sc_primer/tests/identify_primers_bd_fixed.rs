@@ -39,7 +39,7 @@ fn bd_cell_followed_by_fixed_adapter_fails_if_sequences_fails() {
         .stdout(predicate::str::contains("summary: 1 complete primer match(es)").not());
 }
 #[test]
-fn identify_primers_reports_bd_whitelist_failure_reason() {
+fn identify_primers_reports_rescued_bd_cell() {
     let mut cmd = Command::cargo_bin("identify_primers").unwrap();
 
     cmd.args([
@@ -51,10 +51,8 @@ fn identify_primers_reports_bd_whitelist_failure_reason() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("summary: no complete primer match"))
-        .stdout(predicate::str::contains(
-            "reason: BD_CELL: C1 is not exact and one-mismatch whitelist correction failed or was ambiguous",
-        ));
+        .stdout(predicate::str::contains("summary: 1 complete primer match(es)"))
+        .stdout(predicate::str::contains("cell_seq: GTTAATTCCATCTCAGAATGTACAACG"));
 }
 
 #[test]
@@ -69,7 +67,7 @@ fn identify_primers_accepts_sequence_file_and_summarizes_errors() {
         &path,
         concat!(
             "TGCTGGCACGTGAATCTCAGAAGACATGTACAACGACCAGCCATTTTTTT\n",
-            "GTTATTTTCGTGAATCTCAGAAGACATGTACAACGACCAGCCATTTTTTT\n",
+            "ANAGGAAACTCATGGTGCGTGGATCTGGCAATGAGCCTGCCGCCACTATCAGTCGTGGCATATGTGAGTCGTGATTATAGAGAGAGAGACCAAAATTCAAAGAGAAAATGGATTTTCAGGTGCAGATTTTCAGCTTCCTGCTAATCAGTGC\n",
         ),
     )
     .unwrap();
@@ -83,26 +81,24 @@ fn identify_primers_accepts_sequence_file_and_summarizes_errors() {
         .stdout(predicate::str::contains("valid: 1"))
         .stdout(predicate::str::contains("invalid: 1"))
         .stdout(predicate::str::contains(
-            "1\tBD_CELL: C1 is not exact and one-mismatch whitelist correction failed or was ambiguous",
+            "1\tBD_CELL: combined 8 bp linker has more than two mismatches",
         ));
 
     let _ = std::fs::remove_file(path);
 }
 
 #[test]
-fn identify_primers_recovers_reverse_complement_bd_igk_read() {
-    const REVERSE_IGK: &str = "ANAGGAAACTCTGGTGCGTGGCTCACCTAATGACGACGTGTCCACATTCGTAGTCCCCAGGCGTGGAGTCGTGATTATACTCTCTCTCCTGGCTCTCAGCTCAGGGGCCATTTCCCAGGCTGTTGTGACTCAGGAATCTGCACTCACCACA";
+fn identify_primers_rejects_mouse_igk_transcript() {
+    const MOUSE_IGK: &str = "ANAGGAAACTCATGGTGCGTGGATCTGGCAATGAGCCTGCCGCCACTATCAGTCGTGGCATATGTGAGTCGTGATTATAGAGAGAGAGACCAAAATTCAAAGAGAAAATGGATTTTCAGGTGCAGATTTTCAGCTTCCTGCTAATCAGTGC";
 
     let mut cmd = Command::cargo_bin("identify_primers").unwrap();
-    cmd.args(["--chemistry", "bd-v2-384", "--seq", REVERSE_IGK]);
+    cmd.args(["--chemistry", "bd-v2-384", "--seq", MOUSE_IGK]);
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("orientation: ReverseComplement"))
+        .stdout(predicate::str::contains("summary: no complete primer match"))
         .stdout(predicate::str::contains(
-            "cell_seq: GAGCCTGAGGTGCCTGGAGAGTATGAT",
+            "reason: BD_CELL: combined 8 bp linker has more than two mismatches",
         ))
-        .stdout(predicate::str::contains(
-            "summary: 1 complete primer match(es)",
-        ));
+        .stdout(predicate::str::contains("orientation: ReverseComplement").not());
 }
