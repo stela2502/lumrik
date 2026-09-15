@@ -145,7 +145,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bam_tide"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -534,7 +534,7 @@ checksum = "ef8ae57c4978a2acd8b869ce6b9ca1dfe817bff704c220209fdef2c0b75a01b9"
 
 [[package]]
 name = "data_table"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "fast_tag_mapper"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -811,7 +811,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "gtf_splice_index"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-str"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "clap",
  "onehot_dna",
@@ -1160,7 +1160,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lumrik-status"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
 ]
@@ -1178,7 +1178,7 @@ dependencies = [
 
 [[package]]
 name = "mapping_info"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "atty",
  "chrono",
@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "nelrune"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -1648,7 +1648,7 @@ dependencies = [
 
 [[package]]
 name = "read-tag-table"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1822,7 +1822,7 @@ dependencies = [
 
 [[package]]
 name = "sc-beacon"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1836,7 +1836,7 @@ dependencies = [
 
 [[package]]
 name = "sc-mapper"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -1851,7 +1851,7 @@ dependencies = [
 
 [[package]]
 name = "sc-te"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "sc-vdj"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "sc_primer"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1903,7 +1903,7 @@ dependencies = [
 
 [[package]]
 name = "scdata"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -2065,7 +2065,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "snp-index"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "flate2",
