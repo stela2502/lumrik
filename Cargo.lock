@@ -620,6 +620,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
+ "flate2",
  "int-to-str",
  "mapping_info",
  "scdata",
@@ -1890,8 +1891,10 @@ version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "clap",
+ "fast_tag_mapper",
  "flate2",
  "int-to-str",
+ "mapping_info",
  "onehot_dna",
  "predicates",
  "pretty_assertions",

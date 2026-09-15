@@ -21,6 +21,8 @@ flate2 = "1"
 onehot_dna =  { path = "../onehot_dna" }
 read-tag-table = { path = "../read-tag-table" }
 int-to-str = { path = "../int_to_str" }
+fast_tag_mapper = { path = "../fast_tag_mapper" }
+mapping_info = { path = "../mapping_info" }
 predicates = "3.1.4"
 assert_cmd = "2.2.2"
 

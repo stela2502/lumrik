@@ -13,8 +13,8 @@ pub struct FastMapperCli {
     #[arg(long)]
     pub tags: Option<PathBuf>,
 
-    /// Minimum supporting 8-mer hits
-    #[arg(long, default_value_t = 4)]
+    /// Minimum supporting exact 16-bp seed hits
+    #[arg(long, default_value_t = 20)]
     pub min_hits: u32,
 }
 

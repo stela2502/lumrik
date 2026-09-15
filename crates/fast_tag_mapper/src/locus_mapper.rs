@@ -6,7 +6,7 @@
 //! sequence.  `FastLocusMapper` keeps one global 8-mer index and filters hits
 //! by `locus_id` while mapping.  For sc-vdj the locus is the cell id.
 
-use crate::fast_mapper::encode_8mer_with_int_to_str;
+use crate::fast_mapper::encode_8mer;
 use crate::{FeatureEntry, MapStatus};
 
 const TABLE_SIZE: usize = 1 << 16;
@@ -95,7 +95,7 @@ impl FastLocusMapper {
         });
 
         for tag_pos in 0..=seq.len().saturating_sub(8) {
-            let Some(kmer) = encode_8mer_with_int_to_str(&seq[tag_pos..tag_pos + 8]) else {
+            let Some(kmer) = encode_8mer(&seq[tag_pos..tag_pos + 8]) else {
                 continue;
             };
             assert!(tag_pos <= u32::MAX as usize, "feature sequence is too long");
@@ -123,7 +123,7 @@ impl FastLocusMapper {
         let mut votes = Vec::<((usize, isize), u32)>::new();
 
         for query_pos in 0..=seq.len().saturating_sub(8) {
-            let Some(kmer) = encode_8mer_with_int_to_str(&seq[query_pos..query_pos + 8]) else {
+            let Some(kmer) = encode_8mer(&seq[query_pos..query_pos + 8]) else {
                 continue;
             };
 
@@ -175,11 +175,10 @@ impl FastLocusMapper {
             };
         }
 
-        let ((feature_index, start), hits) = best.pop().unwrap();
+        let ((feature_index, _start), hits) = best.pop().unwrap();
         MapStatus::Hit {
             feature_id: self.features[feature_index].feature.id,
             feature_index,
-            start,
             hits,
         }
     }

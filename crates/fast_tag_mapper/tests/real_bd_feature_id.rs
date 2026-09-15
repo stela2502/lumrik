@@ -1,6 +1,6 @@
 use fast_tag_mapper::{
-    encode_seq_positions_with_int_to_str, FastTagFeatureIndex, FastTagMapper, FeatureEntry,
-    MapStatus, Slot, HUMAN_SAMPLE_TAGS, MOUSE_SAMPLE_TAGS,
+    FastTagFeatureIndex, FastTagMapper, FeatureEntry, MapStatus, HUMAN_SAMPLE_TAGS,
+    MOUSE_SAMPLE_TAGS,
 };
 use mapping_info::MappingInfo;
 use scdata::FeatureIndex;
@@ -66,13 +66,11 @@ fn real_mouse_sample_read_from_conversation_maps_to_sampletag07_feature_id() {
     match mapper.map_status(read, &mut mi) {
         MapStatus::Hit {
             feature_id,
-            start,
             hits,
             ..
         } => {
             assert_eq!(feature_id, 7);
-            assert_eq!(start, 25);
-            assert!(hits >= 10);
+            assert!(hits >= 4);
         }
         other => panic!("expected hit, got {other:?}"),
     }
@@ -104,23 +102,7 @@ fn every_builtin_feature_maps_to_its_own_feature_id() {
 }
 
 #[test]
-fn encoded_positions_use_physical_bp_positions_and_return_feature_id() {
-    let mapper = FastTagMapper::mouse_samples();
-
-    let mut read = BD_PREFIX.to_vec();
-    read.extend_from_slice(MOUSE_SAMPLE_TAGS[6]);
-
-    let encoded = encode_seq_positions_with_int_to_str(&read);
-
-    let mut mi = info();
-    assert_eq!(
-        mapper.map_encoded_positions_feature_id(encoded, &mut mi),
-        Some(7)
-    );
-}
-
-#[test]
-fn duplicate_8mers_are_invalidated_not_used() {
+fn shared_8bp_prefixes_are_resolved_by_exact_16bp_confirmation() {
     let mut mapper = FastTagMapper::new().with_min_hits(1);
 
     mapper.add_feature(
@@ -132,13 +114,23 @@ fn duplicate_8mers_are_invalidated_not_used() {
         FeatureEntry::new(20, "b", "Antibody Capture"),
     );
 
-    let encoded =
-        fast_tag_mapper::fast_mapper::encode_8mer_with_int_to_str(b"AAAAAAAA").expect("valid kmer");
-
-    assert!(matches!(mapper.slot(encoded), Slot::Duplicate));
+    let mut mi = info();
+    assert_eq!(mapper.map_feature_id(b"TTTTAAAAAAAACCCCCCCCTTTT", &mut mi), Some(10));
 
     let mut mi = info();
-    assert_eq!(mapper.map_feature_id(b"TTTTAAAAAAAATTTT", &mut mi), None);
+    assert_eq!(mapper.map_feature_id(b"TTTTAAAAAAAAGGGGGGGGTTTT", &mut mi), Some(20));
+}
+
+#[test]
+fn mismatch_inside_16bp_seed_does_not_match() {
+    let mut mapper = FastTagMapper::new().with_min_hits(1);
+    mapper.add_feature(
+        b"AAAAAAAACCCCCCCC",
+        FeatureEntry::new(10, "a", "Antibody Capture"),
+    );
+
+    let mut mi = info();
+    assert_eq!(mapper.map_feature_id(b"AAAAAAAACCCCTCCC", &mut mi), None);
 }
 
 #[test]
@@ -146,15 +138,15 @@ fn tie_returns_none_for_hot_api() {
     let mut mapper = FastTagMapper::new().with_min_hits(1);
 
     mapper.add_feature(
-        b"ACGTACGT",
+        b"ACGTACGTACGTACGT",
         FeatureEntry::new(101, "tag1", "Antibody Capture"),
     );
     mapper.add_feature(
-        b"TGCATGCA",
+        b"TGCATGCATGCATGCA",
         FeatureEntry::new(202, "tag2", "Antibody Capture"),
     );
 
-    let read = b"NNNNACGTACGTNNNNTGCATGCA";
+    let read = b"NNNNACGTACGTACGTACGTNNNNTGCATGCATGCATGCA";
 
     let mut mi = info();
     assert_eq!(mapper.map_feature_id(read, &mut mi), None);

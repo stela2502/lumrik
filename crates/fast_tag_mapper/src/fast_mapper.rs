@@ -1,42 +1,35 @@
+//! Exact 16-bp supplemental-feature mapper.
+//!
+//! The first 8 bp of every 16-bp seed select one of 256 bins plus an 8-bit
+//! key inside that bin. The following 8 bp are stored as the exact
+//! confirmation word. There is no mismatch correction and no alignment-offset
+//! inference: an exact 16-bp seed contributes one vote to its feature.
+
 use int_to_str::IntToStr;
 use mapping_info::MappingInfo;
 use std::{
-    collections::HashMap,
     fs::File,
     io::{BufRead, BufReader},
     path::Path,
 };
 
-use crate::{FeatureEntry, TagEntry};
+use crate::{FeatureEntry, MapStatus};
 
-const K: usize = 8;
-const TABLE_SIZE: usize = 1 << 16;
+const SEED_BASES: usize = 16;
+const BIN_COUNT: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Slot {
-    Empty,
-    Hit(TagEntry),
-    Duplicate,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MapStatus {
-    Hit {
-        feature_id: u64,
-        feature_index: usize,
-        start: isize,
-        hits: u32,
-    },
-    NoHit,
-    Tie {
-        hits: u32,
-        feature_ids: Vec<u64>,
-    },
+struct SeedEntry {
+    /// Low byte of the encoded first 8 bp. The high byte selected the bin.
+    prefix_key: u8,
+    /// Encoded second 8 bp.
+    confirm: u16,
+    feature_index: u32,
 }
 
 #[derive(Debug, Clone)]
 pub struct FastTagMapper {
-    table: Vec<Slot>,
+    bins: [Vec<SeedEntry>; BIN_COUNT],
     features: Vec<FeatureEntry>,
     min_hits: u32,
 }
@@ -50,7 +43,7 @@ impl Default for FastTagMapper {
 impl FastTagMapper {
     pub fn new() -> Self {
         Self {
-            table: vec![Slot::Empty; TABLE_SIZE],
+            bins: std::array::from_fn(|_| Vec::new()),
             features: Vec::new(),
             min_hits: 4,
         }
@@ -81,19 +74,18 @@ impl FastTagMapper {
         self.features.iter().find(|f| f.id == feature_id)
     }
 
-    pub fn slot(&self, encoded_8mer: u16) -> Slot {
-        self.table[encoded_8mer as usize]
+    pub fn indexed_seed_count(&self) -> usize {
+        self.bins.iter().map(Vec::len).sum()
+    }
+
+    pub fn occupied_bin_count(&self) -> usize {
+        self.bins.iter().filter(|bin| !bin.is_empty()).count()
     }
 
     pub fn load_fasta<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<usize> {
         self.load_fasta_as(path, "Antibody Capture")
     }
 
-    /// Load FASTA features and assign every record the supplied feature type.
-    ///
-    /// Nelrune uses this to keep short-feature classes separate: for example
-    /// `hto.fa` is loaded with feature type `hto`, while the FASTA record names
-    /// remain the actual feature names.
     pub fn load_fasta_as<P, S>(&mut self, path: P, feature_type: S) -> std::io::Result<usize>
     where
         P: AsRef<Path>,
@@ -141,49 +133,47 @@ impl FastTagMapper {
 
     fn add_loaded_fasta_record(&mut self, name: String, seq: &[u8], feature_type: &str) -> usize {
         let feature_id = self.features().iter().map(|f| f.id).max().unwrap_or(0) + 1;
-
         self.add_feature(seq, FeatureEntry::new(feature_id, name, feature_type));
-
         1
     }
 
-    /// Add a feature/sample/FASTA record.
+    /// Add a feature/sample/FASTA record and index all exact 16-bp seeds.
     ///
-    /// Returns the internal feature index. The external Scdata feature id is
-    /// `feature.id`.
+    /// Repeated copies of the same 16-mer inside one feature are indexed only
+    /// once. A 16-mer shared by different features is retained for each feature
+    /// so later seed evidence can resolve the call or report a tie.
     pub fn add_feature(&mut self, seq: &[u8], feature: FeatureEntry) -> usize {
         let feature_index = self.features.len();
         self.features.push(feature);
 
-        for tag_pos in 0..=seq.len().saturating_sub(K) {
-            let Some(kmer) = encode_8mer_with_int_to_str(&seq[tag_pos..tag_pos + K]) else {
+        if seq.len() < SEED_BASES {
+            return feature_index;
+        }
+
+        for seed in Rolling16::new(seq) {
+            let (bin_index, prefix_key, confirm) = split_seed(seed);
+            let bin = &mut self.bins[bin_index];
+
+            if bin.iter().any(|entry| {
+                entry.prefix_key == prefix_key
+                    && entry.confirm == confirm
+                    && entry.feature_index == feature_index as u32
+            }) {
                 continue;
-            };
-
-            let new_entry = TagEntry {
-                feature_index,
-                tag_pos,
-            };
-
-            let slot = &mut self.table[kmer as usize];
-            match *slot {
-                Slot::Empty => *slot = Slot::Hit(new_entry),
-                Slot::Hit(old_entry) => {
-                    if old_entry != new_entry {
-                        *slot = Slot::Duplicate;
-                    }
-                }
-                Slot::Duplicate => {}
             }
+
+            bin.push(SeedEntry {
+                prefix_key,
+                confirm,
+                feature_index: feature_index as u32,
+            });
         }
 
         feature_index
     }
 
-    /// Hot API.
-    ///
-    /// Returns the Scdata-ready feature id only if a unique feature/start pair
-    /// surpassed the internal `min_hits` threshold.
+    /// Hot API: return the Scdata feature id for a unique feature with at least
+    /// `min_hits` exact 16-bp seed matches.
     pub fn map_feature_id(&self, seq: &[u8], mapping: &mut MappingInfo) -> Option<u64> {
         match self.map_status(seq, mapping) {
             MapStatus::Hit { feature_id, .. } => Some(feature_id),
@@ -191,23 +181,30 @@ impl FastTagMapper {
         }
     }
 
-    /// Debug/status API.
-    ///
-    /// The public decision rule is the same as `map_feature_id`.
     pub fn map_status(&self, seq: &[u8], mapping: &mut MappingInfo) -> MapStatus {
         mapping.start_ticker();
 
-        let mut votes: HashMap<(usize, isize), u32> = HashMap::new();
+        // Negative reads allocate nothing. This Vec allocates only after the
+        // first exact 16-bp seed hit, which is the rare path for supplemental
+        // feature mapping.
+        let mut votes: Vec<(u32, u32)> = Vec::new();
 
-        for query_pos in 0..=seq.len().saturating_sub(K) {
-            let Some(kmer) = encode_8mer_with_int_to_str(&seq[query_pos..query_pos + K]) else {
-                mapping.report("bd_fast_mapper_invalid_8mer");
-                continue;
-            };
+        for seed in Rolling16::new(seq) {
+            let (bin_index, prefix_key, confirm) = split_seed(seed);
 
-            if let Slot::Hit(entry) = self.table[kmer as usize] {
-                let start = query_pos as isize - entry.tag_pos as isize;
-                *votes.entry((entry.feature_index, start)).or_insert(0) += 1;
+            for entry in &self.bins[bin_index] {
+                if entry.prefix_key != prefix_key || entry.confirm != confirm {
+                    continue;
+                }
+
+                if let Some((_, hits)) = votes
+                    .iter_mut()
+                    .find(|(feature_index, _)| *feature_index == entry.feature_index)
+                {
+                    *hits += 1;
+                } else {
+                    votes.push((entry.feature_index, 1));
+                }
             }
         }
 
@@ -220,58 +217,11 @@ impl FastTagMapper {
         }
 
         mapping.stop_single_processor_time();
-
         status
     }
 
-    pub fn map_encoded_positions_feature_id<I>(
-        &self,
-        encoded: I,
-        mapping: &mut MappingInfo,
-    ) -> Option<u64>
-    where
-        I: IntoIterator<Item = (usize, u16)>,
-    {
-        match self.map_encoded_positions_status(encoded, mapping) {
-            MapStatus::Hit { feature_id, .. } => Some(feature_id),
-            MapStatus::NoHit | MapStatus::Tie { .. } => None,
-        }
-    }
-
-    pub fn map_encoded_positions_status<I>(
-        &self,
-        encoded: I,
-        mapping: &mut MappingInfo,
-    ) -> MapStatus
-    where
-        I: IntoIterator<Item = (usize, u16)>,
-    {
-        mapping.start_ticker();
-
-        let mut votes: HashMap<(usize, isize), u32> = HashMap::new();
-
-        for (query_pos, kmer) in encoded {
-            if let Slot::Hit(entry) = self.table[kmer as usize] {
-                let start = query_pos as isize - entry.tag_pos as isize;
-                *votes.entry((entry.feature_index, start)).or_insert(0) += 1;
-            }
-        }
-
-        let status = self.resolve_votes(votes);
-
-        match &status {
-            MapStatus::Hit { .. } => mapping.report("bd_fast_mapper_hit"),
-            MapStatus::NoHit => mapping.report("bd_fast_mapper_no_hit"),
-            MapStatus::Tie { .. } => mapping.report("bd_fast_mapper_tie"),
-        }
-
-        mapping.stop_single_processor_time();
-
-        status
-    }
-
-    fn resolve_votes(&self, votes: HashMap<(usize, isize), u32>) -> MapStatus {
-        let Some(best_hits) = votes.values().copied().max() else {
+    fn resolve_votes(&self, votes: Vec<(u32, u32)>) -> MapStatus {
+        let Some(best_hits) = votes.iter().map(|(_, hits)| *hits).max() else {
             return MapStatus::NoHit;
         };
 
@@ -279,18 +229,18 @@ impl FastTagMapper {
             return MapStatus::NoHit;
         }
 
-        let mut best: Vec<((usize, isize), u32)> = votes
+        let best = votes
             .into_iter()
             .filter(|(_, hits)| *hits == best_hits)
-            .collect();
+            .map(|(feature_index, _)| feature_index as usize)
+            .collect::<Vec<_>>();
 
         if best.len() != 1 {
-            best.sort_by_key(|((feature_index, start), _)| (*feature_index, *start));
-
-            let feature_ids = best
+            let mut feature_ids = best
                 .into_iter()
-                .map(|((feature_index, _), _)| self.features[feature_index].id)
-                .collect();
+                .map(|feature_index| self.features[feature_index].id)
+                .collect::<Vec<_>>();
+            feature_ids.sort_unstable();
 
             return MapStatus::Tie {
                 hits: best_hits,
@@ -298,43 +248,110 @@ impl FastTagMapper {
             };
         }
 
-        let ((feature_index, start), hits) = best.pop().unwrap();
-        let feature_id = self.features[feature_index].id;
-
+        let feature_index = best[0];
         MapStatus::Hit {
-            feature_id,
+            feature_id: self.features[feature_index].id,
             feature_index,
-            start,
-            hits,
+            hits: best_hits,
+        }
+    }
+
+}
+
+// Kept outside FastTagMapper so the hot representation and sequence encoding
+// remain separate modules/concepts rather than accumulating in lib.rs.
+fn split_seed(seed: u32) -> (usize, u8, u16) {
+    let first_8 = (seed >> 16) as u16;
+    (
+        (first_8 >> 8) as usize,
+        first_8 as u8,
+        seed as u16,
+    )
+}
+
+struct Rolling16<'a> {
+    seq: &'a [u8],
+    pos: usize,
+    word: u32,
+    valid_bases: usize,
+}
+
+impl<'a> Rolling16<'a> {
+    fn new(seq: &'a [u8]) -> Self {
+        Self {
+            seq,
+            pos: 0,
+            word: 0,
+            valid_bases: 0,
         }
     }
 }
 
-pub fn encode_8mer_with_int_to_str(seq: &[u8]) -> Option<u16> {
-    if seq.len() != K {
-        return None;
-    }
+impl Iterator for Rolling16<'_> {
+    type Item = u32;
 
-    if !seq.iter().all(|b| {
-        matches!(
-            b,
-            b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't' | b'N' | b'n'
-        )
-    }) {
-        return None;
-    }
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.pos < self.seq.len() {
+            let base = self.seq[self.pos];
+            self.pos += 1;
 
-    Some(IntToStr::new(seq).into_u16())
+            // Keep IntToStr as the canonical DNA -> 2-bit implementation.
+            // N is deliberately not accepted as an exact seed base: IntToStr
+            // maps N to A for compact storage, but this mapper must not turn an
+            // ambiguous base into an exact 16-bp match.
+            let bits = match base {
+                b'N' | b'n' => None,
+                _ => IntToStr::encode_binary(base).ok().map(u32::from),
+            };
+
+            match bits {
+                Some(bits) => {
+                    self.word = (self.word << 2) | bits;
+                    self.valid_bases += 1;
+                    if self.valid_bases >= SEED_BASES {
+                        return Some(self.word);
+                    }
+                }
+                None => {
+                    self.word = 0;
+                    self.valid_bases = 0;
+                }
+            }
+        }
+        None
+    }
 }
 
-pub fn encode_seq_positions_with_int_to_str(seq: &[u8]) -> Vec<(usize, u16)> {
-    let mut ret = Vec::new();
-
-    for pos in 0..=seq.len().saturating_sub(K) {
-        if let Some(kmer) = encode_8mer_with_int_to_str(&seq[pos..pos + K]) {
-            ret.push((pos, kmer));
-        }
+/// Shared by FastLocusMapper. This is intentionally only an encoder now; the
+/// old FastTagMapper 8-mer table and positional voting API are gone.
+pub(crate) fn encode_8mer(seq: &[u8]) -> Option<u16> {
+    if seq.len() != 8 {
+        return None;
     }
 
-    ret
+    let mut word = 0u16;
+    for &base in seq {
+        if matches!(base, b'N' | b'n') {
+            return None;
+        }
+        word = (word << 2) | u16::from(IntToStr::encode_binary(base).ok()?);
+    }
+    Some(word)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rolling_16_matches_expected_encoding() {
+        let seeds = Rolling16::new(b"ACGTACGTACGTACGTA").collect::<Vec<_>>();
+        assert_eq!(seeds.len(), 2);
+        assert_ne!(seeds[0], seeds[1]);
+    }
+
+    #[test]
+    fn invalid_base_resets_window() {
+        assert_eq!(Rolling16::new(b"AAAAAAAAAAAAAAAANAAAAAAAAAAAAAAAA").count(), 2);
+    }
 }
