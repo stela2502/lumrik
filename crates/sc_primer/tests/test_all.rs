@@ -993,3 +993,52 @@ fn none_grammar_treats_the_whole_read_as_insert() {
     assert_eq!(hit.insert_start, 0);
     assert_eq!(hit.insert_end, seq.len());
 }
+
+#[test]
+fn bd_vdj_uses_its_own_cc_handle_and_linkers() {
+    let detector = PrimerDetector::from_chemistry(Chemistry::BdV2_384Vdj).unwrap();
+    let wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384Vdj);
+    let cell = wl.cell_id_to_cassette(1).unwrap();
+    let mut seq = detector.grammar().synthesize(&cell, b"ACGTAC").unwrap();
+    seq.extend_from_slice(b"TATGCGTAGTAGGTATGACGTACGTACGT");
+    let qual = vec![40u8; seq.len()];
+
+    let hit = detector.detect_first(&seq, &qual).unwrap().unwrap();
+    assert_eq!(hit.chemistry_name, "bd-v2-384-vdj");
+    assert_eq!(hit.bd_cell_id, Some(1));
+    assert_eq!(hit.cell_seq.as_deref(), wl.cell_id_to_seq(1).as_deref());
+}
+
+#[test]
+fn multiple_chemistries_prefer_fast_fixed_anchor_but_detect_both_bd_structures() {
+    let detector = PrimerDetector::from_chemistries([
+        Chemistry::BdV2_384,
+        Chemistry::BdV2_384Vdj,
+    ])
+    .unwrap();
+
+    let names = detector.grammars().map(|g| g.name.as_str()).collect::<Vec<_>>();
+    assert_eq!(names, vec!["bd-v2-384-vdj", "bd-v2-384"]);
+
+    let vdj_wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384Vdj);
+    let vdj_cell = vdj_wl.cell_id_to_cassette(1).unwrap();
+    let vdj_grammar = detector
+        .grammars()
+        .find(|g| g.name == "bd-v2-384-vdj")
+        .unwrap();
+    let mut vdj = vdj_grammar.synthesize(&vdj_cell, b"ACGTAC").unwrap();
+    vdj.extend_from_slice(b"TATGCGTAGTAGGTATGACGTACGT");
+    let vdj_hit = detector.detect_first(&vdj, &vec![40u8; vdj.len()]).unwrap().unwrap();
+    assert_eq!(vdj_hit.chemistry_name, "bd-v2-384-vdj");
+
+    let dt_wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384);
+    let dt_cell = dt_wl.cell_id_to_cassette(2).unwrap();
+    let dt_grammar = detector
+        .grammars()
+        .find(|g| g.name == "bd-v2-384")
+        .unwrap();
+    let mut dt = dt_grammar.synthesize(&dt_cell, b"TGCATG").unwrap();
+    dt.extend_from_slice(b"ACGTACGTACGTACGT");
+    let dt_hit = detector.detect_first(&dt, &vec![40u8; dt.len()]).unwrap().unwrap();
+    assert_eq!(dt_hit.chemistry_name, "bd-v2-384");
+}

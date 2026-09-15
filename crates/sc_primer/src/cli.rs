@@ -8,8 +8,8 @@ pub struct PrimerCli {
     /// Preset single-cell chemistry.
     ///
     /// Ignored if --primer-structure is supplied.
-    #[arg(long, value_enum, default_value_t = Chemistry::default())]
-    pub chemistry: Chemistry,
+    #[arg(long, value_enum, num_args = 1.., default_values_t = [Chemistry::default()])]
+    pub chemistry: Vec<Chemistry>,
 
     /// Custom primer/read structure grammar.
     ///
@@ -35,13 +35,11 @@ pub struct PrimerCli {
 
 impl PrimerCli {
     pub fn detector(&self) -> Result<PrimerDetector, String> {
-        let grammar = if let Some(structure) = self.primer_structure.as_deref() {
-            Grammar::parse("custom", structure)?
+        let mut detector = if let Some(structure) = self.primer_structure.as_deref() {
+            PrimerDetector::from_grammar(Grammar::parse("custom", structure)?)?
         } else {
-            self.chemistry.grammar()?
+            PrimerDetector::from_chemistries(self.chemistry.iter().copied())?
         };
-
-        let mut detector = PrimerDetector::from_grammar(grammar)?;
         if let Some(path) = self.whitelist.as_deref() {
             detector = detector.with_whitelist_path(path, self.whitelist_mismatches)?;
         }

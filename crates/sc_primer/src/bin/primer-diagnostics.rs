@@ -144,6 +144,7 @@ fn bd_version(chemistry: Chemistry) -> Option<BdCellVersion> {
         Chemistry::BdV1 => Some(BdCellVersion::V1),
         Chemistry::BdV2_96 => Some(BdCellVersion::V2_96),
         Chemistry::BdV2_384 => Some(BdCellVersion::V2_384),
+        Chemistry::BdV2_384Vdj => Some(BdCellVersion::V2_384Vdj),
         _ => None,
     }
 }
@@ -582,7 +583,7 @@ fn main() -> Result<(), String> {
     }
 
     match bd_version(cli.chemistry) {
-        Some(BdCellVersion::V2_96 | BdCellVersion::V2_384) => run_bd(
+        Some(BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) => run_bd(
             &cli,
             bd_version(cli.chemistry).expect("matched BD chemistry"),
         ),

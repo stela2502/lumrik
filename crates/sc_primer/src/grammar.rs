@@ -65,6 +65,7 @@ impl Grammar {
                         BdCellVersion::V1 => RhapsodyWhitelist::bd_v1(),
                         BdCellVersion::V2_96 => RhapsodyWhitelist::bd_v2_96(),
                         BdCellVersion::V2_384 => RhapsodyWhitelist::bd_v2_384(),
+                        BdCellVersion::V2_384Vdj => RhapsodyWhitelist::bd_v2_384_vdj(),
                     }));
                 }
 

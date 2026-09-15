@@ -25,11 +25,56 @@ pub struct PrimerDetector {
     // source_cell -> (target_cell, count)
     primer_translation: HashMap<u64, (u64, usize)>,
     umi_translation: HashMap<u64, usize>,
+    alternates: Vec<PrimerDetector>,
 }
 
 impl PrimerDetector {
     pub fn from_chemistry(chemistry: Chemistry) -> PrimerResult<Self> {
         Self::from_grammar(chemistry.grammar()?)
+    }
+
+    /// Compile multiple independent chemistry grammars into one detector.
+    ///
+    /// Detection order is optimized independently of CLI order. Grammars with
+    /// a leading FIXED anchor are preferred because they can reject unrelated
+    /// reads before invoking more expensive barcode/cassette matching.
+    pub fn from_chemistries<I>(chemistries: I) -> PrimerResult<Self>
+    where
+        I: IntoIterator<Item = Chemistry>,
+    {
+        let grammars = chemistries
+            .into_iter()
+            .map(Chemistry::grammar)
+            .collect::<PrimerResult<Vec<_>>>()?;
+        Self::from_grammars(grammars)
+    }
+
+    pub fn from_grammars(mut grammars: Vec<Grammar>) -> PrimerResult<Self> {
+        if grammars.is_empty() {
+            return Err(PrimerError::invalid_grammar(
+                "at least one primer grammar is required",
+            ));
+        }
+
+        grammars.sort_by_key(Self::grammar_rejection_cost);
+        let mut compiled = grammars
+            .into_iter()
+            .map(Self::from_grammar)
+            .collect::<PrimerResult<Vec<_>>>()?;
+        let mut primary = compiled.remove(0);
+        primary.alternates = compiled;
+        Ok(primary)
+    }
+
+    fn grammar_rejection_cost(grammar: &Grammar) -> (u8, usize, usize) {
+        match grammar.ops.first() {
+            Some(GrammarOp::Fixed { seq, mismatches }) => {
+                (0, *mismatches, usize::MAX - seq.len())
+            }
+            _ if grammar.anchor_search().is_some() => (1, 0, 0),
+            Some(GrammarOp::Search { .. }) => (3, 0, 0),
+            _ => (2, 0, 0),
+        }
     }
 
     pub fn from_grammar(grammar: Grammar) -> PrimerResult<Self> {
@@ -41,11 +86,15 @@ impl PrimerDetector {
             detect_reverse_complement: true,
             primer_translation: HashMap::new(),
             umi_translation: HashMap::new(),
+            alternates: Vec::new(),
         })
     }
 
     pub fn with_reverse_complement_detection(mut self, enabled: bool) -> Self {
         self.detect_reverse_complement = enabled;
+        for detector in &mut self.alternates {
+            detector.detect_reverse_complement = enabled;
+        }
         self
     }
 
@@ -248,6 +297,15 @@ impl PrimerDetector {
     }
 
     pub fn detect_first(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Option<PrimerMatch>> {
+        for detector in std::iter::once(self).chain(self.alternates.iter()) {
+            if let Some(hit) = detector.detect_first_single(seq, qual)? {
+                return Ok(Some(hit));
+            }
+        }
+        Ok(None)
+    }
+
+    fn detect_first_single(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Option<PrimerMatch>> {
         Self::validate_read(seq, qual)?;
 
         if let Some(mut hit) = self.detect_first_forward(seq, qual, Orientation::Forward)? {
@@ -286,6 +344,16 @@ impl PrimerDetector {
     }
 
     pub fn detect_all(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Vec<PrimerMatch>> {
+        for detector in std::iter::once(self).chain(self.alternates.iter()) {
+            let hits = detector.detect_all_single(seq, qual)?;
+            if !hits.is_empty() {
+                return Ok(hits);
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    fn detect_all_single(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Vec<PrimerMatch>> {
         Self::validate_read(seq, qual)?;
 
         let hits = self.detect_all_forward(seq, qual, Orientation::Forward)?;
@@ -505,8 +573,21 @@ impl PrimerDetector {
         Ok("no complete primer match".to_string())
     }
 
+    /// Primary grammar after rejection-cost ordering. Kept for legacy callers
+    /// that configure one chemistry or need one representative grammar.
     pub fn grammar(&self) -> &Grammar {
         &self.grammar
+    }
+
+    pub fn grammars(&self) -> impl Iterator<Item = &Grammar> {
+        std::iter::once(&self.grammar).chain(self.alternates.iter().map(|d| &d.grammar))
+    }
+
+    /// Resolve the grammar that produced a PrimerMatch.
+    pub fn grammar_for_match(&self, hit: &PrimerMatch) -> &Grammar {
+        self.grammars()
+            .find(|grammar| grammar.name == hit.chemistry_name)
+            .unwrap_or(&self.grammar)
     }
 
     pub fn detect_one_orientation(
@@ -638,7 +719,7 @@ impl PrimerDetector {
                         Some(packed)
                             if matches!(
                                 rhapsody.version(),
-                                BdCellVersion::V2_96 | BdCellVersion::V2_384
+                                BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
                             ) =>
                         {
                             rhapsody.call_with_packed(seq, qual, packed, pos, search.0, search.1)

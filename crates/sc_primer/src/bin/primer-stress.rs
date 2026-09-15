@@ -27,8 +27,8 @@ struct Cli {
     #[arg(long)]
     r2: Option<PathBuf>,
 
-    #[arg(long, value_enum, default_value_t = Chemistry::BdV2_384)]
-    chemistry: Chemistry,
+    #[arg(long, value_enum, num_args = 1.., default_values_t = [Chemistry::BdV2_384])]
+    chemistry: Vec<Chemistry>,
 
     /// Custom primer/read structure grammar. Overrides --chemistry.
     #[arg(long)]
@@ -197,18 +197,18 @@ fn main() -> Result<(), String> {
     let elapsed = start.elapsed();
     if reads.is_empty() { return Err("FASTQ contained no reads".to_string()); }
     eprintln!("loaded {} pairs in {:.3}s ({:.0} pairs/s; I/O + decompression excluded from benchmarks)", reads.len(), elapsed.as_secs_f64(), reads.len() as f64 / elapsed.as_secs_f64());
-    eprintln!("chemistry: {}", cli.chemistry.name());
+    eprintln!("chemistry: {}", cli.chemistry.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "));
     if let Some(structure) = cli.primer_structure.as_deref() {
         eprintln!("primer structure override: {structure}");
     }
     eprintln!("iterations: {}", cli.iterations);
 
-    let grammar = if let Some(structure) = cli.primer_structure.as_deref() {
-        Grammar::parse("custom", structure)?
+    let detector = if let Some(structure) = cli.primer_structure.as_deref() {
+        PrimerDetector::from_grammar(Grammar::parse("custom", structure)?)
     } else {
-        cli.chemistry.grammar()?
-    };
-    let detector = PrimerDetector::from_grammar(grammar).map_err(|e| e.to_string())?;
+        PrimerDetector::from_chemistries(cli.chemistry.iter().copied())
+    }
+    .map_err(|e| e.to_string())?;
 
     if cli.failed_reads > 0 {
         let mut failed = 0usize;
@@ -252,7 +252,7 @@ fn main() -> Result<(), String> {
 
     bench("2. detect + get_cell + get_umi", &reads, cli.iterations, |r| {
         let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { return Ok(false); };
-        if detector.grammar().is_unbarcoded() { return Ok(true); }
+        if detector.grammar_for_match(&m).is_unbarcoded() { return Ok(true); }
         let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
         let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
         std::hint::black_box((cell.seq.len(), cell.qual.len(), umi.seq.len(), umi.qual.len()));
@@ -261,7 +261,7 @@ fn main() -> Result<(), String> {
 
     bench("3. detect + slices + normalized-cell clone", &reads, cli.iterations, |r| {
         let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { return Ok(false); };
-        if detector.grammar().is_unbarcoded() { return Ok(true); }
+        if detector.grammar_for_match(&m).is_unbarcoded() { return Ok(true); }
         let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
         let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
         let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
@@ -272,30 +272,30 @@ fn main() -> Result<(), String> {
     if cli.r2.is_some() {
         bench("4. detect + slices + clone + molecule_identity", &reads, cli.iterations, |r| {
             let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { return Ok(false); };
-            if detector.grammar().is_unbarcoded() {
-                let id = detector.grammar().molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+            if detector.grammar_for_match(&m).is_unbarcoded() {
+                let id = detector.grammar_for_match(&m).molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
                 std::hint::black_box(id);
                 return Ok(true);
             }
             let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
             let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
             let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
-            let id = detector.grammar().molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+            let id = detector.grammar_for_match(&m).molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
             std::hint::black_box(id);
             Ok(true)
         })?;
 
         bench("5. current identity path + duplicate IntToStr cell/UMI encoding", &reads, cli.iterations, |r| {
             let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { return Ok(false); };
-            if detector.grammar().is_unbarcoded() {
-                let id = detector.grammar().molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+            if detector.grammar_for_match(&m).is_unbarcoded() {
+                let id = detector.grammar_for_match(&m).molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
                 std::hint::black_box(id);
                 return Ok(true);
             }
             let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
             let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
             let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
-            let identity = detector.grammar().molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+            let identity = detector.grammar_for_match(&m).molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
             let cell_id = IntToStr::new(&normalized_cell).into_u64();
             let umi_id = IntToStr::new(&umi.seq).into_u64();
             std::hint::black_box((identity, cell_id, umi_id));
@@ -340,9 +340,9 @@ fn main() -> Result<(), String> {
             let mut this_called = 0usize;
             for r in &reads {
                 let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { continue; };
-                if detector.grammar().is_unbarcoded() {
+                if detector.grammar_for_match(&m).is_unbarcoded() {
                     if cli.r2.is_some() {
-                        let identity = detector.grammar().molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+                        let identity = detector.grammar_for_match(&m).molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
                         std::hint::black_box(identity);
                     }
                 } else {
@@ -350,7 +350,7 @@ fn main() -> Result<(), String> {
                     let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
                     let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
                     if cli.r2.is_some() {
-                        let identity = detector.grammar().molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+                        let identity = detector.grammar_for_match(&m).molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
                         let cell_id = IntToStr::new(&normalized_cell).into_u64();
                         let umi_id = IntToStr::new(&umi.seq).into_u64();
                         std::hint::black_box((identity, cell_id, umi_id));
@@ -425,7 +425,7 @@ fn main() -> Result<(), String> {
             PrimerDetector::from_grammar(Grammar::parse("custom", structure)?)
                 .map_err(|e| e.to_string())?
         } else {
-            PrimerDetector::from_chemistry(cli.chemistry).map_err(|e| e.to_string())?
+            PrimerDetector::from_chemistries(cli.chemistry.iter().copied()).map_err(|e| e.to_string())?
         }
         .with_reverse_complement_detection(false);
         bench("reference: forward-only detect_first", &reads, cli.iterations, |r| {

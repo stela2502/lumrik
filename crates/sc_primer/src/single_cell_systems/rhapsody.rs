@@ -15,9 +15,10 @@ use crate::whitelist_hash::WhitelistHash;
 const BD_V2_LINKER_1: &[u8; 4] = b"GTGA";
 const BD_V2_LINKER_2: &[u8; 4] = b"GACA";
 const BD_V2_LINKERS: &[u8; 8] = b"GTGAGACA";
+const BD_V2_VDJ_LINKER_1: &[u8; 4] = b"AATG";
+const BD_V2_VDJ_LINKER_2: &[u8; 4] = b"CCAC";
+const BD_V2_VDJ_LINKERS: &[u8; 8] = b"AATGCCAC";
 const BD_V2_MAX_LINKER_MISMATCHES: u32 = 2;
-const BD_V2_LINKER_1_ONEHOT: OneHot<4> = OneHot::from_bits(0x1484);
-const BD_V2_LINKER_2_ONEHOT: OneHot<4> = OneHot::from_bits(0x1214);
 
 fn nearest_hamming(query: &[u8], whitelist: &[&'static [u8; 9]]) -> u32 {
     whitelist
@@ -44,6 +45,7 @@ pub struct BdCoords {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BdCellVersion {
     V2_384,
+    V2_384Vdj,
     V2_96,
     V1,
 }
@@ -143,6 +145,7 @@ impl BdCellVersion {
             "v1" => Ok(Self::V1),
             "v2.96" => Ok(Self::V2_96),
             "v2.384" => Ok(Self::V2_384),
+            "v2.384-vdj" => Ok(Self::V2_384Vdj),
             other => Err(PrimerError::rhapsody(format!(
                 "unknown BD cell version '{other}'"
             ))),
@@ -152,7 +155,7 @@ impl BdCellVersion {
     pub fn cell_len(self) -> usize {
         match self {
             Self::V1 => 52,
-            Self::V2_96 | Self::V2_384 => 36,
+            Self::V2_96 | Self::V2_384 | Self::V2_384Vdj => 36,
         }
     }
 
@@ -160,21 +163,21 @@ impl BdCellVersion {
         match self {
             Self::V1 => 96,
             Self::V2_96 => 96,
-            Self::V2_384 => 384,
+            Self::V2_384 | Self::V2_384Vdj => 384,
         }
     }
 
     pub fn umi_len(self) -> usize {
         match self {
             Self::V1 => 8,
-            Self::V2_96 | Self::V2_384 => 6,
+            Self::V2_96 | Self::V2_384 | Self::V2_384Vdj => 6,
         }
     }
 
     pub fn unshifted_consumed_len(self) -> usize {
         match self {
             Self::V1 => 60,
-            Self::V2_96 | Self::V2_384 => 42,
+            Self::V2_96 | Self::V2_384 | Self::V2_384Vdj => 42,
         }
     }
 }
@@ -259,6 +262,7 @@ impl RhapsodyWhitelist {
             BdCellVersion::V1 => Self::bd_v1(),
             BdCellVersion::V2_96 => Self::bd_v2_96(),
             BdCellVersion::V2_384 => Self::bd_v2_384(),
+            BdCellVersion::V2_384Vdj => Self::bd_v2_384_vdj(),
         }
     }
 
@@ -279,6 +283,15 @@ impl RhapsodyWhitelist {
         )
     }
 
+    pub fn bd_v2_384_vdj() -> Self {
+        Self::new(
+            BdCellVersion::V2_384Vdj,
+            BD_V2_384_C1,
+            BD_V2_384_C2,
+            BD_V2_384_C3,
+        )
+    }
+
     pub fn version(&self) -> BdCellVersion {
         self.version
     }
@@ -291,7 +304,7 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> Option<RhapsodyCellCall> {
-        if matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+        if matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
             let packed = OneHotSequence::from_bytes(seq);
             return self.call_with_packed(seq, qual, &packed, offset, shift_start, shift_end);
         }
@@ -334,7 +347,7 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> Option<usize> {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
             return None;
         }
 
@@ -369,7 +382,7 @@ impl RhapsodyWhitelist {
         if seq.len() != qual.len() {
             return None;
         }
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
             return self.call(seq, qual, 0, shift_start, shift_end);
         }
 
@@ -399,7 +412,7 @@ impl RhapsodyWhitelist {
         _shift_start: usize,
         _shift_end: usize,
     ) -> Option<usize> {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
             return None;
         }
 
@@ -413,7 +426,7 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> String {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
             return "BD_CELL: no complete whitelist match".to_string();
         }
 
@@ -541,7 +554,7 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> Option<BdMismatchProfile> {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
             return None;
         }
 
@@ -592,7 +605,7 @@ impl RhapsodyWhitelist {
         linker_signature[4..].copy_from_slice(linker2);
 
         let observed_linker = OneHot::<8>::from_bytes(&linker_signature).ok()?;
-        let expected_linker = OneHot::<8>::from_bytes(BD_V2_LINKERS).ok()?;
+        let expected_linker = OneHot::<8>::from_bytes(self.v2_linkers()).ok()?;
         let c1 = OneHot::<9>::from_bytes(seq.get(coords.c1.0..coords.c1.1)?).ok()?;
         let c2 = OneHot::<9>::from_bytes(seq.get(coords.c2.0..coords.c2.1)?).ok()?;
         let c3 = OneHot::<9>::from_bytes(seq.get(coords.c3.0..coords.c3.1)?).ok()?;
@@ -613,7 +626,9 @@ impl RhapsodyWhitelist {
     fn v2_linker_mismatches_at(&self, packed: &OneHotSequence, base: usize) -> Option<u32> {
         let linker1 = packed.window::<4>(base.checked_add(9)?).ok()?;
         let linker2 = packed.window::<4>(base.checked_add(22)?).ok()?;
-        Some(linker1.mismatches(BD_V2_LINKER_1_ONEHOT) + linker2.mismatches(BD_V2_LINKER_2_ONEHOT))
+        let expected1 = OneHot::<4>::from_bytes(self.v2_linker_1()).ok()?;
+        let expected2 = OneHot::<4>::from_bytes(self.v2_linker_2()).ok()?;
+        Some(linker1.mismatches(expected1) + linker2.mismatches(expected2))
     }
 
     #[inline]
@@ -640,7 +655,7 @@ impl RhapsodyWhitelist {
             return None;
         }
 
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384) {
+        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
             return self.call_exact_shift(seq, qual, offset, shift);
         }
 
@@ -739,7 +754,7 @@ impl RhapsodyWhitelist {
         // unique nearest whitelist entry. There is deliberately no additional
         // barcode mismatch cutoff: only a tied nearest neighbour is rejected.
         let (c1_idx, c2_idx, c3_idx) = match self.version {
-            BdCellVersion::V2_96 | BdCellVersion::V2_384 => {
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => {
                 if !self.v2_linkers_pass(seq, &coords) {
                     return None;
                 }
@@ -757,7 +772,7 @@ impl RhapsodyWhitelist {
         };
 
         let diagnostics = match self.version {
-            BdCellVersion::V2_96 | BdCellVersion::V2_384 => {
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => {
                 self.v2_call_diagnostics(seq, &coords, c1_idx, c2_idx, c3_idx)
             }
             BdCellVersion::V1 => None,
@@ -877,16 +892,40 @@ impl RhapsodyWhitelist {
         let Ok(observed) = OneHot::<8>::from_bytes(&observed) else {
             return false;
         };
-        let expected =
-            OneHot::<8>::from_bytes(BD_V2_LINKERS).expect("builtin BD v2 linker must encode");
+        let expected = OneHot::<8>::from_bytes(self.v2_linkers())
+            .expect("builtin BD v2 linker must encode");
         observed.mismatches(expected) <= BD_V2_MAX_LINKER_MISMATCHES
+    }
+
+    #[inline]
+    fn v2_linker_1(&self) -> &'static [u8; 4] {
+        match self.version {
+            BdCellVersion::V2_384Vdj => BD_V2_VDJ_LINKER_1,
+            _ => BD_V2_LINKER_1,
+        }
+    }
+
+    #[inline]
+    fn v2_linker_2(&self) -> &'static [u8; 4] {
+        match self.version {
+            BdCellVersion::V2_384Vdj => BD_V2_VDJ_LINKER_2,
+            _ => BD_V2_LINKER_2,
+        }
+    }
+
+    #[inline]
+    fn v2_linkers(&self) -> &'static [u8; 8] {
+        match self.version {
+            BdCellVersion::V2_384Vdj => BD_V2_VDJ_LINKERS,
+            _ => BD_V2_LINKERS,
+        }
     }
 
     pub fn create_cell_cassette(&self, c1_idx: usize, c2_idx: usize, c3_idx: usize) -> Vec<u8> {
         let (c1s, c2s, c3s) = match self.version {
             BdCellVersion::V1 => (BD_V2_96_C1, BD_V2_96_C2, BD_V2_96_C3),
             BdCellVersion::V2_96 => (BD_V2_96_C1, BD_V2_96_C2, BD_V2_96_C3),
-            BdCellVersion::V2_384 => (BD_V2_384_C1, BD_V2_384_C2, BD_V2_384_C3),
+            BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => (BD_V2_384_C1, BD_V2_384_C2, BD_V2_384_C3),
         };
 
         let mut seq = Vec::new();
@@ -901,11 +940,11 @@ impl RhapsodyWhitelist {
                 seq.extend_from_slice(b"A");
             }
 
-            BdCellVersion::V2_96 | BdCellVersion::V2_384 => {
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => {
                 seq.extend_from_slice(c1s[c1_idx]);
-                seq.extend_from_slice(BD_V2_LINKER_1);
+                seq.extend_from_slice(self.v2_linker_1());
                 seq.extend_from_slice(c2s[c2_idx]);
-                seq.extend_from_slice(BD_V2_LINKER_2);
+                seq.extend_from_slice(self.v2_linker_2());
                 seq.extend_from_slice(c3s[c3_idx]);
                 seq.extend_from_slice(b"A");
             }
@@ -923,7 +962,7 @@ impl RhapsodyWhitelist {
                 umi: (base + 52, base + 60),
                 consumed: base + 60,
             }),
-            BdCellVersion::V2_96 | BdCellVersion::V2_384 => Some(BdCoords {
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => Some(BdCoords {
                 c1: (base, base + 9),
                 c2: (base + 13, base + 22),
                 c3: (base + 26, base + 35),

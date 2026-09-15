@@ -87,7 +87,8 @@ impl IlluminaPartial {
             }
         };
 
-        let unbarcoded = config.primer.grammar().is_unbarcoded();
+        let matched_grammar = config.primer.grammar_for_match(&primer_match);
+        let unbarcoded = matched_grammar.is_unbarcoded();
 
         let cell = if unbarcoded {
             None
@@ -125,9 +126,7 @@ impl IlluminaPartial {
             }))
         };
 
-        let identity = config
-            .primer
-            .grammar()
+        let identity = matched_grammar
             .molecule_identity(
                 normalized_cell_seq.as_deref(),
                 umi.as_ref().map(|x| x.seq.as_slice()),

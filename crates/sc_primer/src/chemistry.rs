@@ -42,8 +42,13 @@ pub enum Chemistry {
     /// BD Rhapsody v2 96-cell combinatorial barcode layout.
     BdV2_96,
 
-    /// BD Rhapsody v2 384-cell combinatorial barcode layout.
+    /// BD Rhapsody v2 384-cell combinatorial barcode layout (Enhanced dT).
     BdV2_384,
+
+    /// BD Rhapsody Enhanced Custom Capture TCR/BCR layout.
+    ///
+    /// Starts with the CC PCR handle and uses the AATG/CCAC linker pair.
+    BdV2_384Vdj,
 }
 
 impl Chemistry {
@@ -61,6 +66,7 @@ impl Chemistry {
             "bd-v1" => Ok(Self::BdV1),
             "bd-v2-96" => Ok(Self::BdV2_96),
             "bd-v2-384" => Ok(Self::BdV2_384),
+            "bd-v2-384-vdj" => Ok(Self::BdV2_384Vdj),
 
             other => Err(PrimerError::unknown_chemistry(other)),
         }
@@ -78,6 +84,7 @@ impl Chemistry {
             Self::BdV1 => "bd-v1",
             Self::BdV2_96 => "bd-v2-96",
             Self::BdV2_384 => "bd-v2-384",
+            Self::BdV2_384Vdj => "bd-v2-384-vdj",
         }
     }
 
@@ -100,6 +107,11 @@ impl Chemistry {
             Self::BdV2_96 => Grammar::parse(self.name(), "SEARCH:0..4+BD_CELL:v2.96+POLYT:min=0"),
 
             Self::BdV2_384 => Grammar::parse(self.name(), "SEARCH:0..4+BD_CELL:v2.384+POLYT:min=0"),
+
+            Self::BdV2_384Vdj => Grammar::parse(
+                self.name(),
+                "FIXED:ACAGGAAACTCATGGTGCGT:mm=2+BD_CELL:v2.384-vdj",
+            ),
         }
     }
 }
