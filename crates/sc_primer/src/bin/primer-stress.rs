@@ -5,7 +5,7 @@ use flate2::Compression;
 use int_to_str::IntToStr;
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use mapping_info::MappingInfo;
-use sc_primer::{Chemistry, PrimerDetector};
+use sc_primer::{Chemistry, Grammar, PrimerDetector};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -30,11 +30,19 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = Chemistry::BdV2_384)]
     chemistry: Chemistry,
 
+    /// Custom primer/read structure grammar. Overrides --chemistry.
+    #[arg(long)]
+    primer_structure: Option<String>,
+
     #[arg(long, default_value_t = 250_000)]
     max_reads: usize,
 
     #[arg(long, default_value_t = 3)]
     iterations: usize,
+
+    /// Print the first N read pairs for which primer detection fails.
+    #[arg(long, default_value_t = 0)]
+    failed_reads: usize,
 
     #[arg(long, default_value_t = false)]
     no_forward_only: bool,
@@ -58,6 +66,7 @@ struct Cli {
 
 #[derive(Clone)]
 struct ReadPair {
+    r1_id: Vec<u8>,
     r1_seq: Vec<u8>,
     r1_qual: Vec<u8>,
     r2_id: Vec<u8>,
@@ -99,12 +108,12 @@ fn load_reads(r1: &Path, r2: Option<&Path>, max_reads: usize) -> Result<Vec<Read
     let mut r2_reader = match r2 { Some(path) => Some(open_fastq(path)?), None => None };
     let mut reads = Vec::with_capacity(if max_reads == 0 { 250_000 } else { max_reads });
     while max_reads == 0 || reads.len() < max_reads {
-        let Some((_r1_id, r1_seq, r1_qual)) = next_fastq(&mut r1_reader, reads.len())? else { break; };
+        let Some((r1_id, r1_seq, r1_qual)) = next_fastq(&mut r1_reader, reads.len())? else { break; };
         let (r2_id, r2_seq, r2_qual) = if let Some(reader) = r2_reader.as_mut() {
             let Some((id, seq, qual)) = next_fastq(reader, reads.len())? else { return Err("R2 ended before R1".to_string()); };
             (id, seq, qual)
         } else { (Vec::new(), Vec::new(), Vec::new()) };
-        reads.push(ReadPair { r1_seq, r1_qual, r2_id, r2_seq, r2_qual });
+        reads.push(ReadPair { r1_id, r1_seq, r1_qual, r2_id, r2_seq, r2_qual });
     }
     Ok(reads)
 }
@@ -189,9 +198,39 @@ fn main() -> Result<(), String> {
     if reads.is_empty() { return Err("FASTQ contained no reads".to_string()); }
     eprintln!("loaded {} pairs in {:.3}s ({:.0} pairs/s; I/O + decompression excluded from benchmarks)", reads.len(), elapsed.as_secs_f64(), reads.len() as f64 / elapsed.as_secs_f64());
     eprintln!("chemistry: {}", cli.chemistry.name());
+    if let Some(structure) = cli.primer_structure.as_deref() {
+        eprintln!("primer structure override: {structure}");
+    }
     eprintln!("iterations: {}", cli.iterations);
 
-    let detector = PrimerDetector::from_chemistry(cli.chemistry).map_err(|e| e.to_string())?;
+    let grammar = if let Some(structure) = cli.primer_structure.as_deref() {
+        Grammar::parse("custom", structure)?
+    } else {
+        cli.chemistry.grammar()?
+    };
+    let detector = PrimerDetector::from_grammar(grammar).map_err(|e| e.to_string())?;
+
+    if cli.failed_reads > 0 {
+        let mut failed = 0usize;
+        eprintln!("failed primer detections (first {}):", cli.failed_reads);
+        for (idx, r) in reads.iter().enumerate() {
+            if detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?.is_some() {
+                continue;
+            }
+            failed += 1;
+            eprintln!("--- failed read {} (input record {}) ---", failed, idx + 1);
+            eprintln!("R1 id: {}", String::from_utf8_lossy(&r.r1_id));
+            eprintln!("R1: {}", String::from_utf8_lossy(&r.r1_seq));
+            if cli.r2.is_some() {
+                eprintln!("R2 id: {}", String::from_utf8_lossy(&r.r2_id));
+                eprintln!("R2: {}", String::from_utf8_lossy(&r.r2_seq));
+            }
+            if failed == cli.failed_reads {
+                break;
+            }
+        }
+        eprintln!("printed {failed} failed primer detections");
+    }
 
     let mut feature_mapper = FastTagMapper::new();
     let _= match cli.feature_set {
@@ -382,7 +421,13 @@ fn main() -> Result<(), String> {
     }
 
     if !cli.no_forward_only {
-        let forward = PrimerDetector::from_chemistry(cli.chemistry).map_err(|e| e.to_string())?.with_reverse_complement_detection(false);
+        let forward = if let Some(structure) = cli.primer_structure.as_deref() {
+            PrimerDetector::from_grammar(Grammar::parse("custom", structure)?)
+                .map_err(|e| e.to_string())?
+        } else {
+            PrimerDetector::from_chemistry(cli.chemistry).map_err(|e| e.to_string())?
+        }
+        .with_reverse_complement_detection(false);
         bench("reference: forward-only detect_first", &reads, cli.iterations, |r| {
             Ok(forward.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?.is_some())
         })?;
