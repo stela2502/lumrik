@@ -12,3 +12,4 @@ perf.data*
 Log.out
 nelrune_test_out/
 bd_diagnostics.tsv
+*.orig
