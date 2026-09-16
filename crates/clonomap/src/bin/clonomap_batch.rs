@@ -38,7 +38,7 @@ struct Args {
     #[arg(short, long)]
     outdir: Option<PathBuf>,
 
-    /// Enable plotting (requires --features plot)
+    /// Enable SVG plotting
     #[arg(long)]
     plots: bool,
 
@@ -239,16 +239,15 @@ fn run_clonomap_clone(seqs: &[String], outdir: &Path, args: &Args) -> anyhow::Re
         .map_err(|e| format!("Failed to write AA rows: {}", e))?;
 
     // === Optional plots ===
-    #[cfg(feature = "plot")]
-    if args.plots {
+        if args.plots {
         model
             .pca
-            .plot_2d_clusters(&model.tree, outdir.join("pca.png").to_str().unwrap())
+            .plot_2d_clusters(&model.tree, outdir.join("pca.svg").to_str().unwrap())
             .map_err(|e| format!("Failed to write PCA plot: {}", e))?;
 
         model
             .tree
-            .plot_2d(model.coords(), outdir.join("tree.png").to_str().unwrap())
+            .plot_2d(model.coords(), outdir.join("tree.svg").to_str().unwrap())
             .map_err(|e| format!("Failed to write tree plot: {}", e))?;
     }
 

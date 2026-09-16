@@ -5,7 +5,6 @@ use linfa::dataset::DatasetBase;
 use linfa::prelude::Transformer;
 use linfa::traits::Fit;
 use linfa_reduction::Pca;
-#[cfg(feature = "plot")]
 use plotters::prelude::*;
 use std::collections::HashMap;
 use std::error::Error;
@@ -142,8 +141,7 @@ impl PcaModel {
     pub fn components(&self) -> &Array2<f32> {
         &self.components
     }
-    #[cfg(feature = "plot")]
-    pub fn plot_2d_clusters(
+        pub fn plot_2d_clusters(
         &self,
         tree: &crate::MstTree,
         outfile: &str,
@@ -178,7 +176,7 @@ impl PcaModel {
         ];
 
         // --- chart setup ---
-        let root = BitMapBackend::new(outfile, (900, 900)).into_drawing_area();
+        let root = SVGBackend::new(outfile, (900, 900)).into_drawing_area();
         root.fill(&WHITE)?;
 
         let x = coords.column(0);
@@ -214,11 +212,10 @@ impl PcaModel {
         root.present()?;
         Ok(())
     }
-    #[cfg(feature = "plot")]
-    pub fn plot_2d(&self, outfile: &str) -> Result<(), Box<dyn std::error::Error>> {
+        pub fn plot_2d(&self, outfile: &str) -> Result<(), Box<dyn std::error::Error>> {
         use plotters::prelude::*;
 
-        let root = BitMapBackend::new(outfile, (900, 900)).into_drawing_area();
+        let root = SVGBackend::new(outfile, (900, 900)).into_drawing_area();
         root.fill(&WHITE)?;
 
         let x = self.coords.column(0);

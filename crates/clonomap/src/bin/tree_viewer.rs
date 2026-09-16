@@ -1,5 +1,4 @@
 //tree_viewer.rs
-#[cfg(feature = "plot")]
 use plotters::prelude::*;
 use std::env;
 use std::error::Error;
@@ -50,12 +49,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // Compute bounds for plotting
-    #[cfg(feature = "plot")]
-    let (min_x, max_x, min_y, max_y) = bounds(&points);
+        let (min_x, max_x, min_y, max_y) = bounds(&points);
 
     // Draw to SVG
-    #[cfg(feature = "plot")]
-    draw_svg(
+        draw_svg(
         &out_path, &points, &labels, &edges, min_x, max_x, min_y, max_y,
     )?;
 
@@ -136,7 +133,6 @@ fn layout_tree(
 }
 
 /// Draw the tree to SVG using plotters
-#[cfg(feature = "plot")]
 fn draw_svg(
     path: &str,
     points: &[(f64, f64)],

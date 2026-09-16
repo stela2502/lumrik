@@ -11,7 +11,11 @@ anyhow = "1"
 clap = { workspace = true }
 statrs = "0.18"
 rayon = "1.12.0"
-plotters = "0.3"
+plotters = {
+    version = "0.3",
+    default-features = false,
+    features = ["svg_backend", "line_series"]
+}
 
 mapping_info = { path = "../mapping_info" }
 scdata = { path = "../scdata" }

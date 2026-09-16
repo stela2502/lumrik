@@ -11,4 +11,4 @@ clap = { workspace = true }
 
 rayon = "1"
 ndarray = "0.15"
-clonomap = { path = "../clonomap", features = ["plot"] }
+clonomap = { path = "../clonomap" }

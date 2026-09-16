@@ -1,7 +1,6 @@
 use crate::CloneData;
 use ndarray::ArrayView1;
 #[allow(dead_code, unused)] // creates a warning otherwise
-#[cfg(feature = "plot")]
 use plotters::prelude::*;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -47,8 +46,7 @@ impl MstTree {
     /// `categories` and `abundance` are row-aligned with the cached unique sequence
     /// states. Mixed nodes are outlined so a dominant category never hides that the
     /// same receptor state was observed with more than one biological annotation.
-    #[cfg(feature = "plot")]
-    pub fn plot_rooted_annotated_cached(
+        pub fn plot_rooted_annotated_cached(
         &self,
         n_nodes: usize,
         root_node: usize,
@@ -234,8 +232,7 @@ impl MstTree {
 
     /// Plot the cached rooted MST with a continuous per-state annotation.
     /// No PCA, encoding, alignment, or MST construction is repeated here.
-    #[cfg(feature = "plot")]
-    pub fn plot_rooted_continuous_cached(
+        pub fn plot_rooted_continuous_cached(
         &self,
         n_nodes: usize,
         root_node: usize,
@@ -661,15 +658,14 @@ impl MstTree {
             .collect()
     }
 
-    #[cfg(feature = "plot")]
-    pub fn plot_2d(
+        pub fn plot_2d(
         &self,
         coords: &ndarray::Array2<f32>,
         outfile: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use plotters::prelude::*;
 
-        let root = BitMapBackend::new(outfile, (900, 900)).into_drawing_area();
+        let root = SVGBackend::new(outfile, (900, 900)).into_drawing_area();
         root.fill(&WHITE)?;
 
         let x = coords.column(0);

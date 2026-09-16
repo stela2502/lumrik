@@ -5,8 +5,8 @@ pca_tree <- function(seqs, k = 30, prefix, plots = TRUE) {
     input_file  <- paste0(prefix, "_input.txt")
     coords_file <- paste0(prefix, "_pca.tsv")
     edges_file  <- paste0(prefix, "_tree.tsv")
-    pca_plot    <- paste0(prefix, "_pca.png")
-    tree_plot   <- paste0(prefix, "_tree.png")
+    pca_plot    <- paste0(prefix, "_pca.svg")
+    tree_plot   <- paste0(prefix, "_tree.svg")
 
     writeLines(seqs, input_file)
 

@@ -65,21 +65,15 @@ For new Lumrik V(D)J analyses, prefer Valkyrn as the entry point because it uses
 
 ## Plotting
 
-Plotting is optional at the ClonoMap crate level:
-
-```bash
-cargo build --release -p clonomap --features plot
-```
-
-Valkyrn enables the plotting feature because its current large-family test writes PCA and MST PNGs under:
+ClonoMap includes SVG plotting support by default. Plotters is built with the SVG backend only, avoiding bitmap/fontconfig dependencies. Large-family analyses write PCA and MST SVGs under:
 
 ```text
 valkyrn/clonomap/<HC-family>/
 ├── coords.tsv
 ├── tree.tsv
 ├── rows.tsv
-├── pca.png
-└── mst.png
+├── pca.svg
+└── mst.svg
 ```
 
 `valkyrn/clonomap/clonomap_summary.tsv` records which large families were analysed or skipped.

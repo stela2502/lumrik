@@ -86,8 +86,8 @@ valkyrn/
 │       ├── coords.tsv
 │       ├── tree.tsv
 │       ├── rows.tsv
-│       ├── pca.png
-│       └── mst.png
+│       ├── pca.svg
+│       └── mst.svg
 └── structure_candidates/
     ├── manifest.tsv
     └── paired_receptors.fasta
