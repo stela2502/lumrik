@@ -4,6 +4,8 @@ pub mod caller;
 pub mod cell_guide_assignments;
 pub mod dataset;
 pub mod guide_stats;
+pub mod knee_counts;
+pub mod count_qc;
 pub mod model;
 pub mod stats;
 
@@ -23,3 +25,6 @@ pub use dataset::{GuideDataset, GuideObservation};
 pub use guide_stats::{MultiGuideGapStats, MultiGuideGapStatsTable};
 pub use model::{FitConfig, FittedModel, GuideExpressionModel};
 pub use runner::run_from_scdata;
+
+pub use knee_counts::{KneeCountFit, fit_knee_counts};
+pub use count_qc::write_count_qc;

@@ -8,12 +8,26 @@ use clap::{Args, ValueEnum};
 
 use read_tag_table::ReadTagTableCli;
 
-use crate::cli::AnalysisType;
+use crate::{
+    cli::AnalysisType,
+    quantification::bam_collector::config::{
+        DEFAULT_ALLOWED_INTRONIC_GAP_SIZE, DEFAULT_MAX_3P_OVERHANG_BP,
+        DEFAULT_MAX_5P_OVERHANG_BP, DEFAULT_SNP_MIN_ANCHOR,
+    },
+};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum QuantMode {
     Gene,
     Transcript,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum CellCallingMode {
+    /// Historical fixed UMI threshold (`--min-cell-counts`).
+    Fixed,
+    /// sc-beacon two-Gaussian mixture over log10 per-cell exonic UMI totals.
+    Beacon,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,9 +96,15 @@ pub struct QuantCli {
     #[arg(long)]
     pub max_reads: Option<usize>,
 
-    /// Min read counts per reported cell (debug/dev)
+    /// Cell-calling strategy. `fixed` preserves the historical hard UMI cutoff;
+    /// `beacon` uses sc-beacon barcode-rank knee detection.
+    #[arg(long, value_enum, default_value_t = CellCallingMode::Fixed)]
+    pub cell_calling: CellCallingMode,
+
+    /// Minimum UMI count for `--cell-calling fixed`.
     #[arg(long, default_value_t = 400)]
     pub min_cell_counts: usize,
+
 
     /// Optional reference genome FASTA.
     ///
@@ -103,7 +123,7 @@ pub struct QuantCli {
     pub vcf: Option<PathBuf>,
 
     /// Minimum SNP anchor/support passed to snp_index.match_read().
-    #[arg(long, default_value_t = 20)]
+    #[arg(long, default_value_t = DEFAULT_SNP_MIN_ANCHOR)]
     pub snp_min_anchor: u8,
 
     /// Disable genome-based AlignedRead refinement even if --genome is supplied.
@@ -122,15 +142,15 @@ pub struct QuantCli {
     pub require_exact_junction_chain: bool,
 
     /// Maximum allowed 5′ overhang (bp). If exceeded -> OverhangTooLarge.
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = DEFAULT_MAX_5P_OVERHANG_BP)]
     pub max_5p_overhang_bp: u32,
 
     /// Maximum allowed 3′ overhang (bp). If exceeded -> OverhangTooLarge.
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = DEFAULT_MAX_3P_OVERHANG_BP)]
     pub max_3p_overhang_bp: u32,
 
     /// Allowed sequencing error gap. If exceeded -> JunctionMismatch.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = DEFAULT_ALLOWED_INTRONIC_GAP_SIZE)]
     pub allowed_intronic_gap_size: u32,
 
     /// Optional read grammar for BAMs without cell/UMI metadata.

@@ -104,12 +104,19 @@ impl<'a> ChunkProcessor<'a> {
         let feature_id = hit.gene_id as u64;
         let feature_umi = GeneUmiHash(feature_id, job.umi);
 
-        if hit.best_hit.class == MatchClass::Intronic {
-            out.intron
-                .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
-        } else {
-            out.gene
-                .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
+        match hit.best_hit.class {
+            MatchClass::Compatible | MatchClass::ExactJunctionChain => {
+                out.gene
+                    .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
+            }
+            MatchClass::Intronic => {
+                out.intron
+                    .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
+            }
+            MatchClass::JunctionMismatch
+            | MatchClass::OverhangTooLarge
+            | MatchClass::NoOverlap
+            | MatchClass::StrandMismatch => {}
         }
     }
 
@@ -127,12 +134,19 @@ impl<'a> ChunkProcessor<'a> {
         let feature_id = hit.transcript_id as u64;
         let feature_umi = GeneUmiHash(feature_id, job.umi);
 
-        if hit.hit.class == MatchClass::Intronic {
-            out.intron
-                .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
-        } else {
-            out.gene
-                .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
+        match hit.hit.class {
+            MatchClass::Compatible | MatchClass::ExactJunctionChain => {
+                out.gene
+                    .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
+            }
+            MatchClass::Intronic => {
+                out.intron
+                    .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
+            }
+            MatchClass::JunctionMismatch
+            | MatchClass::OverhangTooLarge
+            | MatchClass::NoOverlap
+            | MatchClass::StrandMismatch => {}
         }
     }
 

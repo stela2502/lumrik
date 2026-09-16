@@ -2379,6 +2379,7 @@ dependencies = [
  "clap",
  "int-to-str",
  "mapping_info",
+ "plotters",
  "rayon",
  "scdata",
  "statrs",

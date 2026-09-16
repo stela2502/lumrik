@@ -344,6 +344,32 @@ impl Scdata {
             .collect()
     }
 
+    /// Return the total number of unique feature/UMI observations currently stored.
+    ///
+    /// Each `CellData::seen` entry represents one unique `(feature_id, UMI)`
+    /// molecule within a cell, so this is the UMI total represented by the
+    /// current matrix state.
+    pub fn total_umis(&self) -> usize {
+        self.values().map(|cell| cell.total_umis()).sum()
+    }
+
+    /// Return `(cell_id, total_umis)` for every currently stored cell.
+    ///
+    /// The result is intentionally unfiltered and is suitable for external
+    /// cell-calling models such as sc-beacon.
+    pub fn cell_umi_counts(&self) -> Vec<(u64, u32)> {
+        self.values()
+            .map(|cell| (cell.name, cell.total_umis().min(u32::MAX as usize) as u32))
+            .collect()
+    }
+
+    /// Return the number of cells with at least `min_count` observed UMIs.
+    ///
+    /// This is non-destructive and is intended for pre-filter cell accounting.
+    pub fn cells_with_min_umis(&self, min_count: usize) -> usize {
+        self.passing_cell_set_by_umi(min_count).len()
+    }
+
     /// Return the set of cell ids with at least `min_count` UMIs.
     fn passing_cell_set_by_umi(&self, min_count: usize) -> HashSet<u64> {
         let keys = self.keys();

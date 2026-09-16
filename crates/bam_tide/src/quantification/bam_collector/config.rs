@@ -10,6 +10,11 @@ use crate::{
 };
 use read_tag_table::ReadTagTableCli;
 
+pub const DEFAULT_MAX_5P_OVERHANG_BP: u32 = 0;
+pub const DEFAULT_MAX_3P_OVERHANG_BP: u32 = 0;
+pub const DEFAULT_ALLOWED_INTRONIC_GAP_SIZE: u32 = 0;
+pub const DEFAULT_SNP_MIN_ANCHOR: u8 = 5;
+
 #[derive(Debug, Clone, Args)]
 pub struct BamCollectorConfig {
     #[arg(long, help = "Splice index used for gene/transcript assignment.")]
@@ -72,24 +77,28 @@ pub struct BamCollectorConfig {
 
     #[arg(
         long,
-        default_value_t = 0,
+        default_value_t = DEFAULT_MAX_5P_OVERHANG_BP,
         help = "Maximum allowed 5-prime overhang in bp."
     )]
     pub max_5p_overhang_bp: u32,
 
     #[arg(
         long,
-        default_value_t = 0,
+        default_value_t = DEFAULT_MAX_3P_OVERHANG_BP,
         help = "Maximum allowed 3-prime overhang in bp."
     )]
     pub max_3p_overhang_bp: u32,
 
-    #[arg(long, default_value_t = 0, help = "Maximum allowed intronic gap size.")]
+    #[arg(
+        long,
+        default_value_t = DEFAULT_ALLOWED_INTRONIC_GAP_SIZE,
+        help = "Maximum allowed intronic gap size."
+    )]
     pub allowed_intronic_gap_size: u32,
 
     #[arg(
         long,
-        default_value_t = 5,
+        default_value_t = DEFAULT_SNP_MIN_ANCHOR,
         help = "Minimum aligned anchor length required for SNP support."
     )]
     pub snp_min_anchor: u8,

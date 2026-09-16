@@ -140,50 +140,56 @@ fn run(args: Cli) -> Result<()> {
     let mut data = result.data;
     progress.stop_timer("nelrune/quantification");
 
-    progress.stage("writing quantification");
-    progress.start_timer("nelrune/writing");
     let index = SpliceIndex::load(&args.bam_collector.index).with_context(|| {
         format!(
             "reading splice index {} for export",
             args.bam_collector.index.display()
         )
     })?;
-    let retained_cells = match args.bam_collector.quant_mode {
+
+    progress.stage("writing quantification");
+    progress.start_timer("nelrune/writing");
+    println!("Running sc-beacon barcode-rank knee cell identification and QC...");
+    let calling = data.beacon_cell_calling().map_err(anyhow::Error::msg)?;
+    std::fs::create_dir_all(&args.outpath)
+        .with_context(|| format!("creating {}", args.outpath.display()))?;
+    calling.write_tsv(args.outpath.join("cell_calling.tsv")).map_err(anyhow::Error::msg)?;
+    calling.write_qc(args.outpath.join("qc")).map_err(anyhow::Error::msg)?;
+
+    let retained_cells = calling.retained.clone();
+    let cell_accounting = match args.bam_collector.quant_mode {
         QuantMode::Gene => {
             let features = GeneFeatureIndex::new(&index);
-            let cells = data.finalize_for_export(
-                args.min_cell_counts,
-                &features,
-                result.snp.as_ref().map(|s| &s.index),
-            );
-            data.write_finalized(
+            data.write_with_unfiltered_for_cells(
                 &args.outpath,
+                &retained_cells,
                 &features,
                 result.snp.as_ref().map(|s| &s.index),
-                cell_barcode_len,
+                Some(cell_barcode_len),
             )
             .map_err(anyhow::Error::msg)
-            .context("writing gene quantification")?;
-            cells
+            .context("writing gene quantification")?
         }
         QuantMode::Transcript => {
             let features = TranscriptFeatureIndex::new(&index);
-            let cells = data.finalize_for_export(
-                args.min_cell_counts,
-                &features,
-                result.snp.as_ref().map(|s| &s.index),
-            );
-            data.write_finalized(
+            data.write_with_unfiltered_for_cells(
                 &args.outpath,
+                &retained_cells,
                 &features,
                 result.snp.as_ref().map(|s| &s.index),
-                cell_barcode_len,
+                Some(cell_barcode_len),
             )
             .map_err(anyhow::Error::msg)
-            .context("writing transcript quantification")?;
-            cells
+            .context("writing transcript quantification")?
         }
     };
+
+    // Additional-feature tables have their own feature-type-aware writer.
+    // Preserve every observed feature-tag cell under unfiltered/, then retain
+    // only the canonical GEX cells in the normal output.
+    feature_counts
+        .finalize_and_write_all(cell_barcode_len, &args.outpath.join("unfiltered"))
+        .context("writing unfiltered additional feature tables")?;
     feature_counts
         .finalize_and_write(&retained_cells, cell_barcode_len, &args.outpath)
         .context("writing additional feature tables")?;
@@ -199,6 +205,23 @@ fn run(args: Cli) -> Result<()> {
         compatible_bam_records,
         unmapped_bam_records,
         retained_cells.len(),
+    );
+
+    progress.report_block(
+        "Cell calling",
+        &format!(
+            "method: sc-beacon barcode-rank knee\ncandidate barcodes: {}\ninformative barcodes (>1 UMI): {}\nknee rank: {}\nUMI cutoff: {}\nknee score: {:.6}\nretained cells: {}\nnot called: {}\ncell diagnostics: {}\ncell QC plots: {}\n\n{}",
+            calling.fit.candidate_barcodes,
+            calling.fit.informative_barcodes,
+            calling.fit.knee_rank,
+            calling.fit.umi_cutoff,
+            calling.fit.score,
+            retained_cells.len(),
+            cell_accounting.exonic_cells.saturating_sub(retained_cells.len()),
+            args.outpath.join("cell_calling.tsv").display(),
+            args.outpath.join("qc").display(),
+            cell_accounting,
+        ),
     );
 
     // Preserve Nelrune's broad orchestration timings in the final report too.

@@ -12,7 +12,7 @@ use bam_tide::index::{GeneFeatureIndex, TranscriptFeatureIndex};
 
 use bam_tide::quantification::{
     bam_collector::{BamCollector, BamCollectorConfig},
-    cli::{QuantCli, QuantMode},
+    cli::{CellCallingMode, QuantCli, QuantMode},
 };
 use gtf_splice_index::SpliceIndex;
 
@@ -109,28 +109,14 @@ fn run(args: QuantCli) -> Result<()> {
     match args.quant_mode {
         QuantMode::Gene => {
             let features = GeneFeatureIndex::new(&idx);
-
-            data.write(
-                &args.outpath,
-                args.min_cell_counts,
-                &features,
-                snp.as_ref().map(|s| &s.index),
-            )
-            .map_err(anyhow::Error::msg)
-            .context("writing gene quantification")?;
+            write_quantification(&mut data, &args, &features, snp.as_ref().map(|s| &s.index))
+                .context("writing gene quantification")?;
         }
 
         QuantMode::Transcript => {
             let features = TranscriptFeatureIndex::new(&idx);
-
-            data.write(
-                &args.outpath,
-                args.min_cell_counts,
-                &features,
-                snp.as_ref().map(|s| &s.index),
-            )
-            .map_err(anyhow::Error::msg)
-            .context("writing transcript quantification")?;
+            write_quantification(&mut data, &args, &features, snp.as_ref().map(|s| &s.index))
+                .context("writing transcript quantification")?;
         }
     }
 
@@ -138,6 +124,65 @@ fn run(args: QuantCli) -> Result<()> {
 
     println!("{}", data.report);
 
+    Ok(())
+}
+
+fn write_quantification<T, F>(
+    data: &mut bam_tide::QuantData,
+    args: &QuantCli,
+    features: &T,
+    snp_index: Option<&F>,
+) -> Result<()>
+where
+    T: scdata::FeatureIndex,
+    F: scdata::FeatureIndex,
+{
+    match args.cell_calling {
+        CellCallingMode::Fixed => {
+            let (retained, accounting) = data
+                .write_with_unfiltered(
+                    &args.outpath,
+                    args.min_cell_counts,
+                    features,
+                    snp_index,
+                    None,
+                )
+                .map_err(anyhow::Error::msg)?;
+            println!(
+                "{accounting}Cell calling\n------------\nmethod: fixed\nminimum UMIs: {}\nretained cells: {}\nremoved by exonic cutoff: {}",
+                args.min_cell_counts,
+                retained.len(),
+                accounting.exonic_cells.saturating_sub(retained.len())
+            );
+        }
+        CellCallingMode::Beacon => {
+            println!("Running sc-beacon barcode-rank knee cell identification and QC...");
+            let calling = data.beacon_cell_calling().map_err(anyhow::Error::msg)?;
+            let retained_count = calling.retained.len();
+
+            std::fs::create_dir_all(&args.outpath)
+                .with_context(|| format!("creating {}", args.outpath.display()))?;
+            calling.write_tsv(args.outpath.join("cell_calling.tsv")).map_err(anyhow::Error::msg)?;
+            calling.write_qc(args.outpath.join("qc")).map_err(anyhow::Error::msg)?;
+
+            let accounting = data.write_with_unfiltered_for_cells(
+                &args.outpath, &calling.retained, features, snp_index, None,
+            ).map_err(anyhow::Error::msg)?;
+
+            println!(
+                "sc-beacon cell identification complete\n{accounting}Cell calling\n------------\nmethod: sc-beacon barcode-rank knee\ncandidate barcodes: {}\ninformative barcodes (>1 UMI): {}\nknee rank: {}\nUMI cutoff: {}\nknee score: {:.6}\nretained cells: {}\nnot called: {}\ncell diagnostics: {}\ncell QC plots: {}",
+                calling.fit.candidate_barcodes,
+                calling.fit.informative_barcodes,
+                calling.fit.knee_rank,
+                calling.fit.umi_cutoff,
+                calling.fit.score,
+                retained_count,
+                accounting.exonic_cells.saturating_sub(retained_count),
+                args.outpath.join("cell_calling.tsv").display(),
+                args.outpath.join("qc").display(),
+            );
+        }
+    }
     Ok(())
 }
 

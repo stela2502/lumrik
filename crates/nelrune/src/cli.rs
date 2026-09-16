@@ -61,8 +61,8 @@ pub struct Cli {
     #[arg(long, default_value_t = 20)]
     pub min_transcript_len: usize,
 
-    /// Minimum cell UMI count retained during sparse-matrix export.
-    #[arg(long, default_value_t = 400)]
+    /// Legacy fixed cell UMI cutoff (retained for CLI compatibility; Nelrune now uses sc-beacon knee calling).
+    #[arg(long, default_value_t = 400, hide = true)]
     pub min_cell_counts: usize,
 
     /// Worker threads used by the normalizers / export helpers.
