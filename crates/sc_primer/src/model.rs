@@ -1,4 +1,5 @@
 use crate::error::{PrimerError, PrimerResult};
+use crate::GrammarType;
 use std::fmt;
 use std::ops::Range;
 
@@ -56,6 +57,7 @@ pub struct PrimerMatchDiagnostics {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrimerMatch {
     pub chemistry_name: String,
+    pub grammar_type: GrammarType,
     pub orientation: Orientation,
     pub primer_start: usize,
     pub primer_end: usize,
@@ -170,6 +172,7 @@ impl PrimerMatch {
     pub fn new(chemistry_name: String, orientation: Orientation) -> Self {
         Self {
             chemistry_name,
+            grammar_type: GrammarType::Other,
             orientation,
             primer_start: 0,
             primer_end: 0,

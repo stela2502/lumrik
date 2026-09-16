@@ -6,7 +6,7 @@ use clap::Args;
 
 use crate::{
     cli::AnalysisType,
-    quantification::cli::{BamAuxTag, QuantMode},
+    quantification::cli::{BamAuxTag, GrammarSelection, QuantMode},
 };
 use read_tag_table::ReadTagTableCli;
 
@@ -123,6 +123,14 @@ pub struct BamCollectorConfig {
 
     #[arg(long, default_value = "UB", help = "BAM aux tag containing the UMI.")]
     pub umi_tag: BamAuxTag,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = GrammarSelection::Gex,
+        help = "Primer-grammar provenance to quantify (gex, vdj, other, all)."
+    )]
+    pub grammar_type: GrammarSelection,
 
     #[arg(long, help = "Optional BAM output for a streamed mapper input.")]
     pub bam_out: Option<PathBuf>,

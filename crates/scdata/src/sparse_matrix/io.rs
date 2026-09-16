@@ -172,11 +172,12 @@ impl Scdata {
             }
         }
 
-        assert_eq!(
-            entries, self.total_feature_data_entries,
-            "Sparse export mismatch: wrote {} entries but expected {}",
-            entries, self.total_feature_data_entries
-        );
+        if entries != self.total_feature_data_entries {
+            return Err(format!(
+                "Sparse export mismatch: wrote {entries} entries but expected {}",
+                self.total_feature_data_entries
+            ));
+        }
 
         Ok(format!(
             "sparse Matrix: {} cells, {} features, {} entries written to {}",

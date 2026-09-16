@@ -86,7 +86,9 @@ fn read_gzip_text(path: &Path) -> String {
 
 fn assert_feature_output(out: &Path, feature_type: &str, feature_name: &str) {
     let dir = out.join(feature_type);
-    let features = dir.join("features.tsv.gz");
+
+    eprintln!("\n========== FEATURE OUTPUT: {feature_type} ==========");
+    eprintln!("directory: {}", dir.display());
 
     assert!(
         dir.is_dir(),
@@ -94,15 +96,28 @@ fn assert_feature_output(out: &Path, feature_type: &str, feature_name: &str) {
         dir.display()
     );
 
-    for file in ["matrix.mtx.gz", "barcodes.tsv.gz", "features.tsv.gz"] {
+    for file in ["barcodes.tsv.gz", "features.tsv.gz", "matrix.mtx.gz"] {
+        let path = dir.join(file);
+
         assert!(
-            dir.join(file).is_file(),
+            path.is_file(),
             "missing expected additional-feature matrix output: {}",
-            dir.join(file).display()
+            path.display()
         );
+
+        let text = read_gzip_text(&path);
+
+        eprintln!("--- {file} ---");
+        if text.is_empty() {
+            eprintln!("<EMPTY>");
+        } else {
+            eprintln!("{text}");
+        }
     }
 
+    let features = dir.join("features.tsv.gz");
     let text = read_gzip_text(&features);
+
     assert!(
         text.lines().any(|line| {
             let mut fields = line.split('\t');
@@ -114,6 +129,7 @@ fn assert_feature_output(out: &Path, feature_type: &str, feature_name: &str) {
         features.display()
     );
 }
+
 
 #[test]
 fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
@@ -178,7 +194,7 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
             "--r2",
             r2.to_str().unwrap(),
             "--primer-structure",
-            "CELL:4+UMI:4",
+            "TYPE:GEX+CELL:4+UMI:4",
             "--additional-features",
             "bd_sample_mouse",
             hto.to_str().unwrap(),
@@ -207,7 +223,15 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
         ])
         .output()
         .expect("failed to start nelrune");
+    eprintln!(
+      "\n========== NELRUNE STDOUT ==========\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 
+    eprintln!(
+        "\n========== NELRUNE STDERR ==========\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     if !output.status.success() {
         panic!(
             "\nNelrune additional-feature integration test failed.\n\

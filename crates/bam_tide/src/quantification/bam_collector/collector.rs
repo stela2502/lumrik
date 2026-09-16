@@ -371,6 +371,18 @@ impl BamCollector {
         // FASTQ normalizer has already created and deduplicated the molecule
         // identity before mapping.
         if let Ok(read_tag) = ReadTagRecord::from_qname(&qname) {
+            let provenance_label = match read_tag.grammar_type {
+                sc_primer::GrammarType::Gex => "primer provenance GEX",
+                sc_primer::GrammarType::Vdj => "primer provenance VDJ",
+                sc_primer::GrammarType::Other => "primer provenance Other",
+            };
+            data.report.report_n(provenance_label, group.records().len());
+
+            if !self.config.grammar_type.accepts(read_tag.grammar_type) {
+                data.report.report_n("primer provenance filtered", group.records().len());
+                return Ok(false);
+            }
+
             for record in group.records_mut() {
                 record.set_qname(read_tag.read_id.as_bytes());
 
@@ -389,6 +401,15 @@ impl BamCollector {
                     return Ok(true);
                 }
             }
+            return Ok(false);
+        }
+
+        // BAMs without Lumrik provenance predate GrammarType (or come from an
+        // external CB/UB source). Preserve historical behaviour by treating
+        // those records as GEX.
+        data.report.report_n("primer provenance GEX (legacy)", group.records().len());
+        if !self.config.grammar_type.accepts(sc_primer::GrammarType::Gex) {
+            data.report.report_n("primer provenance filtered", group.records().len());
             return Ok(false);
         }
 

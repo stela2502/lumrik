@@ -1,5 +1,5 @@
 use pretty_assertions::assert_eq;
-use read_tag_table::ReadTagRecord;
+use sc_primer::ReadTagRecord;
 
 use sc_primer::{
     BdCellVersion, Chemistry, Grammar, Orientation, PrimerDetector, RhapsodyWhitelist,
@@ -400,6 +400,7 @@ fn test_bd_v2_384_invalid_cell_is_translated_to_valid_cell() {
         cell_qual: vec![b'I'; source_cell.len()],
         umi_seq: b"AACCGG".to_vec(),
         umi_qual: vec![b'I'; 6],
+        grammar_type: sc_primer::GrammarType::Gex,
     };
 
     let (target_cell, mut primer) = detector.generate(&record).unwrap();
@@ -1044,4 +1045,33 @@ fn multiple_chemistries_prefer_fast_fixed_anchor_but_detect_both_bd_structures()
         .unwrap()
         .unwrap();
     assert_eq!(dt_hit.chemistry_name, "bd-v2-384");
+}
+
+
+#[test]
+fn grammar_type_can_be_declared_in_structure() {
+    let gex = Grammar::parse("gex", "TYPE:GEX+CELL:4+UMI:4").unwrap();
+    assert_eq!(gex.grammar_type, sc_primer::GrammarType::Gex);
+
+    let vdj = Grammar::parse("vdj", "TYPE:VDJ+CELL:4+UMI:4").unwrap();
+    assert_eq!(vdj.grammar_type, sc_primer::GrammarType::Vdj);
+
+    let other = Grammar::parse("other", "TYPE:OTHER+CELL:4+UMI:4").unwrap();
+    assert_eq!(other.grammar_type, sc_primer::GrammarType::Other);
+}
+
+#[test]
+fn grammar_without_type_remains_other_for_backward_compatibility() {
+    let grammar = Grammar::parse("legacy", "CELL:4+UMI:4").unwrap();
+    assert_eq!(grammar.grammar_type, sc_primer::GrammarType::Other);
+}
+
+#[test]
+fn typed_parser_rejects_conflicting_embedded_type() {
+    assert!(Grammar::parse_typed(
+        "conflict",
+        sc_primer::GrammarType::Gex,
+        "TYPE:VDJ+CELL:4+UMI:4",
+    )
+    .is_err());
 }

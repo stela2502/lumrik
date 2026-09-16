@@ -17,9 +17,10 @@ exclude = ["target/", ".github/", "*.tmp"]
 [dependencies]
 clap = { workspace = true }
 flate2 = "1"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
 
 onehot_dna =  { path = "../onehot_dna" }
-read-tag-table = { path = "../read-tag-table" }
 int-to-str = { path = "../int_to_str" }
 fast_tag_mapper = { path = "../fast_tag_mapper" }
 mapping_info = { path = "../mapping_info" }

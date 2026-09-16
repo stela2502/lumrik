@@ -10,7 +10,7 @@ use crate::single_cell_systems::*;
 
 use int_to_str::IntToStr;
 use onehot_dna::OneHotSequence;
-use read_tag_table::ReadTagRecord;
+use crate::ReadTagRecord;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -692,6 +692,7 @@ impl PrimerDetector {
                     primer_match.insert_end = seq.len();
                     primer_match.primer_end = pos;
                     primer_match.chemistry_name = self.grammar.name.clone();
+                    primer_match.grammar_type = self.grammar.grammar_type;
                     return Ok(Some(primer_match));
                 }
                 GrammarOp::Skip { len } => {
@@ -808,6 +809,7 @@ impl PrimerDetector {
         primer_match.insert_start = pos;
         primer_match.insert_end = seq.len();
         primer_match.chemistry_name = self.grammar.name.clone();
+        primer_match.grammar_type = self.grammar.grammar_type;
         Ok(Some(primer_match))
     }
 

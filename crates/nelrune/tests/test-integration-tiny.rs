@@ -162,7 +162,7 @@ fn integration_tiny_star() {
             "--r2",
             r2.to_str().unwrap(),
             "--primer-structure",
-            "CELL:4+UMI:4",
+            "TYPE:GEX+CELL:4+UMI:4",
             "--mapper",
             "star",
             "--mapper-index",

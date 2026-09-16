@@ -110,183 +110,7 @@ pub struct ReadTagTableConfig {
     pub umi_qual_column: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReadTagRecord {
-    pub read_id: String,
-    pub original_read_id: Option<String>,
-    pub cell_seq: Vec<u8>,
-    pub cell_qual: Vec<u8>,
-    pub umi_seq: Vec<u8>,
-    pub umi_qual: Vec<u8>,
-}
-
-impl ReadTagRecord {
-    pub fn new(
-        read_id: String,
-        original_read_id: Option<String>,
-        cell_seq: impl AsRef<[u8]>,
-        cell_qual: impl AsRef<[u8]>,
-        umi_seq: impl AsRef<[u8]>,
-        umi_qual: impl AsRef<[u8]>,
-    ) -> Self {
-        Self {
-            read_id,
-            original_read_id,
-            cell_seq: cell_seq.as_ref().to_vec(),
-            cell_qual: cell_qual.as_ref().to_vec(),
-            umi_seq: umi_seq.as_ref().to_vec(),
-            umi_qual: umi_qual.as_ref().to_vec(),
-        }
-    }
-
-    /// Appends this record's cell/UMI metadata to an existing FASTQ/SAM QNAME.
-    ///
-    /// The metadata is hex encoded as:
-    ///
-    /// `|cell_seq|cell_qual|umi_seq|umi_qual|`
-    ///
-    /// The returned QNAME is whitespace-free and can safely pass through
-    /// an external mapper.
-    pub fn extend_qname(&self, qname: &str) -> String {
-        format!(
-            "{}|{}|{}|{}|{}|",
-            qname,
-            hex_encode(&self.cell_seq),
-            hex_encode(&self.cell_qual),
-            hex_encode(&self.umi_seq),
-            hex_encode(&self.umi_qual),
-        )
-    }
-
-    pub fn extend_fastq_qnames(&self, q1: &str, q2: &str) -> (String, String) {
-        (self.extend_qname(q1), self.extend_qname(q2))
-    }
-
-    /// Reconstructs a `ReadTagRecord` from a QNAME previously produced by
-    /// `extend_qname()`.
-    ///
-    /// The part before the first `|` becomes the normalized `read_id`.
-    pub fn from_qname(qname: &str) -> anyhow::Result<Self> {
-        let mut fields = qname.split('|');
-
-        let read_id = fields
-            .next()
-            .filter(|id| !id.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("QNAME contains an empty read ID: '{qname}'"))?;
-
-        let cell_seq = fields
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("QNAME is missing cell sequence: '{qname}'"))?;
-
-        let cell_qual = fields
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("QNAME is missing cell quality: '{qname}'"))?;
-
-        let umi_seq = fields
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("QNAME is missing UMI sequence: '{qname}'"))?;
-
-        let umi_qual = fields
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("QNAME is missing UMI quality: '{qname}'"))?;
-
-        // extend_qname() terminates the extension with '|', therefore exactly
-        // one empty field must remain.
-        match (fields.next(), fields.next()) {
-            (Some(""), None) => {}
-            _ => anyhow::bail!("QNAME contains malformed ReadTagRecord metadata: '{qname}'"),
-        }
-
-        Ok(Self {
-            read_id: read_id.to_string(),
-            original_read_id: None,
-            cell_seq: hex_decode(cell_seq)?,
-            cell_qual: hex_decode(cell_qual)?,
-            umi_seq: hex_decode(umi_seq)?,
-            umi_qual: hex_decode(umi_qual)?,
-        })
-    }
-
-    pub fn from_slices(
-        read_id: impl Into<String>,
-        original_read_id: Option<String>,
-        cell_seq: &[u8],
-        cell_qual: &[u8],
-        umi_seq: &[u8],
-        umi_qual: &[u8],
-    ) -> Self {
-        Self::new(
-            read_id.into(),
-            original_read_id,
-            cell_seq,
-            cell_qual,
-            umi_seq,
-            umi_qual,
-        )
-    }
-
-    pub fn from_tsv_fields(
-        read_id: impl Into<String>,
-        original_read_id: Option<String>,
-        cell: &str,
-        cell_qual: Option<&str>,
-        umi: &str,
-        umi_qual: Option<&str>,
-    ) -> Self {
-        Self::new(
-            read_id.into(),
-            original_read_id,
-            cell.as_bytes(),
-            cell_qual.map(phred_from_ascii).unwrap_or_default(),
-            umi.as_bytes(),
-            umi_qual.map(phred_from_ascii).unwrap_or_default(),
-        )
-    }
-
-    pub fn cell_string(&self) -> String {
-        seq_to_string(&self.cell_seq)
-    }
-
-    pub fn umi_string(&self) -> String {
-        seq_to_string(&self.umi_seq)
-    }
-
-    pub fn cell_qual_string(&self) -> String {
-        phred_to_ascii(&self.cell_qual)
-    }
-
-    pub fn umi_qual_string(&self) -> String {
-        phred_to_ascii(&self.umi_qual)
-    }
-}
-
-fn hex_encode(data: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    let mut out = String::with_capacity(data.len() * 2);
-
-    for &byte in data {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-
-    out
-}
-
-fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        anyhow::bail!("invalid hex string with odd length");
-    }
-
-    let mut out = Vec::with_capacity(s.len() / 2);
-
-    for pair in s.as_bytes().chunks_exact(2) {
-        let hex = std::str::from_utf8(pair)?;
-        out.push(u8::from_str_radix(hex, 16)?);
-    }
-
-    Ok(out)
-}
+pub use sc_primer::ReadTagRecord;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReadTagTable {
@@ -331,6 +155,7 @@ impl ReadTagTable {
         let original_read_id_ix = optional_column_ix(&headers, &config.original_read_id_column);
         let cell_qual_ix = optional_column_ix(&headers, &config.cell_qual_column);
         let umi_qual_ix = optional_column_ix(&headers, &config.umi_qual_column);
+        let grammar_type_ix = optional_column_ix(&headers, "grammar_type");
 
         let mut records = HashMap::new();
 
@@ -345,7 +170,7 @@ impl ReadTagTable {
                 continue;
             }
 
-            let record = ReadTagRecord::from_tsv_fields(
+            let mut record = ReadTagRecord::from_tsv_fields(
                 read_id.to_string(),
                 get_optional(&rec, original_read_id_ix),
                 cell,
@@ -353,6 +178,10 @@ impl ReadTagTable {
                 umi,
                 get_optional_ref(&rec, umi_qual_ix),
             );
+            if let Some(raw) = get_optional_ref(&rec, grammar_type_ix) {
+                record.grammar_type = sc_primer::GrammarType::from_code(raw)
+                    .with_context(|| format!("invalid grammar_type '{raw}' for read '{read_id}'"))?;
+            }
 
             records.insert(read_id.to_string(), record);
         }
@@ -617,30 +446,7 @@ fn open_maybe_gz(path: &Path) -> Result<Box<dyn Read>> {
     }
 }
 
-fn seq_to_string(seq: &[u8]) -> String {
-    String::from_utf8_lossy(seq).to_string()
-}
-
-fn phred_from_ascii(text: &str) -> Vec<u8> {
-    text.as_bytes()
-        .iter()
-        .map(|q| q.saturating_sub(33))
-        .collect()
-}
-
-fn phred_to_ascii(qual: &[u8]) -> String {
-    qual.iter().map(|q| q.saturating_add(33) as char).collect()
-}
-
-fn display_qual(qual: &[u8]) -> String {
-    if qual.is_empty() {
-        "-".to_string()
-    } else {
-        phred_to_ascii(qual)
-    }
-}
-
-pub const READ_TAG_TABLE_COLUMNS: [&str; 8] = [
+pub const READ_TAG_TABLE_COLUMNS: [&str; 9] = [
     "read_id",
     "original_read_id",
     "orientation",
@@ -648,6 +454,7 @@ pub const READ_TAG_TABLE_COLUMNS: [&str; 8] = [
     "quality_cb",
     "raw_umi",
     "quality_umi",
+    "grammar_type",
     "status",
 ];
 
@@ -691,6 +498,7 @@ impl<W: Write> ReadTagTableWriter<W> {
                 rec.cell_qual_string().as_str(),
                 rec.umi_string().as_str(),
                 rec.umi_qual_string().as_str(),
+                rec.grammar_type.code(),
                 "ok",
             ])
             .with_context(|| format!("writing read-tag table row for read_id '{}'", rec.read_id))?;
@@ -710,6 +518,7 @@ impl<W: Write> ReadTagTableWriter<W> {
                 &rec.quality_cb,
                 &rec.raw_umi,
                 &rec.quality_umi,
+                "G",
                 rec.status,
             ])
             .with_context(|| format!("writing read-tag table row for read_id '{}'", rec.read_id))?;
@@ -722,21 +531,6 @@ impl<W: Write> ReadTagTableWriter<W> {
             .flush()
             .context("flushing read-tag table writer")?;
         Ok(())
-    }
-}
-
-impl fmt::Display for ReadTagRecord {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "read_id={}, original_read_id={}, cell={}, cell_qual={}, umi={}, umi_qual={}",
-            self.read_id,
-            self.original_read_id.as_deref().unwrap_or("-"),
-            self.cell_string(),
-            display_qual(&self.cell_qual),
-            self.umi_string(),
-            display_qual(&self.umi_qual),
-        )
     }
 }
 
@@ -1034,7 +828,6 @@ mod tests {
         assert!(text.contains("read_id=read1"));
         assert!(text.contains("original_read_id=orig1"));
         assert!(text.contains("cell=CELL1"));
-        assert!(text.contains("cell_qual=-"));
         assert!(text.contains("umi=UMI1"));
         assert!(text.contains("umi_qual=JJJJ"));
     }
@@ -1093,7 +886,7 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
 
         assert!(text.starts_with(&READ_TAG_TABLE_COLUMNS.join("\t")));
-        assert!(text.contains("read1\torig1\t\tCELL1\tIIII\tUMI1\tJJJJ\tok"));
+        assert!(text.contains("read1\torig1\t\tCELL1\tIIII\tUMI1\tJJJJ\tG\tok"));
     }
 
     #[test]
@@ -1105,6 +898,7 @@ mod tests {
             cell_qual: b"IIIIIIII".to_vec(),
             umi_seq: b"TGCATG".to_vec(),
             umi_qual: b"JJJJJJ".to_vec(),
+            grammar_type: sc_primer::GrammarType::Gex,
         };
 
         let qname = record.extend_qname(&record.read_id);
@@ -1133,6 +927,7 @@ mod tests {
             cell_qual: b"I|I|".to_vec(),
             umi_seq: b"TGCA".to_vec(),
             umi_qual: b"|JJ|".to_vec(),
+            grammar_type: sc_primer::GrammarType::Gex,
         };
 
         let qname = record.extend_qname(&record.read_id);

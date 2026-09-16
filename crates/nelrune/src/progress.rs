@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use lumrik_status::{ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status};
+use lumrik_status::{ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status, snapshot_html};
 use mapping_info::MappingInfo;
 
 #[derive(Debug)]
@@ -391,6 +391,40 @@ impl RunProgress {
         if let Ok(mut state) = self.state.write() {
             state.input_file = None;
         }
+    }
+
+    /// Persist the final health-server state so completed runs remain inspectable.
+    pub fn write_final_status(&self, outdir: &Path) -> Result<()> {
+        let state = self.state.read().map_err(|_| anyhow::anyhow!("Nelrune status lock poisoned"))?.clone();
+        let mut yaml = File::create(outdir.join("nelrune-run-summary.yaml"))
+            .context("creating nelrune-run-summary.yaml")?;
+        writeln!(yaml, "schema: lumrik-nelrune-run-summary-v1")?;
+        writeln!(yaml, "stage: {:?}", state.stage)?;
+        writeln!(yaml, "started_unix_ms: {}", state.started_unix_ms)?;
+        match state.finished_unix_ms { Some(v) => writeln!(yaml, "finished_unix_ms: {v}")?, None => writeln!(yaml, "finished_unix_ms: null")? }
+        writeln!(yaml, "reads_processed: {}", state.reads_processed)?;
+        writeln!(yaml, "mapper_reads: {}", state.mapper_reads)?;
+        writeln!(yaml, "accepted_pairs: {}", state.accepted_pairs)?;
+        writeln!(yaml, "failed_pairs: {}", state.failed_pairs)?;
+        writeln!(yaml, "candidate_pairs: {}", state.candidate_pairs)?;
+        writeln!(yaml, "feature_tag_matches: {}", state.feature_tag_matches)?;
+        writeln!(yaml, "duplicates: {}", state.duplicates)?;
+        writeln!(yaml, "unique_genomic: {}", state.unique_genomic)?;
+        writeln!(yaml, "unique_feature: {}", state.unique_feature)?;
+        writeln!(yaml, "bam_records_seen: {}", state.bam_records_seen)?;
+        writeln!(yaml, "quantified_bam_records: {}", state.quantified_bam_records)?;
+        match state.retained_cells { Some(v) => writeln!(yaml, "retained_cells: {v}")?, None => writeln!(yaml, "retained_cells: null")? }
+        writeln!(yaml, "process_rss_mib: {:.3}", state.process_rss_mib)?;
+        writeln!(yaml, "process_peak_rss_mib: {:.3}", state.process_peak_rss_mib)?;
+        writeln!(yaml, "system_available_mib: {:.3}", state.system_available_mib)?;
+        yaml.flush()?;
+
+        let html = snapshot_html(&state.server_snapshot());
+        let mut report = File::create(outdir.join("nelrune-report.html"))
+            .context("creating nelrune-report.html")?;
+        report.write_all(html.as_bytes())?;
+        report.flush()?;
+        Ok(())
     }
 
     pub fn finish(&mut self) {

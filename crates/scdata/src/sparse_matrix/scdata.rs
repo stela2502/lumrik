@@ -414,8 +414,10 @@ impl Scdata {
                 let mut local_entries = 0usize;
 
                 for cell in bucket.values() {
-                    for feature_id in cell.total_reads.keys() {
-                        if allowed.contains(feature_id) {
+                    for (feature_id, value) in &cell.total_reads {
+                        // Keep export metadata identical to the MatrixMarket
+                        // writer: non-positive entries are not serialized.
+                        if *value > 0.0 && allowed.contains(feature_id) {
                             local_ids.insert(*feature_id);
                             local_entries += 1;
                         }

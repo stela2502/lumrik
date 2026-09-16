@@ -69,6 +69,7 @@ fn run(args: QuantCli) -> Result<()> {
         analysis_type: args.analysis_type,
         cell_tag: args.cell_tag,
         umi_tag: args.umi_tag,
+        grammar_type: args.grammar_type,
 
         /*
          * bam-quant consumes existing BAM files.

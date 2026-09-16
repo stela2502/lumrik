@@ -212,7 +212,7 @@ impl<'a> JobBuilder<'a> {
             Some(id) => id,
             None => {
                 report.report(&format!(
-                    "contig {chr_name} not in index - checked with and without chr"
+                    "contig absent from splice index: {chr_name}"
                 ));
                 return Ok(None);
             }

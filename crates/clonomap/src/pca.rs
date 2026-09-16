@@ -309,7 +309,6 @@ impl PcaModel {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ndarray::array;
     use std::fs;
 

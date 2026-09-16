@@ -2178,6 +2178,7 @@ dependencies = [
  "csv",
  "flate2",
  "mapping_info",
+ "sc_primer",
  "serde",
 ]
 
@@ -2441,6 +2442,7 @@ dependencies = [
 name = "sc_primer"
 version = "0.4.0"
 dependencies = [
+ "anyhow",
  "assert_cmd",
  "clap",
  "fast_tag_mapper",
@@ -2450,7 +2452,7 @@ dependencies = [
  "onehot_dna",
  "predicates",
  "pretty_assertions",
- "read-tag-table",
+ "serde",
 ]
 
 [[package]]

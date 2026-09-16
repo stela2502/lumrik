@@ -61,9 +61,9 @@ pub struct Cli {
     #[arg(long, default_value_t = 20)]
     pub min_transcript_len: usize,
 
-    /// Legacy fixed cell UMI cutoff (retained for CLI compatibility; Nelrune now uses sc-beacon knee calling).
-    #[arg(long, default_value_t = 400, hide = true)]
-    pub min_cell_counts: usize,
+    /// Optional fixed cell UMI cutoff. When supplied, this overrides sc-beacon cell calling.
+    #[arg(long)]
+    pub min_cell_counts: Option<usize>,
 
     /// Worker threads used by the normalizers / export helpers.
     #[arg(long, default_value_t = 0)]

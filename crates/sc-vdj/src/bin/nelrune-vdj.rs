@@ -1175,6 +1175,18 @@ fn main() -> Result<()> {
     write_run_summary_yaml(&c.out.join("vdj-run-summary.yaml"), &final_status)?;
     write_static_report(&c.out.join("vdj-report.html"), &final_status)?;
 
+    // Keep a conventional persistent log beside the structured/static status
+    // reports. The YAML/HTML files remain the authoritative final dashboard
+    // snapshot; this file is deliberately human-readable.
+    let mut run_log = File::create(c.out.join("nelrune-vdj.log"))
+        .context("creating nelrune-vdj.log")?;
+    writeln!(run_log, "{mapping_info}")?;
+    writeln!(run_log, "final stage: {}", final_status.stage)?;
+    writeln!(run_log, "evidence cells: {}", runner.evidence.cell_count())?;
+    writeln!(run_log, "recombinations: {nr}")?;
+    writeln!(run_log, "constant calls rescued: {}", rescan.rescued)?;
+    run_log.flush()?;
+
     eprintln!("{mapping_info}");
     eprintln!(
         "nelrune-vdj: {n} receptor-overlapping BAM records; {} evidence cell(s); {nr} recombination(s); {} constant call(s) added by CDR3/constant remapping; outputs in {}",

@@ -7,6 +7,29 @@ use int_to_str::IntToStr;
 const MOLECULE_KEY_BASES: usize = 32;
 const UNBARCODED_BASES_PER_MATE: usize = MOLECULE_KEY_BASES / 2;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+pub enum GrammarType {
+    #[default]
+    Gex,
+    Vdj,
+    Other,
+}
+
+impl GrammarType {
+    pub const fn code(self) -> &'static str {
+        match self { Self::Gex => "G", Self::Vdj => "V", Self::Other => "O" }
+    }
+
+    pub fn from_code(code: &str) -> anyhow::Result<Self> {
+        match code {
+            "G" | "gex" | "GEX" => Ok(Self::Gex),
+            "V" | "vdj" | "VDJ" => Ok(Self::Vdj),
+            "O" | "other" | "OTHER" => Ok(Self::Other),
+            _ => anyhow::bail!("unknown grammar type '{code}'"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoleculeIdentity {
     pub cell_id: u64,
@@ -16,6 +39,7 @@ pub struct MoleculeIdentity {
 #[derive(Debug, Clone)]
 pub struct Grammar {
     pub name: String,
+    pub grammar_type: GrammarType,
     pub ops: Vec<GrammarOp>,
     cell_len: usize,
     umi_len: usize,
@@ -42,6 +66,10 @@ pub enum GrammarOp {
 
 impl Grammar {
     pub fn new(name: impl Into<String>, ops: Vec<GrammarOp>) -> PrimerResult<Self> {
+        Self::new_typed(name, GrammarType::Other, ops)
+    }
+
+    pub fn new_typed(name: impl Into<String>, grammar_type: GrammarType, ops: Vec<GrammarOp>) -> PrimerResult<Self> {
         let mut cell_len = 0usize;
         let mut umi_len = 0usize;
         let mut system: Option<SingleCellSystem> = None;
@@ -85,6 +113,7 @@ impl Grammar {
 
         Ok(Self {
             name: name.into(),
+            grammar_type,
             ops,
             cell_len,
             umi_len,
@@ -195,12 +224,26 @@ impl Grammar {
     }
 
     pub fn parse(name: impl Into<String>, structure: &str) -> PrimerResult<Self> {
+        Self::parse_with_type(name, None, structure)
+    }
+
+    pub fn parse_typed(
+        name: impl Into<String>,
+        grammar_type: GrammarType,
+        structure: &str,
+    ) -> PrimerResult<Self> {
+        Self::parse_with_type(name, Some(grammar_type), structure)
+    }
+
+    fn parse_with_type(
+        name: impl Into<String>,
+        explicit_type: Option<GrammarType>,
+        structure: &str,
+    ) -> PrimerResult<Self> {
         let name = name.into();
-
-        if structure.trim().eq_ignore_ascii_case("NONE") {
-            return Self::new(name, Vec::new());
-        }
-
+        let mut grammar_type = explicit_type.unwrap_or(GrammarType::Other);
+        let mut embedded_type = None;
+        let mut saw_none = false;
         let mut ops = Vec::new();
 
         for raw in structure.split('+') {
@@ -208,14 +251,57 @@ impl Grammar {
             if token.is_empty() {
                 continue;
             }
+
+            if token.len() >= 5 && token[..5].eq_ignore_ascii_case("TYPE:") {
+                let raw_type = &token[5..];
+                if embedded_type.is_some() {
+                    return Err(PrimerError::invalid_grammar(
+                        "grammar contains more than one TYPE declaration",
+                    ));
+                }
+
+                let parsed = GrammarType::from_code(raw_type)
+                    .map_err(|err| PrimerError::invalid_grammar(err.to_string()))?;
+
+                if let Some(expected) = explicit_type {
+                    if parsed != expected {
+                        return Err(PrimerError::invalid_grammar(format!(
+                            "grammar TYPE:{} conflicts with explicitly requested type {}",
+                            parsed.code(),
+                            expected.code(),
+                        )));
+                    }
+                }
+
+                grammar_type = parsed;
+                embedded_type = Some(parsed);
+                continue;
+            }
+
+            if token.eq_ignore_ascii_case("NONE") {
+                if saw_none || !ops.is_empty() {
+                    return Err(PrimerError::invalid_grammar(
+                        "NONE cannot be combined with sequence operations or repeated",
+                    ));
+                }
+                saw_none = true;
+                continue;
+            }
+
+            if saw_none {
+                return Err(PrimerError::invalid_grammar(
+                    "NONE cannot be combined with sequence operations",
+                ));
+            }
+
             ops.push(GrammarOp::parse_token(token)?);
         }
 
-        if ops.is_empty() {
+        if ops.is_empty() && !saw_none {
             return Err(PrimerError::invalid_grammar("empty grammar"));
         }
 
-        Self::new(name, ops)
+        Self::new_typed(name, grammar_type, ops)
     }
 
     /// Create a full primer prefix from the grammar using an externally supplied

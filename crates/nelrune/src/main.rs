@@ -149,14 +149,32 @@ fn run(args: Cli) -> Result<()> {
 
     progress.stage("writing quantification");
     progress.start_timer("nelrune/writing");
-    println!("Running sc-beacon barcode-rank knee cell identification and QC...");
-    let calling = data.beacon_cell_calling().map_err(anyhow::Error::msg)?;
-    std::fs::create_dir_all(&args.outpath)
-        .with_context(|| format!("creating {}", args.outpath.display()))?;
-    calling.write_tsv(args.outpath.join("cell_calling.tsv")).map_err(anyhow::Error::msg)?;
-    calling.write_qc(args.outpath.join("qc")).map_err(anyhow::Error::msg)?;
 
-    let retained_cells = calling.retained.clone();
+    let (retained_cells, calling) = if let Some(min_cell_counts) = args.min_cell_counts {
+        println!(
+            "Applying user-defined cell UMI cutoff: {}",
+            min_cell_counts
+        );
+        (data.cells_with_min_exonic_umis(min_cell_counts), None)
+    } else {
+        println!("Running sc-beacon barcode-rank knee cell identification and QC...");
+
+        let calling = data.beacon_cell_calling().map_err(anyhow::Error::msg)?;
+
+        std::fs::create_dir_all(&args.outpath)
+            .with_context(|| format!("creating {}", args.outpath.display()))?;
+
+        calling
+            .write_tsv(args.outpath.join("cell_calling.tsv"))
+            .map_err(anyhow::Error::msg)?;
+
+        calling
+            .write_qc(args.outpath.join("qc"))
+            .map_err(anyhow::Error::msg)?;
+
+        let retained = calling.retained.clone();
+        (retained, Some(calling))
+    };
     let cell_accounting = match args.bam_collector.quant_mode {
         QuantMode::Gene => {
             let features = GeneFeatureIndex::new(&index);
@@ -207,22 +225,38 @@ fn run(args: Cli) -> Result<()> {
         retained_cells.len(),
     );
 
-    progress.report_block(
-        "Cell calling",
-        &format!(
-            "method: sc-beacon barcode-rank knee\ncandidate barcodes: {}\ninformative barcodes (>1 UMI): {}\nknee rank: {}\nUMI cutoff: {}\nknee score: {:.6}\nretained cells: {}\nnot called: {}\ncell diagnostics: {}\ncell QC plots: {}\n\n{}",
-            calling.fit.candidate_barcodes,
-            calling.fit.informative_barcodes,
-            calling.fit.knee_rank,
-            calling.fit.umi_cutoff,
-            calling.fit.score,
-            retained_cells.len(),
-            cell_accounting.exonic_cells.saturating_sub(retained_cells.len()),
-            args.outpath.join("cell_calling.tsv").display(),
-            args.outpath.join("qc").display(),
-            cell_accounting,
-        ),
-    );
+    if let Some(calling) = &calling {
+        progress.report_block(
+            "Cell calling",
+            &format!(
+                "method: sc-beacon barcode-rank knee\ncandidate barcodes: {}\ninformative barcodes (>1 UMI): {}\nknee rank: {}\nUMI cutoff: {}\nknee score: {:.6}\nretained cells: {}\nnot called: {}\ncell diagnostics: {}\ncell QC plots: {}\n\n{}",
+                calling.fit.candidate_barcodes,
+                calling.fit.informative_barcodes,
+                calling.fit.knee_rank,
+                calling.fit.umi_cutoff,
+                calling.fit.score,
+                retained_cells.len(),
+                cell_accounting.exonic_cells.saturating_sub(retained_cells.len()),
+                args.outpath.join("cell_calling.tsv").display(),
+                args.outpath.join("qc").display(),
+                cell_accounting,
+            ),
+        );
+    } else {
+        let cutoff = args
+            .min_cell_counts
+            .expect("fixed cell calling requires --min-cell-counts");
+        progress.report_block(
+            "Cell calling",
+            &format!(
+                "method: user-defined UMI cutoff\nUMI cutoff: {}\nretained cells: {}\nnot called: {}\n\n{}",
+                cutoff,
+                retained_cells.len(),
+                cell_accounting.exonic_cells.saturating_sub(retained_cells.len()),
+                cell_accounting,
+            ),
+        );
+    }
 
     // Preserve Nelrune's broad orchestration timings in the final report too.
     data.report.merge(progress.mapping_info());
@@ -239,6 +273,7 @@ fn run(args: Cli) -> Result<()> {
     progress.stage(format!("mapper BAM retained at {}", mapper_bam.display()));
 
     progress.finish();
+    progress.write_final_status(&args.outpath)?;
 
     eprintln!(
         "[nelrune] complete: {} reads in {:.1}s ({:.0} reads/s overall, {:.0} reads/s steady after first progress)",

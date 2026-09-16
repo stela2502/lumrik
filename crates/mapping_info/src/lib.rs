@@ -199,6 +199,9 @@ impl fmt::Display for MappingInfo {
             )?;
             writeln!(f, "  {}", "-".repeat(32 + 1 + 15 + 19))?;
             for (name, value) in &self.reads_log {
+                if name.starts_with("primer provenance ") || name.starts_with("contig absent from splice index: ") {
+                    continue;
+                }
                 writeln!(
                     f,
                     "  {:<32} {:<15} {:.2}",
@@ -208,6 +211,31 @@ impl fmt::Display for MappingInfo {
                 )?;
             }
             writeln!(f)?;
+
+            let provenance: Vec<_> = self.reads_log.iter()
+                .filter(|(name, _)| name.starts_with("primer provenance "))
+                .collect();
+            if !provenance.is_empty() {
+                writeln!(f, "Primer provenance")?;
+                writeln!(f, "-----------------")?;
+                for (name, value) in provenance {
+                    let label = name.strip_prefix("primer provenance ").unwrap_or(name);
+                    writeln!(f, "  {:<24} {:<15} {:.2}", format!("{label}:"), value.to_formatted_string(&Locale::en), pct(*value, total))?;
+                }
+                writeln!(f)?;
+            }
+
+            let missing_contigs: Vec<_> = self.reads_log.iter()
+                .filter_map(|(name, value)| name.strip_prefix("contig absent from splice index: ").map(|contig| (contig, value)))
+                .collect();
+            if !missing_contigs.is_empty() {
+                writeln!(f, "Reference contigs absent from splice index")?;
+                writeln!(f, "------------------------------------------")?;
+                for (contig, value) in missing_contigs {
+                    writeln!(f, "  {:<24} {}", contig, value.to_formatted_string(&Locale::en))?;
+                }
+                writeln!(f)?;
+            }
         }
 
         // Error report (if any)

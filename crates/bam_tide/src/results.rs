@@ -109,6 +109,19 @@ impl QuantData {
         }
     }
 
+    /// Return exonic cell ids with at least `min_umis` unique UMIs.
+    ///
+    /// This is the explicit fixed-cutoff counterpart to sc-beacon cell calling.
+    pub fn cells_with_min_exonic_umis(&self, min_umis: usize) -> HashSet<u64> {
+        self.gene
+            .cell_umi_counts()
+            .into_iter()
+            .filter_map(|(cell_id, umi_count)| {
+                ((umi_count as usize) >= min_umis).then_some(cell_id)
+            })
+            .collect()
+    }
+
     /// Call cells from the complete exonic UMI-count distribution using
     /// sc-beacon's barcode-rank knee detector.
     pub fn beacon_cell_calling(&self) -> Result<BeaconCellCalling, String> {

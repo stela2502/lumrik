@@ -35,3 +35,5 @@ flate2 = "1.1.9"
 serde = { version = "1", features = ["derive"] }
 
 mapping_info = { path = "../mapping_info" }
+
+sc_primer = { path = "../sc_primer" }

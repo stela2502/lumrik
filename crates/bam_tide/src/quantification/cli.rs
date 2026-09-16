@@ -30,6 +30,26 @@ pub enum CellCallingMode {
     Beacon,
 }
 
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum GrammarSelection {
+    Gex,
+    Vdj,
+    Other,
+    All,
+}
+
+impl GrammarSelection {
+    pub fn accepts(self, grammar_type: sc_primer::GrammarType) -> bool {
+        match self {
+            Self::All => true,
+            Self::Gex => grammar_type == sc_primer::GrammarType::Gex,
+            Self::Vdj => grammar_type == sc_primer::GrammarType::Vdj,
+            Self::Other => grammar_type == sc_primer::GrammarType::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct BamAuxTag(pub [u8; 2]);
 
@@ -152,6 +172,11 @@ pub struct QuantCli {
     /// Allowed sequencing error gap. If exceeded -> JunctionMismatch.
     #[arg(long, default_value_t = DEFAULT_ALLOWED_INTRONIC_GAP_SIZE)]
     pub allowed_intronic_gap_size: u32,
+
+    /// Primer-grammar provenance to quantify from Lumrik mapper QNAMEs.
+    /// Legacy QNAME/CB+UB input without provenance is treated as GEX.
+    #[arg(long, value_enum, default_value_t = GrammarSelection::Gex)]
+    pub grammar_type: GrammarSelection,
 
     /// Optional read grammar for BAMs without cell/UMI metadata.
     ///

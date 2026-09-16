@@ -159,13 +159,14 @@ impl IlluminaPartial {
                 .into_bytes();
             let synthetic_umi_qual = vec![b'I'; synthetic_umi.len()];
 
-            let read_tag = ReadTagRecord::new(
+            let read_tag = ReadTagRecord::new_with_grammar_type(
                 emitted_r2.id.clone(),
                 Some(r2.id.clone()),
                 synthetic_cell,
                 synthetic_cell_qual,
                 &synthetic_umi,
                 &synthetic_umi_qual,
+                matched_grammar.grammar_type,
             );
 
             self.candidates.push(IlluminaCandidate {
@@ -215,13 +216,14 @@ impl IlluminaPartial {
             }
         };
 
-        let read_tag = ReadTagRecord::new(
+        let read_tag = ReadTagRecord::new_with_grammar_type(
             emitted_r2.id.clone(),
             Some(r2.id.clone()),
             cell_seq,
             &cell.qual,
             &umi.seq,
             &umi.qual,
+            primer_match.grammar_type,
         );
 
         NgsNormalizerSupport::report_orientation(&mut self.stats, primer_match.orientation);

@@ -576,23 +576,6 @@ fn hex_width(count: usize) -> usize {
     }
     w
 }
-fn push_local(
-    out: &mut String,
-    index: &VdjIndex,
-    chain: Chain,
-    kind: SegmentKind,
-    id: u16,
-) -> Result<(), String> {
-    let ord = index
-        .local_ordinal(id)
-        .ok_or_else(|| format!("segment {id} not present in local table"))?;
-    let w = hex_width(index.local_count(chain, kind));
-    if ord >= 1usize << (4 * w) {
-        return Err("local segment ordinal exceeds encoded width".into());
-    }
-    out.push_str(&format!("{ord:0w$X}"));
-    Ok(())
-}
 fn read_local<'a>(
     c: &mut Cursor<'_>,
     index: &'a VdjIndex,

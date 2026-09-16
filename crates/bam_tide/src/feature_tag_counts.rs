@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
-use scdata::Scdata;
+use scdata::{FeatureIndex, Scdata};
 
 use crate::index::FastTagFeatureIndex;
 use crate::ngs_normalizer::NgsNormalizerSupport;
@@ -152,6 +152,19 @@ impl FeatureTagCounts {
 
         let (mut filtered, background) = raw.split_by_cells(cells);
 
+        eprintln!(
+    "FEATURE DEBUG: canonical GEX cells = {}",
+    cells.len()
+);
+eprintln!(
+    "FEATURE DEBUG: filtered empty after split = {}",
+    filtered.is_empty()
+);
+eprintln!(
+    "FEATURE DEBUG: background empty after split = {}",
+    background.is_empty()
+);
+
         let background_config = BackgroundConfig::default();
         let fit_config = FitConfig::default();
         let call_config = CallConfig::default();
@@ -161,17 +174,36 @@ impl FeatureTagCounts {
         for (feature_type, feature_index) in feature_index.split_by_feature_type() {
             /*
              * ------------------------------------------------------------
-             * Raw filtered feature counts
+             * Type-specific feature views
              * ------------------------------------------------------------
+             *
+             * `filtered` and `background` contain every stacked feature
+             * class.  Never finalize the shared table against one
+             * type-specific index: doing so mutates its export caches and
+             * makes later feature classes depend on HashMap iteration order.
+             * Build independent views instead and restrict each one to the
+             * feature IDs represented by this index.
              */
-            filtered.finalize_for_cells(cells, &feature_index);
+            let feature_ids: HashSet<u64> = feature_index
+                .ordered_feature_ids()
+                .into_iter()
+                .collect();
+
+            let mut type_filtered = NgsNormalizerSupport::new_feature_tag_table();
+            type_filtered.merge(&filtered);
+            type_filtered.retain_features(&feature_ids);
+            type_filtered.finalize_for_cells(cells, &feature_index);
+
+            let mut type_background = NgsNormalizerSupport::new_feature_tag_table();
+            type_background.merge(&background);
+            type_background.retain_features(&feature_ids);
 
             let out_dir = out.join(&feature_type);
 
             std::fs::create_dir_all(&out_dir)
                 .with_context(|| format!("failed to create {}", out_dir.display()))?;
 
-            filtered
+            type_filtered
                 .write_sparse_with_cell_len(&out_dir, &feature_index, cell_barcode_len)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("writing feature table '{feature_type}'"))?;
@@ -185,8 +217,8 @@ impl FeatureTagCounts {
              * The type-specific FeatureIndex restricts Beacon to this block.
              */
             match run_from_scdata(
-                &filtered,
-                &background,
+                &type_filtered,
+                &type_background,
                 cells,
                 cell_barcode_len,
                 &feature_index,
