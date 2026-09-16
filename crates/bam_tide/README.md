@@ -1,3 +1,34 @@
+# bam_tide
+
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+High-throughput BAM/FASTQ normalization, quantification, coverage, tag handling and splice/SNP-aware processing.
+
+## Binaries
+
+- `bam-ont-normalizer`
+- `illumina_normalizer`
+- `bam-quant`
+- `gtf-splice-index`
+- `bam-transcriptome-to-genome`
+- `bam-coverage`
+- `bw-compare`
+- `bam-subset-tag`
+- `bam-read-tag-stats`
+- `fastq-primer-restore`
+- `sc-identify-cells`
+- `bam-quant-testdata`
+- `bam-quant-collector`
+- `sum_up_ont_tab_result`
+
+## Library use
+
+Use the normalizer and collector APIs when embedding BAM/FASTQ processing in another Rust component; Nelrune uses these library paths directly rather than shelling out to the binaries.
+
+## Detailed documentation
+
 [![Rust](https://github.com/stela2502/bam_tide/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/bam_tide/actions/workflows/rust.yml)
 
 # bam_tide

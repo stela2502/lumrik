@@ -1,0 +1,14 @@
+[package]
+name = "valkyrn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Immune-repertoire interpretation and structural prioritization for Lumrik"
+
+[dependencies]
+anyhow = "1"
+clap = { workspace = true }
+
+rayon = "1"
+ndarray = "0.15"
+clonomap = { path = "../clonomap", features = ["plot"] }

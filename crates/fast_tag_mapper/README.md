@@ -1,5 +1,22 @@
 # fast_tag_mapper
 
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Fast short-DNA feature/tag identification for sample tags, HTOs, guides and other known feature sequences.
+
+## Binaries
+
+- `bd-fast-map`
+- `fast-tag-stress`
+
+## Library use
+
+Build a feature table and call the mapping API directly on read sequences when integrating tag detection into a pipeline.
+
+## Detailed documentation
+
 `fast_tag_mapper` is a small Rust crate for fast identification of short DNA tag sequences from FASTQ/BAM reads.
 
 The original use case is BD Rhapsody sample-tag detection inside `bam_tide`, but the core model is general enough for FASTA/FASTQ-derived tag sets:

@@ -9,7 +9,7 @@ pub mod index;
 pub mod model;
 pub mod types;
 
-pub use index::{IdNameKeys, SpliceIndex};
+pub use index::{IdNameKeys, SPLICE_INDEX_FORMAT_VERSION, SpliceIndex};
 
 pub use annotation::AnnotationBuilder;
 

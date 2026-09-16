@@ -1,18 +1,54 @@
 # nelrune
 
-Minimal Lumrik orchestration binary for a complete single-cell analysis pass:
+> **Lumrik crate.** Nelrune is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
 
-1. normalize ONT/Dorado BAM **or** Illumina R1/R2 input with `bam_tide`
-2. stream normalized molecules into `sc-mapper`
-3. drain mapper results into a temporary BAM
-4. quantify that BAM with `bam_tide::BamCollector`
-5. write sparse quantification output
-6. write the authoritative `MappingInfo` report
-7. expose live orchestration state through the health server
+## What this crate does
 
-Nelrune deliberately does not duplicate normalizer or quantifier counters. The
-normalizer and quantifier reports are printed and written using their existing
-`MappingInfo` display strings.
+Nelrune is Lumrik's integrated single-cell processing pipeline. It connects primer/read-structure detection, cell and UMI extraction, feature routing, molecule deduplication, external mapping and BAM quantification without turning every stage into another full intermediate dataset.
+
+## Why Nelrune exists
+
+The main goal is not to replace excellent specialized aligners. It is to make sure they only do work that is still biologically useful.
+
+A sequencer can produce tens or hundreds of millions of reads, but many reads can be rejected or classified before genome alignment. A PCR duplicate does not become more informative because STAR maps it again. A sample-tag or guide read does not become useful genomic evidence because STAR is allowed to fail on it. Primer/barcode failures do not need to enter the mapper at all.
+
+Nelrune therefore performs the cheap, chemistry-aware decisions first and sends only accepted genomic molecules to the external mapper. This reduces wasted CPU time, mapper I/O and temporary data, while preserving the specialized mapping quality of STAR, minimap2 or BWA.
+
+This is also a sustainability decision: **the cheapest computation is the computation we can prove we do not need to perform.** On large sequencing runs, avoiding unnecessary mapping is more useful than merely making unnecessary mapping slightly faster.
+
+The intended flow is:
+
+```text
+FASTQ / normalized reads
+        |
+        v
+primer + cell/UMI detection
+        |
+        +---- feature/sample-tag/guide reads ---> feature processing
+        |
+        +---- duplicates / unusable reads ------> stop
+        |
+        v
+accepted genomic molecules
+        |
+        v
+STAR / minimap2 / BWA
+        |
+        v
+BAM processing + quantification
+```
+
+## Binaries
+
+- `nelrune` — the production integration binary.
+
+V(D)J reconstruction is implemented in the separate [`sc-vdj`](../sc-vdj/README.md) crate and exposed through `nelrune-vdj`. Keeping it downstream means the primary mapper BAM can be reused as receptor evidence rather than requiring Nelrune's core FASTQ/mapping orchestration to contain receptor-specific logic.
+
+## Library use
+
+Nelrune is primarily an integration binary. Its orchestration code is also the reference implementation for composing [`sc_primer`](../sc_primer/README.md), [`bam_tide`](../bam_tide/README.md), [`sc-mapper`](../sc-mapper/README.md), [`scdata`](../scdata/README.md), `mapping_info` and `lumrik-status`.
+
+## Detailed documentation
 
 ## Build
 

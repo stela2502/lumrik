@@ -9,6 +9,10 @@ use std::path::Path;
 
 mod format;
 
+/// Current on-disk ABI version for `.vdjidx` files.
+/// Increment only for incompatible VDJ index format/semantic changes.
+pub const VDJ_INDEX_FORMAT_VERSION: u32 = format::VDJ_INDEX_FORMAT_VERSION;
+
 pub type SegmentId = u16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

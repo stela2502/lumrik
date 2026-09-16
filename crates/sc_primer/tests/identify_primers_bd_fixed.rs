@@ -51,8 +51,12 @@ fn identify_primers_reports_rescued_bd_cell() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("summary: 1 complete primer match(es)"))
-        .stdout(predicate::str::contains("cell_seq: GTTAATTCCATCTCAGAATGTACAACG"));
+        .stdout(predicate::str::contains(
+            "summary: 1 complete primer match(es)",
+        ))
+        .stdout(predicate::str::contains(
+            "cell_seq: GTTAATTCCATCTCAGAATGTACAACG",
+        ));
 }
 
 #[test]
@@ -96,7 +100,9 @@ fn identify_primers_rejects_mouse_igk_transcript() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("summary: no complete primer match"))
+        .stdout(predicate::str::contains(
+            "summary: no complete primer match",
+        ))
         .stdout(predicate::str::contains(
             "reason: BD_CELL: combined 8 bp linker has more than two mismatches",
         ))

@@ -1,3 +1,21 @@
+# mapping_info
+
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Shared counters, timings and reporting used across Lumrik mapping and quantification stages.
+
+## Binaries
+
+None. This crate is library-only.
+
+## Library use
+
+Create and update `MappingInfo` from library code; its display/reporting implementation is shared by multiple Lumrik tools.
+
+## Detailed documentation
+
 [![Rust](https://github.com/stela2502/mapping_info/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/mapping_info/actions/workflows/rust.yml)
 # mapping_info
 

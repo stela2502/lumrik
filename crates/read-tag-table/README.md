@@ -1,5 +1,21 @@
 # read-tag-table
 
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Read-tag storage, serialization, loading and deduplication utilities for single-cell preprocessing.
+
+## Binaries
+
+None. This crate is library-only.
+
+## Library use
+
+Use `ReadTagTable`, `ReadTagTableConfig` and `ReadTagTableCli` when a pipeline needs external cell/UMI/read metadata.
+
+## Detailed documentation
+
 A lightweight Rust crate for storing, serializing, and exchanging single-cell read tag information.
 
 `read-tag-table` provides a common representation for read-level cell barcode and UMI assignments and was extracted from the bam_tide ecosystem to serve as a reusable interchange format between tools.

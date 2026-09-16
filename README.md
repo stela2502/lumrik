@@ -80,86 +80,41 @@ For production whole-genome STAR workloads, substantially more than 32 GiB RAM i
 
 ---
 
-## Workspace
+## Implementation crates
 
-Lumrik is composed of small crates that can also be used independently.
+Lumrik is a workspace, not a single monolithic implementation. The crate READMEs below are the implementation-level documentation and should be treated as the source of truth for their respective components.
 
-### `nelrune`
+| Crate | Responsibility |
+|---|---|
+| [`nelrune`](crates/nelrune/README.md) | End-to-end streaming integration of the Lumrik components |
+| [`sc_primer`](crates/sc_primer/README.md) | Chemistry/read-structure grammars, cell/UMI extraction and primer detection |
+| [`bam_tide`](crates/bam_tide/README.md) | High-throughput FASTQ/BAM normalization and quantification |
+| [`sc-mapper`](crates/sc-mapper/README.md) | Streaming STAR/minimap2/BWA process integration |
+| [`gtf_splice_index`](crates/gtf_splice_index/README.md) | Fast GTF/GFF parsing, spatial annotation and splice-aware indexing |
+| [`snp-index`](crates/snp-index/README.md) | SNP indexing and allele-aware read matching |
+| [`fast_tag_mapper`](crates/fast_tag_mapper/README.md) | Fast matching of sample tags, HTOs, guides and other short features |
+| [`scdata`](crates/scdata/README.md) | Sparse UMI-aware single-cell count accumulation and export |
+| [`sc-beacon`](crates/sc-beacon/README.md) | Ambient-aware cellular feature/guide calling |
+| [`sc-vdj`](crates/sc-vdj/README.md) | V(D)J indexing, receptor reconstruction and AIRR-compatible output |
+| [`valkyrn`](crates/valkyrn/README.md) | Repertoire interpretation, structural clone analysis and structure prioritization |
+| [`clonomap`](crates/clonomap/README.md) | Mutation-aware PCA/MST geometry and plots for large receptor clones |
+| [`sc-te`](crates/sc-te/README.md) | Single-cell transposable-element analysis and multimapper resolution |
+| [`read-tag-table`](crates/read-tag-table/README.md) | External read/cell/UMI tag tables |
+| [`mapping_info`](crates/mapping_info/README.md) | Shared counters, timings and reports |
+| [`onehot_dna`](crates/onehot_dna/README.md) | Compact fixed-length DNA matching |
+| [`int_to_str`](crates/int_to_str/README.md) | Compact sequence/integer identifier conversion |
+| [`lumrik-status`](crates/lumrik-status/README.md) | Live run-status HTTP server/dashboard |
 
-End-to-end orchestration for single-cell sequencing analysis.
+### Main capabilities
 
-It connects input normalisation, feature detection, external mapping, BAM processing, sparse quantification, reporting, and the live health server.
+The individual crates are deliberately reusable, but several capabilities are especially central to Lumrik as a whole:
 
-### `sc_primer`
-
-Chemistry-aware primer, barcode, UMI, adapter, and insert detection.
-
-The grammar supports sequencing-system-specific read structures rather than hard-coding one platform into the rest of the pipeline.
-
-It is used for both Illumina and long-read preprocessing.
-
-### `bam_tide`
-
-Read normalisation and BAM quantification.
-
-Responsibilities include:
-
-* Illumina FASTQ processing;
-* ONT/Dorado BAM processing;
-* cell/UMI handling;
-* molecule deduplication;
-* splice-aware gene quantification;
-* optional SNP-aware processing;
-* sparse quantification output.
-
-### `sc-mapper`
-
-Streaming interface to external sequence aligners.
-
-Currently designed around:
-
-* STAR;
-* minimap2;
-* BWA.
-
-Mapper input and BAM output are streamed so that mapping can proceed while nelrune continues processing sequencing reads.
-
-### `gtf_splice_index`
-
-Compact genomic annotation/index support used for splice-aware gene assignment.
-
-### `snp-index`
-
-Reference-genome and VCF-backed SNP support.
-
-Provides genomic reference access and aligned-read refinement for allele-aware quantification without duplicating the genome for individual read jobs.
-
-### `fast_tag_mapper`
-
-Fast matching of reads against small feature reference sets such as:
-
-* sample tags;
-* hashtag oligonucleotides;
-* CRISPR guide features.
-
-### `scdata`
-
-Sparse single-cell data structures used by Lumrik analysis components.
-
-### `sc-beacon`
-
-Ambient-aware CRISPR guide assignment from single-cell guide-count data.
-
-The caller supports single- and multi-guide assignments and models background guide signal rather than relying only on a winner-takes-all threshold.
-
-### Supporting crates
-
-The workspace also contains focused utility crates including:
-
-* `read-tag-table`
-* `mapping_info`
-* `int_to_str`
-* `onehot_dna`
+- **Fast genome annotation parsing.** `gtf_splice_index` streams GTF/GFF annotation into compact spatial and splice-aware indexes. The parser is not restricted to conventional gene/transcript records and is also used for transposable-element annotation.
+- **Fast FASTQ/BAM handling.** `bam_tide` provides the high-throughput normalization and BAM-processing layer used for Illumina and ONT workflows, including cell/UMI handling, molecule deduplication, splice-aware quantification and optional SNP-aware processing.
+- **Grammar-driven read structures.** `sc_primer` keeps sequencing chemistry out of downstream analysis code. A chemistry describes a read structure, and multiple structures can be requested for a single FASTQ stream.
+- **Streaming mapper integration.** `sc-mapper` feeds accepted molecules directly to STAR, minimap2 or BWA and consumes mapper output while the run is still progressing.
+- **Integrated single-cell processing.** `nelrune` composes these pieces into one run so filtering, feature routing, deduplication, mapping and quantification cooperate rather than repeatedly materialising the dataset.
+- **Specialized downstream analysis.** `sc-vdj`, `sc-te`, `snp-index` and `sc-beacon` build on the same core representations instead of each reimplementing FASTQ/BAM infrastructure.
 
 ---
 

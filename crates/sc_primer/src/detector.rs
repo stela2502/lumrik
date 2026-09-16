@@ -68,9 +68,7 @@ impl PrimerDetector {
 
     fn grammar_rejection_cost(grammar: &Grammar) -> (u8, usize, usize) {
         match grammar.ops.first() {
-            Some(GrammarOp::Fixed { seq, mismatches }) => {
-                (0, *mismatches, usize::MAX - seq.len())
-            }
+            Some(GrammarOp::Fixed { seq, mismatches }) => (0, *mismatches, usize::MAX - seq.len()),
             _ if grammar.anchor_search().is_some() => (1, 0, 0),
             Some(GrammarOp::Search { .. }) => (3, 0, 0),
             _ => (2, 0, 0),
@@ -719,7 +717,9 @@ impl PrimerDetector {
                         Some(packed)
                             if matches!(
                                 rhapsody.version(),
-                                BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
+                                BdCellVersion::V2_96
+                                    | BdCellVersion::V2_384
+                                    | BdCellVersion::V2_384Vdj
                             ) =>
                         {
                             rhapsody.call_with_packed(seq, qual, packed, pos, search.0, search.1)

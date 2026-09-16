@@ -1,5 +1,21 @@
 # onehot_dna
 
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Fixed-length one-hot DNA encoding optimized for barcode/linker matching and mismatch counting.
+
+## Binaries
+
+None. This crate is library-only.
+
+## Library use
+
+Use `OneHot<N>` (including `OneHot9`) for compact fixed-length DNA matching. Non-ACGT bases encode as zero and therefore match nothing.
+
+## Detailed documentation
+
 Small fixed-length one-hot DNA encoding for fast barcode and primer matching in Rust.
 
 This crate is meant for short sequences where all candidates have the same length, for example single-cell barcode blocks, sample tags, primer fragments, or other small DNA tokens that need fast exact or fuzzy matching.

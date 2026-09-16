@@ -11,6 +11,11 @@ const VERSION_V5: u32 = 5;
 const VERSION_V6: u32 = 6;
 const VERSION_V7: u32 = 7;
 
+// Keep the current VDJ on-disk ABI visible to the rest of Lumrik without
+// coupling it to CARGO_PKG_VERSION. VDJ indices were already versioned this
+// way; this constant makes that separation explicit.
+pub(super) const VDJ_INDEX_FORMAT_VERSION: u32 = VERSION_V7;
+
 pub(super) fn save(index: &VdjIndex, path: &Path) -> Result<()> {
     let mut w =
         BufWriter::new(File::create(path).with_context(|| format!("creating {}", path.display()))?);

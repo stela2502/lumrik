@@ -304,7 +304,10 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> Option<RhapsodyCellCall> {
-        if matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
+        if matches!(
+            self.version,
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
+        ) {
             let packed = OneHotSequence::from_bytes(seq);
             return self.call_with_packed(seq, qual, &packed, offset, shift_start, shift_end);
         }
@@ -347,7 +350,10 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> Option<usize> {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
+        if !matches!(
+            self.version,
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
+        ) {
             return None;
         }
 
@@ -382,7 +388,10 @@ impl RhapsodyWhitelist {
         if seq.len() != qual.len() {
             return None;
         }
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
+        if !matches!(
+            self.version,
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
+        ) {
             return self.call(seq, qual, 0, shift_start, shift_end);
         }
 
@@ -412,7 +421,10 @@ impl RhapsodyWhitelist {
         _shift_start: usize,
         _shift_end: usize,
     ) -> Option<usize> {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
+        if !matches!(
+            self.version,
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
+        ) {
             return None;
         }
 
@@ -426,7 +438,10 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> String {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
+        if !matches!(
+            self.version,
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
+        ) {
             return "BD_CELL: no complete whitelist match".to_string();
         }
 
@@ -554,7 +569,10 @@ impl RhapsodyWhitelist {
         shift_start: usize,
         shift_end: usize,
     ) -> Option<BdMismatchProfile> {
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
+        if !matches!(
+            self.version,
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
+        ) {
             return None;
         }
 
@@ -655,7 +673,10 @@ impl RhapsodyWhitelist {
             return None;
         }
 
-        if !matches!(self.version, BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) {
+        if !matches!(
+            self.version,
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj
+        ) {
             return self.call_exact_shift(seq, qual, offset, shift);
         }
 
@@ -892,8 +913,8 @@ impl RhapsodyWhitelist {
         let Ok(observed) = OneHot::<8>::from_bytes(&observed) else {
             return false;
         };
-        let expected = OneHot::<8>::from_bytes(self.v2_linkers())
-            .expect("builtin BD v2 linker must encode");
+        let expected =
+            OneHot::<8>::from_bytes(self.v2_linkers()).expect("builtin BD v2 linker must encode");
         observed.mismatches(expected) <= BD_V2_MAX_LINKER_MISMATCHES
     }
 
@@ -925,7 +946,9 @@ impl RhapsodyWhitelist {
         let (c1s, c2s, c3s) = match self.version {
             BdCellVersion::V1 => (BD_V2_96_C1, BD_V2_96_C2, BD_V2_96_C3),
             BdCellVersion::V2_96 => (BD_V2_96_C1, BD_V2_96_C2, BD_V2_96_C3),
-            BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => (BD_V2_384_C1, BD_V2_384_C2, BD_V2_384_C3),
+            BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => {
+                (BD_V2_384_C1, BD_V2_384_C2, BD_V2_384_C3)
+            }
         };
 
         let mut seq = Vec::new();
@@ -962,13 +985,15 @@ impl RhapsodyWhitelist {
                 umi: (base + 52, base + 60),
                 consumed: base + 60,
             }),
-            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => Some(BdCoords {
-                c1: (base, base + 9),
-                c2: (base + 13, base + 22),
-                c3: (base + 26, base + 35),
-                umi: (base + 36, base + 42),
-                consumed: base + 42,
-            }),
+            BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj => {
+                Some(BdCoords {
+                    c1: (base, base + 9),
+                    c2: (base + 13, base + 22),
+                    c3: (base + 26, base + 35),
+                    umi: (base + 36, base + 42),
+                    consumed: base + 42,
+                })
+            }
         }
     }
 

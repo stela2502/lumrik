@@ -1,5 +1,23 @@
 # sc-te
 
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Single-cell transposable-element quantification and multimapper resolution built on Lumrik annotation and BAM infrastructure.
+
+## Binaries
+
+- `sc-te`
+- `nelrune-te`
+- `nelrune-te-tests`
+
+## Library use
+
+Use the TE indexing and evidence APIs from Rust when embedding TE-aware annotation/mapping logic; the binaries provide end-to-end and development entry points.
+
+## Detailed documentation
+
 `sc-te` is the transposable-element analysis component of **Lumrik**.
 
 It is designed for single-cell RNA-seq data where reads originating from transposable elements (TEs) frequently map to multiple genomic locations.

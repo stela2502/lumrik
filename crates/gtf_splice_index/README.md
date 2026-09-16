@@ -1,5 +1,20 @@
 # gtf_splice_index
 
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Fast streaming GTF/GFF parsing and spatial/splice-aware genome annotation indexing. The parser is also used for annotations containing transposable-element records.
+
+## Binaries
+
+- `transcripts_at_position`
+
+## Library use
+
+Build a `SpliceIndex` from GTF/GFF and query it with `SplicedRead` objects; the parser/index types are the implementation truth used by downstream Lumrik crates.
+
+## Detailed documentation
 
 [![Rust](https://github.com/stela2502/gtf_splice_index/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/gtf_splice_index/actions/workflows/rust.yml)
 

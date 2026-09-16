@@ -1,0 +1,19 @@
+[package]
+name = "clonomap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mutation-aware PCA and MST analysis of large receptor clones for Lumrik"
+
+[features]
+default = []
+plot = ["dep:plotters"]
+
+[dependencies]
+ndarray = "0.15"
+linfa = "0.7"
+linfa-reduction = "0.7"
+plotters = { version = "0.3", optional = true }
+rayon = "1"
+anyhow = "1"
+clap = { workspace = true }

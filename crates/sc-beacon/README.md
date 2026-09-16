@@ -1,4 +1,20 @@
-# sc_beacon
+# sc-beacon
+
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Ambient-aware single-cell feature calling used for guide/tag assignment against experimentally observed background.
+
+## Binaries
+
+None. This crate is library-only.
+
+## Library use
+
+Use the crate APIs to score/call cellular feature signals from count data; it is intended to be embedded in Lumrik analyses.
+
+## Detailed documentation
 
 Ambient-aware CRISPR guide calling from 10x Feature Barcode matrices.
 

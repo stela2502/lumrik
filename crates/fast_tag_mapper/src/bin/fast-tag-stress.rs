@@ -108,11 +108,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn report_mapped_reads(
-    mapper: &fast_tag_mapper::FastTagMapper,
-    reads: &[Vec<u8>],
-    limit: usize,
-) {
+fn report_mapped_reads(mapper: &fast_tag_mapper::FastTagMapper, reads: &[Vec<u8>], limit: usize) {
     eprintln!("diagnostic: first {limit} mapped reads (untimed)");
 
     let mut info = MappingInfo::new(None, 0.0, 0);
@@ -207,7 +203,10 @@ fn load_fastq_sequences(path: &Path, max_reads: usize) -> Result<Vec<Vec<u8>>> {
         let plus = lines.next().context("truncated FASTQ: missing + line")??;
         anyhow::ensure!(plus.starts_with('+'), "invalid FASTQ + line: {plus}");
         let qual = lines.next().context("truncated FASTQ: missing quality")??;
-        anyhow::ensure!(seq.len() == qual.len(), "FASTQ sequence/quality length mismatch");
+        anyhow::ensure!(
+            seq.len() == qual.len(),
+            "FASTQ sequence/quality length mismatch"
+        );
 
         reads.push(seq);
     }

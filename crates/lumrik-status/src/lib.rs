@@ -277,7 +277,7 @@ pub fn snapshot_html(snapshot: &ServerSnapshot) -> String {
             sections.push_str("<div class=\"row\"><div class=\"label\">");
             sections.push_str(&escape_html(&metric.label));
             sections.push_str("</div><div class=\"metric\">");
-            sections.push_str(&escape_html(&metric.value));
+            sections.push_str(&escape_html(&format_metric_value(&metric.value)));
             sections.push_str("</div></div>");
         }
         sections.push_str("</div></section>");
@@ -310,6 +310,41 @@ pub fn snapshot_html(snapshot: &ServerSnapshot) -> String {
         elapsed,
         sections,
     )
+}
+
+fn format_metric_value(value: &str) -> String {
+    if !value.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        return value.to_string();
+    }
+
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len() + value.len() / 3);
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            let digits = &value[start..i];
+            if digits.len() >= 4 {
+                for (j, ch) in digits.chars().enumerate() {
+                    if j > 0 && (digits.len() - j) % 3 == 0 {
+                        out.push(' ');
+                    }
+                    out.push(ch);
+                }
+            } else {
+                out.push_str(digits);
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    out
 }
 
 fn format_elapsed_ms(ms: u128) -> String {
@@ -441,7 +476,7 @@ const DASHBOARD_HTML: &str = r##"<!doctype html>
 <script>
 let runStartedMs=null,runFinishedMs=null;
 function updateElapsed(){if(runStartedMs===null)return;const end=runFinishedMs??Date.now();const s=Math.floor(Math.max(0,end-runStartedMs)/1000);const sec=s%60,min=Math.floor(s/60)%60,h=Math.floor(s/3600);document.getElementById("elapsed").textContent=String(h).padStart(2,"0")+":"+String(min).padStart(2,"0")+":"+String(sec).padStart(2,"0")}
-function renderSections(sections){const root=document.getElementById("sections");root.replaceChildren();for(const section of sections){const panel=document.createElement("section");panel.className="panel";const heading=document.createElement("h2");heading.textContent=section.title;panel.appendChild(heading);const rows=document.createElement("div");rows.className="rows";for(const item of section.metrics){const row=document.createElement("div");row.className="row";const label=document.createElement("div");label.className="label";label.textContent=item.label;const metric=document.createElement("div");metric.className="metric";metric.textContent=item.value;row.append(label,metric);rows.appendChild(row)}panel.appendChild(rows);root.appendChild(panel)}}
+function formatMetricValue(value){if(!/^\d/.test(value))return value;return value.replace(/\d{4,}/g,digits=>digits.replace(/\B(?=(\d{3})+(?!\d))/g," "))}\nfunction renderSections(sections){const root=document.getElementById("sections");root.replaceChildren();for(const section of sections){const panel=document.createElement("section");panel.className="panel";const heading=document.createElement("h2");heading.textContent=section.title;panel.appendChild(heading);const rows=document.createElement("div");rows.className="rows";for(const item of section.metrics){const row=document.createElement("div");row.className="row";const label=document.createElement("div");label.className="label";label.textContent=item.label;const metric=document.createElement("div");metric.className="metric";metric.textContent=formatMetricValue(item.value);row.append(label,metric);rows.appendChild(row)}panel.appendChild(rows);root.appendChild(panel)}}
 async function updateStatus(){try{const response=await fetch("/status",{cache:"no-store"});if(!response.ok)throw new Error("HTTP "+response.status);const s=await response.json();document.title=s.title;document.getElementById("title").textContent=s.title;document.getElementById("subtitle").textContent=s.subtitle;document.getElementById("stage").textContent=s.stage;runStartedMs=Number(s.started_unix_ms);runFinishedMs=s.finished_unix_ms===null?null:Number(s.finished_unix_ms);renderSections(s.sections);document.getElementById("updated").textContent="Updated "+new Date().toLocaleTimeString();updateElapsed()}catch(error){document.getElementById("updated").textContent="Status unavailable: "+error}}
 setInterval(updateElapsed,1000);setInterval(updateStatus,2000);updateStatus();
 </script>
@@ -451,6 +486,18 @@ setInterval(updateElapsed,1000);setInterval(updateStatus,2000);updateStatus();
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metric_display_groups_large_numbers_with_spaces() {
+        assert_eq!(format_metric_value("445433421"), "445 433 421");
+        assert_eq!(format_metric_value("4843744 (7.92%)"), "4 843 744 (7.92%)");
+        assert_eq!(
+            format_metric_value("18874162 / 3404746"),
+            "18 874 162 / 3 404 746"
+        );
+        assert_eq!(format_metric_value("932"), "932");
+        assert_eq!(format_metric_value("ZD-4631.fastq.gz"), "ZD-4631.fastq.gz");
+    }
 
     #[test]
     fn snapshot_json_preserves_sections_and_escapes_values() {

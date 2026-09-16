@@ -18,7 +18,13 @@ use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
 const MAGIC: &[u8; 4] = b"SPX2";
-const VERSION_STR: &str = env!("CARGO_PKG_VERSION");
+
+/// On-disk ABI version of serialized splice indexes.
+///
+/// This is deliberately independent of the Lumrik/crate release version.
+/// Increment it only when the serialized representation or its semantics
+/// change incompatibly.
+pub const SPLICE_INDEX_FORMAT_VERSION: u32 = 1;
 
 /// Configure which attribute keys are used to extract:
 /// - gene stable identifier (used to intern -> GeneId)
@@ -1023,11 +1029,10 @@ impl SpliceIndex {
         // magic
         f.write_all(MAGIC)?;
 
-        // version string from Cargo.toml
-        let v = VERSION_STR.as_bytes();
-        let len = v.len() as u16;
-        f.write_all(&len.to_le_bytes())?;
-        f.write_all(v)?;
+        // Index format version. This is an on-disk ABI, not the software
+        // release version: compatible Lumrik releases must be able to reuse
+        // the same index.
+        f.write_all(&SPLICE_INDEX_FORMAT_VERSION.to_le_bytes())?;
 
         // payload
         let payload = bincode::serialize(self)?;
@@ -1048,20 +1053,16 @@ impl SpliceIndex {
             bail!("Not a SpliceIndex file (bad magic)");
         }
 
-        // read version string
-        let mut len_buf = [0u8; 2];
-        f.read_exact(&mut len_buf)?;
-        let len = u16::from_le_bytes(len_buf) as usize;
+        // read the independent on-disk format version
+        let mut version_buf = [0u8; 4];
+        f.read_exact(&mut version_buf)?;
+        let file_version = u32::from_le_bytes(version_buf);
 
-        let mut ver_buf = vec![0u8; len];
-        f.read_exact(&mut ver_buf)?;
-        let file_version = std::str::from_utf8(&ver_buf)?;
-
-        if file_version != VERSION_STR {
+        if file_version != SPLICE_INDEX_FORMAT_VERSION {
             bail!(
-                "Index version mismatch: file={}, binary={}",
+                "Splice index format mismatch: file={}, supported={}; rebuild the index",
                 file_version,
-                VERSION_STR
+                SPLICE_INDEX_FORMAT_VERSION
             );
         }
 

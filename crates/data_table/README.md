@@ -1,4 +1,20 @@
-# DataTable Rust Library
+# data_table
+
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Lightweight mixed numeric/categorical table handling for biomedical and analysis workflows.
+
+## Binaries
+
+- `generate_json`
+
+## Library use
+
+Use `DataTable` and the factor APIs to load, transform, impute, split and export tabular data.
+
+## Detailed documentation
 
 ## Overview
 

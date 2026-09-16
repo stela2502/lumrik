@@ -1,5 +1,24 @@
 # sc_primer
 
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Grammar-driven primer/read-structure detection for 10x, BD Rhapsody and custom single-cell structures. Multiple chemistries can be compiled together and detected in the same FASTQ stream.
+
+## Binaries
+
+- `identify_primers`
+- `primer-diagnostics`
+- `primer-stress`
+- `bd-linker-survey`
+
+## Library use
+
+Use `Chemistry`, `Grammar`, `PrimerDetector` and `PrimerMatch` directly. A chemistry defines one read structure; a detector may contain several requested chemistries/grammars.
+
+## Detailed documentation
+
 A grammar-driven Rust crate for detecting, validating, correcting and generating
 single-cell primer structures for 10x Genomics, BD Rhapsody, Illumina and ONT workflows.
 
@@ -54,6 +73,16 @@ PrimerMatch
 
 Built-in chemistries are convenience presets built on top of the grammar engine.
 
+A chemistry describes **one** read structure. `PrimerDetector` can compile several requested chemistries/grammars and test the same FASTQ stream against all of them. This is intentional: a mixed library does not require one chemistry enum variant to secretly contain several unrelated structures.
+
+For example, a BD Rhapsody dataset containing both Enhanced dT and Enhanced Custom Capture/VDJ structures can be processed with:
+
+```text
+--chemistry bd-v2-384 bd-v2-384vdj
+```
+
+The detector may reorder compiled grammars internally so structures with cheap, strong rejection anchors are tested before more expensive structures.
+
 ## Supported Chemistries
 
 ### 10x Genomics
@@ -70,6 +99,7 @@ Built-in chemistries are convenience presets built on top of the grammar engine.
 - bd-v1
 - bd-v2-96
 - bd-v2-384
+- bd-v2-384vdj
 
 ## Quick Start
 

@@ -1,3 +1,21 @@
+# snp-index
+
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Fast SNP indexing, aligned-read matching and cell × SNP sparse quantification.
+
+## Binaries
+
+None. This crate is library-only.
+
+## Library use
+
+Build an `SnpIndex`, convert alignments to `AlignedRead`, optionally refine against the genome, and feed SNP matches into `scdata`.
+
+## Detailed documentation
+
 [![Rust](https://github.com/stela2502/snp-index/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/snp-index/actions/workflows/rust.yml)
 
 # snp-index

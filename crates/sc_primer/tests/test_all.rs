@@ -718,9 +718,14 @@ fn benchmark_detect_all_bd_v2_384_multimer_long() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].bd_cell_id, Some(1));
 
-    bench("BD detect_all positional multimer [long]", 100_000, 1, || {
-        std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
-    });
+    bench(
+        "BD detect_all positional multimer [long]",
+        100_000,
+        1,
+        || {
+            std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
+        },
+    );
 }
 
 #[test]
@@ -814,14 +819,9 @@ fn benchmark_detect_all_bd_v2_384_multimer_fuzzy() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].bd_cell_id, Some(1));
 
-    bench(
-        "BD fuzzy detect_all positional multimer",
-        10_000,
-        1,
-        || {
-            std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
-        },
-    );
+    bench("BD fuzzy detect_all positional multimer", 10_000, 1, || {
+        std::hint::black_box(detector.detect_all(&seq, &qual).unwrap());
+    });
 }
 #[test]
 #[ignore = "benchmark"]
@@ -1011,13 +1011,13 @@ fn bd_vdj_uses_its_own_cc_handle_and_linkers() {
 
 #[test]
 fn multiple_chemistries_prefer_fast_fixed_anchor_but_detect_both_bd_structures() {
-    let detector = PrimerDetector::from_chemistries([
-        Chemistry::BdV2_384,
-        Chemistry::BdV2_384Vdj,
-    ])
-    .unwrap();
+    let detector =
+        PrimerDetector::from_chemistries([Chemistry::BdV2_384, Chemistry::BdV2_384Vdj]).unwrap();
 
-    let names = detector.grammars().map(|g| g.name.as_str()).collect::<Vec<_>>();
+    let names = detector
+        .grammars()
+        .map(|g| g.name.as_str())
+        .collect::<Vec<_>>();
     assert_eq!(names, vec!["bd-v2-384-vdj", "bd-v2-384"]);
 
     let vdj_wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384Vdj);
@@ -1028,17 +1028,20 @@ fn multiple_chemistries_prefer_fast_fixed_anchor_but_detect_both_bd_structures()
         .unwrap();
     let mut vdj = vdj_grammar.synthesize(&vdj_cell, b"ACGTAC").unwrap();
     vdj.extend_from_slice(b"TATGCGTAGTAGGTATGACGTACGT");
-    let vdj_hit = detector.detect_first(&vdj, &vec![40u8; vdj.len()]).unwrap().unwrap();
+    let vdj_hit = detector
+        .detect_first(&vdj, &vec![40u8; vdj.len()])
+        .unwrap()
+        .unwrap();
     assert_eq!(vdj_hit.chemistry_name, "bd-v2-384-vdj");
 
     let dt_wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384);
     let dt_cell = dt_wl.cell_id_to_cassette(2).unwrap();
-    let dt_grammar = detector
-        .grammars()
-        .find(|g| g.name == "bd-v2-384")
-        .unwrap();
+    let dt_grammar = detector.grammars().find(|g| g.name == "bd-v2-384").unwrap();
     let mut dt = dt_grammar.synthesize(&dt_cell, b"TGCATG").unwrap();
     dt.extend_from_slice(b"ACGTACGTACGTACGT");
-    let dt_hit = detector.detect_first(&dt, &vec![40u8; dt.len()]).unwrap().unwrap();
+    let dt_hit = detector
+        .detect_first(&dt, &vec![40u8; dt.len()])
+        .unwrap()
+        .unwrap();
     assert_eq!(dt_hit.chemistry_name, "bd-v2-384");
 }

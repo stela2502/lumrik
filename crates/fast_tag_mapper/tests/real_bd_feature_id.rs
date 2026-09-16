@@ -65,9 +65,7 @@ fn real_mouse_sample_read_from_conversation_maps_to_sampletag07_feature_id() {
     let mut mi = info();
     match mapper.map_status(read, &mut mi) {
         MapStatus::Hit {
-            feature_id,
-            hits,
-            ..
+            feature_id, hits, ..
         } => {
             assert_eq!(feature_id, 7);
             assert!(hits >= 4);
@@ -115,10 +113,16 @@ fn shared_8bp_prefixes_are_resolved_by_exact_16bp_confirmation() {
     );
 
     let mut mi = info();
-    assert_eq!(mapper.map_feature_id(b"TTTTAAAAAAAACCCCCCCCTTTT", &mut mi), Some(10));
+    assert_eq!(
+        mapper.map_feature_id(b"TTTTAAAAAAAACCCCCCCCTTTT", &mut mi),
+        Some(10)
+    );
 
     let mut mi = info();
-    assert_eq!(mapper.map_feature_id(b"TTTTAAAAAAAAGGGGGGGGTTTT", &mut mi), Some(20));
+    assert_eq!(
+        mapper.map_feature_id(b"TTTTAAAAAAAAGGGGGGGGTTTT", &mut mi),
+        Some(20)
+    );
 }
 
 #[test]

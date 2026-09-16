@@ -1,5 +1,21 @@
 # scdata
 
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Sparse UMI-aware single-cell count accumulation with deterministic Matrix Market export.
+
+## Binaries
+
+None. This crate is library-only.
+
+## Library use
+
+Use `Scdata` for incremental molecule insertion and `FeatureIndex` for deterministic export. It deliberately does not implement matrix analysis.
+
+## Detailed documentation
+
 [![Rust](https://github.com/stela2502/scdata/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/scdata/actions/workflows/rust.yml)
 
 A high-performance Rust library for constructing **sparse single-cell UMI count data**, with deterministic export to Matrix Market (10x-style) format.

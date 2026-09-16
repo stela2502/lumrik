@@ -1,5 +1,27 @@
 # sc-vdj
 
+> **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
+
+## What this crate does
+
+Single-cell V(D)J reference indexing, receptor reconstruction and AIRR-compatible export for Lumrik/Nelrune.
+
+## Binaries
+
+- `nelrune-vdj`
+- `vdj-index`
+- `vdj-summary`
+- `vdj-decode`
+- `vdj-rich-cell`
+- `compare-to-airr-bd`
+- `create-test-vdj-index`
+
+## Library use
+
+Use the reference-index and evidence/reconstruction APIs directly when embedding V(D)J processing. `nelrune-vdj` is the production command-line integration.
+
+## Detailed documentation
+
 Single-cell V(D)J reconstruction for Lumrik/Nelrune.
 
 `sc-vdj` reconstructs immunoglobulin and T-cell receptor rearrangements directly from single-cell BAM data. It is designed for transcriptomic single-cell datasets where receptor evidence may be fragmented across multiple reads and where no individual BAM record necessarily contains a complete V(D)J rearrangement.

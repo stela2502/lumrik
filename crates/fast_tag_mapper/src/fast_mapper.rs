@@ -255,18 +255,13 @@ impl FastTagMapper {
             hits: best_hits,
         }
     }
-
 }
 
 // Kept outside FastTagMapper so the hot representation and sequence encoding
 // remain separate modules/concepts rather than accumulating in lib.rs.
 fn split_seed(seed: u32) -> (usize, u8, u16) {
     let first_8 = (seed >> 16) as u16;
-    (
-        (first_8 >> 8) as usize,
-        first_8 as u8,
-        seed as u16,
-    )
+    ((first_8 >> 8) as usize, first_8 as u8, seed as u16)
 }
 
 struct Rolling16<'a> {
@@ -352,6 +347,9 @@ mod tests {
 
     #[test]
     fn invalid_base_resets_window() {
-        assert_eq!(Rolling16::new(b"AAAAAAAAAAAAAAAANAAAAAAAAAAAAAAAA").count(), 2);
+        assert_eq!(
+            Rolling16::new(b"AAAAAAAAAAAAAAAANAAAAAAAAAAAAAAAA").count(),
+            2
+        );
     }
 }

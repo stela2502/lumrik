@@ -17,10 +17,13 @@ pub use cellrep::{
     AlignmentGeometry, BamFeatureEvidence, BamFeatureSequenceParts, CellEvidence, CellEvidenceVdj,
     EvidenceId, MapperEvidence, SequencePart,
 };
-pub use index::{Chain, SegmentId, SegmentKind, Strand, VdjIndex, VdjIndexBuilder, VdjSegment};
+pub use index::{
+    Chain, SegmentId, SegmentKind, Strand, VDJ_INDEX_FORMAT_VERSION, VdjIndex, VdjIndexBuilder,
+    VdjSegment,
+};
 pub use recombination::{
-    ConstantRegionEvidence, JunctionStructure, ProductivityStatus, ReceptorRole, Recombination,
-    RecombinationId,
+    ConstantRegionEvidence, DecodedNumericRecombinationId, JunctionStructure, ProductivityStatus,
+    ReceptorRole, Recombination, RecombinationId,
 };
 pub use runner::{
     BamIdentityResolver, BamIngestProgress, NelruneIdentityResolver, VdjRunner, VdjRunnerConfig,

@@ -1,9 +1,9 @@
 use clap::Parser;
+use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use int_to_str::IntToStr;
-use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use mapping_info::MappingInfo;
 use sc_primer::{Chemistry, Grammar, PrimerDetector};
 use std::fs::File;
@@ -18,7 +18,11 @@ enum FeatureSet {
 }
 
 #[derive(Debug, Parser)]
-#[command(author, version, about = "Stress-test primer detection and cumulative downstream barcode/UMI work on real FASTQ reads")]
+#[command(
+    author,
+    version,
+    about = "Stress-test primer detection and cumulative downstream barcode/UMI work on real FASTQ reads"
+)]
 struct Cli {
     #[arg(long)]
     r1: PathBuf,
@@ -76,71 +80,156 @@ struct ReadPair {
 
 fn open_fastq(path: &Path) -> Result<Box<dyn BufRead>, String> {
     let file = File::open(path).map_err(|e| format!("failed to open '{}': {e}", path.display()))?;
-    let gz = path.extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("gz"));
-    let reader: Box<dyn Read> = if gz { Box::new(MultiGzDecoder::new(file)) } else { Box::new(file) };
+    let gz = path
+        .extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| x.eq_ignore_ascii_case("gz"));
+    let reader: Box<dyn Read> = if gz {
+        Box::new(MultiGzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
     Ok(Box::new(BufReader::with_capacity(1024 * 1024, reader)))
 }
 
 fn trim_newline(line: &mut Vec<u8>) {
-    while matches!(line.last(), Some(b'\n' | b'\r')) { line.pop(); }
+    while matches!(line.last(), Some(b'\n' | b'\r')) {
+        line.pop();
+    }
 }
 
-fn next_fastq<R: BufRead>(reader: &mut R, record_no: usize) -> Result<Option<(Vec<u8>, Vec<u8>, Vec<u8>)>, String> {
+fn next_fastq<R: BufRead>(
+    reader: &mut R,
+    record_no: usize,
+) -> Result<Option<(Vec<u8>, Vec<u8>, Vec<u8>)>, String> {
     let mut header = Vec::new();
     let mut seq = Vec::new();
     let mut plus = Vec::new();
     let mut qual = Vec::new();
-    if reader.read_until(b'\n', &mut header).map_err(|e| e.to_string())? == 0 { return Ok(None); }
-    if reader.read_until(b'\n', &mut seq).map_err(|e| e.to_string())? == 0
-        || reader.read_until(b'\n', &mut plus).map_err(|e| e.to_string())? == 0
-        || reader.read_until(b'\n', &mut qual).map_err(|e| e.to_string())? == 0 {
+    if reader
+        .read_until(b'\n', &mut header)
+        .map_err(|e| e.to_string())?
+        == 0
+    {
+        return Ok(None);
+    }
+    if reader
+        .read_until(b'\n', &mut seq)
+        .map_err(|e| e.to_string())?
+        == 0
+        || reader
+            .read_until(b'\n', &mut plus)
+            .map_err(|e| e.to_string())?
+            == 0
+        || reader
+            .read_until(b'\n', &mut qual)
+            .map_err(|e| e.to_string())?
+            == 0
+    {
         return Err(format!("truncated FASTQ at record {}", record_no + 1));
     }
-    trim_newline(&mut header); trim_newline(&mut seq); trim_newline(&mut qual);
-    if seq.len() != qual.len() { return Err(format!("sequence/quality length mismatch at record {}", record_no + 1)); }
+    trim_newline(&mut header);
+    trim_newline(&mut seq);
+    trim_newline(&mut qual);
+    if seq.len() != qual.len() {
+        return Err(format!(
+            "sequence/quality length mismatch at record {}",
+            record_no + 1
+        ));
+    }
     seq.make_ascii_uppercase();
-    if header.first() == Some(&b'@') { header.remove(0); }
+    if header.first() == Some(&b'@') {
+        header.remove(0);
+    }
     Ok(Some((header, seq, qual)))
 }
 
 fn load_reads(r1: &Path, r2: Option<&Path>, max_reads: usize) -> Result<Vec<ReadPair>, String> {
     let mut r1_reader = open_fastq(r1)?;
-    let mut r2_reader = match r2 { Some(path) => Some(open_fastq(path)?), None => None };
+    let mut r2_reader = match r2 {
+        Some(path) => Some(open_fastq(path)?),
+        None => None,
+    };
     let mut reads = Vec::with_capacity(if max_reads == 0 { 250_000 } else { max_reads });
     while max_reads == 0 || reads.len() < max_reads {
-        let Some((r1_id, r1_seq, r1_qual)) = next_fastq(&mut r1_reader, reads.len())? else { break; };
+        let Some((r1_id, r1_seq, r1_qual)) = next_fastq(&mut r1_reader, reads.len())? else {
+            break;
+        };
         let (r2_id, r2_seq, r2_qual) = if let Some(reader) = r2_reader.as_mut() {
-            let Some((id, seq, qual)) = next_fastq(reader, reads.len())? else { return Err("R2 ended before R1".to_string()); };
+            let Some((id, seq, qual)) = next_fastq(reader, reads.len())? else {
+                return Err("R2 ended before R1".to_string());
+            };
             (id, seq, qual)
-        } else { (Vec::new(), Vec::new(), Vec::new()) };
-        reads.push(ReadPair { r1_id, r1_seq, r1_qual, r2_id, r2_seq, r2_qual });
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        };
+        reads.push(ReadPair {
+            r1_id,
+            r1_seq,
+            r1_qual,
+            r2_id,
+            r2_seq,
+            r2_qual,
+        });
     }
     Ok(reads)
 }
 
-fn report(label: &str, n: usize, called: usize, best: Duration, total: Duration, iterations: usize) {
+fn report(
+    label: &str,
+    n: usize,
+    called: usize,
+    best: Duration,
+    total: Duration,
+    iterations: usize,
+) {
     let n = n as f64;
     let best_s = best.as_secs_f64();
     let mean_s = total.as_secs_f64() / iterations as f64;
     eprintln!("{label}");
-    eprintln!("  calls: {called}/{} ({:.2}%)", n as usize, 100.0 * called as f64 / n);
-    eprintln!("  best: {:.3}s = {:.0} reads/s = {:.3} us/read", best_s, n / best_s, best_s * 1e6 / n);
-    eprintln!("  mean: {:.3}s = {:.0} reads/s = {:.3} us/read", mean_s, n / mean_s, mean_s * 1e6 / n);
+    eprintln!(
+        "  calls: {called}/{} ({:.2}%)",
+        n as usize,
+        100.0 * called as f64 / n
+    );
+    eprintln!(
+        "  best: {:.3}s = {:.0} reads/s = {:.3} us/read",
+        best_s,
+        n / best_s,
+        best_s * 1e6 / n
+    );
+    eprintln!(
+        "  mean: {:.3}s = {:.0} reads/s = {:.3} us/read",
+        mean_s,
+        n / mean_s,
+        mean_s * 1e6 / n
+    );
 }
 
 fn bench<F>(label: &str, reads: &[ReadPair], iterations: usize, mut f: F) -> Result<(), String>
-where F: FnMut(&ReadPair) -> Result<bool, String> {
+where
+    F: FnMut(&ReadPair) -> Result<bool, String>,
+{
     let mut best = Duration::MAX;
     let mut total = Duration::ZERO;
     let mut called = 0usize;
     for iteration in 0..iterations {
         let start = Instant::now();
         let mut this_called = 0usize;
-        for read in reads { if f(read)? { this_called += 1; } }
+        for read in reads {
+            if f(read)? {
+                this_called += 1;
+            }
+        }
         let elapsed = start.elapsed();
-        best = best.min(elapsed); total += elapsed;
-        if iteration == 0 { called = this_called; }
-        if called != this_called { return Err(format!("non-deterministic call count in {label}")); }
+        best = best.min(elapsed);
+        total += elapsed;
+        if iteration == 0 {
+            called = this_called;
+        }
+        if called != this_called {
+            return Err(format!("non-deterministic call count in {label}"));
+        }
         std::hint::black_box(this_called);
     }
     report(label, reads.len(), called, best, total, iterations);
@@ -158,7 +247,13 @@ fn write_fastq_record<W: Write>(writer: &mut W, read: &ReadPair) -> Result<(), S
     Ok(())
 }
 
-fn bench_io<F>(label: &str, n_input: usize, n_output: usize, iterations: usize, mut f: F) -> Result<(), String>
+fn bench_io<F>(
+    label: &str,
+    n_input: usize,
+    n_output: usize,
+    iterations: usize,
+    mut f: F,
+) -> Result<(), String>
 where
     F: FnMut() -> Result<u64, String>,
 {
@@ -172,7 +267,9 @@ where
         best = best.min(elapsed);
         total += elapsed;
         if let Some(want) = expected {
-            if bytes != want { return Err(format!("non-deterministic byte count in {label}")); }
+            if bytes != want {
+                return Err(format!("non-deterministic byte count in {label}"));
+            }
         } else {
             expected = Some(bytes);
         }
@@ -183,21 +280,54 @@ where
     let bytes = expected.unwrap_or(0);
     eprintln!("{label}");
     eprintln!("  output: {n_output}/{n_input} reads; {bytes} uncompressed FASTQ bytes/pass");
-    eprintln!("  best: {:.3}s = {:.0} input reads/s = {:.0} output reads/s", best_s, n_input as f64 / best_s, n_output as f64 / best_s);
-    eprintln!("  mean: {:.3}s = {:.0} input reads/s = {:.0} output reads/s", mean_s, n_input as f64 / mean_s, n_output as f64 / mean_s);
+    eprintln!(
+        "  best: {:.3}s = {:.0} input reads/s = {:.0} output reads/s",
+        best_s,
+        n_input as f64 / best_s,
+        n_output as f64 / best_s
+    );
+    eprintln!(
+        "  mean: {:.3}s = {:.0} input reads/s = {:.0} output reads/s",
+        mean_s,
+        n_input as f64 / mean_s,
+        n_output as f64 / mean_s
+    );
     Ok(())
 }
 
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
-    if cli.iterations == 0 { return Err("--iterations must be >= 1".to_string()); }
-    eprintln!("loading {}{} ...", cli.r1.display(), cli.r2.as_ref().map(|p| format!(" + {}", p.display())).unwrap_or_default());
+    if cli.iterations == 0 {
+        return Err("--iterations must be >= 1".to_string());
+    }
+    eprintln!(
+        "loading {}{} ...",
+        cli.r1.display(),
+        cli.r2
+            .as_ref()
+            .map(|p| format!(" + {}", p.display()))
+            .unwrap_or_default()
+    );
     let start = Instant::now();
     let reads = load_reads(&cli.r1, cli.r2.as_deref(), cli.max_reads)?;
     let elapsed = start.elapsed();
-    if reads.is_empty() { return Err("FASTQ contained no reads".to_string()); }
-    eprintln!("loaded {} pairs in {:.3}s ({:.0} pairs/s; I/O + decompression excluded from benchmarks)", reads.len(), elapsed.as_secs_f64(), reads.len() as f64 / elapsed.as_secs_f64());
-    eprintln!("chemistry: {}", cli.chemistry.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "));
+    if reads.is_empty() {
+        return Err("FASTQ contained no reads".to_string());
+    }
+    eprintln!(
+        "loaded {} pairs in {:.3}s ({:.0} pairs/s; I/O + decompression excluded from benchmarks)",
+        reads.len(),
+        elapsed.as_secs_f64(),
+        reads.len() as f64 / elapsed.as_secs_f64()
+    );
+    eprintln!(
+        "chemistry: {}",
+        cli.chemistry
+            .iter()
+            .map(|c| c.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     if let Some(structure) = cli.primer_structure.as_deref() {
         eprintln!("primer structure override: {structure}");
     }
@@ -214,7 +344,11 @@ fn main() -> Result<(), String> {
         let mut failed = 0usize;
         eprintln!("failed primer detections (first {}):", cli.failed_reads);
         for (idx, r) in reads.iter().enumerate() {
-            if detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?.is_some() {
+            if detector
+                .detect_first(&r.r1_seq, &r.r1_qual)
+                .map_err(|e| e.to_string())?
+                .is_some()
+            {
                 continue;
             }
             failed += 1;
@@ -233,7 +367,7 @@ fn main() -> Result<(), String> {
     }
 
     let mut feature_mapper = FastTagMapper::new();
-    let _= match cli.feature_set {
+    let _ = match cli.feature_set {
         FeatureSet::BdSampleMouse => feature_mapper.add_builtin(BuiltinTagSet::Mouse),
         FeatureSet::BdSampleHuman => feature_mapper.add_builtin(BuiltinTagSet::Human),
     };
@@ -247,60 +381,140 @@ fn main() -> Result<(), String> {
     );
 
     bench("1. detect_first", &reads, cli.iterations, |r| {
-        Ok(detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?.is_some())
+        Ok(detector
+            .detect_first(&r.r1_seq, &r.r1_qual)
+            .map_err(|e| e.to_string())?
+            .is_some())
     })?;
 
-    bench("2. detect + get_cell + get_umi", &reads, cli.iterations, |r| {
-        let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { return Ok(false); };
-        if detector.grammar_for_match(&m).is_unbarcoded() { return Ok(true); }
-        let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-        let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-        std::hint::black_box((cell.seq.len(), cell.qual.len(), umi.seq.len(), umi.qual.len()));
-        Ok(true)
-    })?;
+    bench(
+        "2. detect + get_cell + get_umi",
+        &reads,
+        cli.iterations,
+        |r| {
+            let Some(m) = detector
+                .detect_first(&r.r1_seq, &r.r1_qual)
+                .map_err(|e| e.to_string())?
+            else {
+                return Ok(false);
+            };
+            if detector.grammar_for_match(&m).is_unbarcoded() {
+                return Ok(true);
+            }
+            let cell = m
+                .get_cell(&r.r1_seq, &r.r1_qual)
+                .map_err(|e| e.to_string())?;
+            let umi = m
+                .get_umi(&r.r1_seq, &r.r1_qual)
+                .map_err(|e| e.to_string())?;
+            std::hint::black_box((
+                cell.seq.len(),
+                cell.qual.len(),
+                umi.seq.len(),
+                umi.qual.len(),
+            ));
+            Ok(true)
+        },
+    )?;
 
-    bench("3. detect + slices + normalized-cell clone", &reads, cli.iterations, |r| {
-        let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { return Ok(false); };
-        if detector.grammar_for_match(&m).is_unbarcoded() { return Ok(true); }
-        let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-        let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-        let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
-        std::hint::black_box((normalized_cell, umi));
-        Ok(true)
-    })?;
+    bench(
+        "3. detect + slices + normalized-cell clone",
+        &reads,
+        cli.iterations,
+        |r| {
+            let Some(m) = detector
+                .detect_first(&r.r1_seq, &r.r1_qual)
+                .map_err(|e| e.to_string())?
+            else {
+                return Ok(false);
+            };
+            if detector.grammar_for_match(&m).is_unbarcoded() {
+                return Ok(true);
+            }
+            let cell = m
+                .get_cell(&r.r1_seq, &r.r1_qual)
+                .map_err(|e| e.to_string())?;
+            let umi = m
+                .get_umi(&r.r1_seq, &r.r1_qual)
+                .map_err(|e| e.to_string())?;
+            let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
+            std::hint::black_box((normalized_cell, umi));
+            Ok(true)
+        },
+    )?;
 
     if cli.r2.is_some() {
-        bench("4. detect + slices + clone + molecule_identity", &reads, cli.iterations, |r| {
-            let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { return Ok(false); };
-            if detector.grammar_for_match(&m).is_unbarcoded() {
-                let id = detector.grammar_for_match(&m).molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+        bench(
+            "4. detect + slices + clone + molecule_identity",
+            &reads,
+            cli.iterations,
+            |r| {
+                let Some(m) = detector
+                    .detect_first(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?
+                else {
+                    return Ok(false);
+                };
+                if detector.grammar_for_match(&m).is_unbarcoded() {
+                    let id = detector
+                        .grammar_for_match(&m)
+                        .molecule_identity(None, None, &r.r1_seq, &r.r2_seq)
+                        .map_err(|e| e.to_string())?;
+                    std::hint::black_box(id);
+                    return Ok(true);
+                }
+                let cell = m
+                    .get_cell(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?;
+                let umi = m
+                    .get_umi(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?;
+                let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
+                let id = detector
+                    .grammar_for_match(&m)
+                    .molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq)
+                    .map_err(|e| e.to_string())?;
                 std::hint::black_box(id);
-                return Ok(true);
-            }
-            let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-            let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-            let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
-            let id = detector.grammar_for_match(&m).molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
-            std::hint::black_box(id);
-            Ok(true)
-        })?;
+                Ok(true)
+            },
+        )?;
 
-        bench("5. current identity path + duplicate IntToStr cell/UMI encoding", &reads, cli.iterations, |r| {
-            let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { return Ok(false); };
-            if detector.grammar_for_match(&m).is_unbarcoded() {
-                let id = detector.grammar_for_match(&m).molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
-                std::hint::black_box(id);
-                return Ok(true);
-            }
-            let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-            let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-            let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
-            let identity = detector.grammar_for_match(&m).molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
-            let cell_id = IntToStr::new(&normalized_cell).into_u64();
-            let umi_id = IntToStr::new(&umi.seq).into_u64();
-            std::hint::black_box((identity, cell_id, umi_id));
-            Ok(true)
-        })?;
+        bench(
+            "5. current identity path + duplicate IntToStr cell/UMI encoding",
+            &reads,
+            cli.iterations,
+            |r| {
+                let Some(m) = detector
+                    .detect_first(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?
+                else {
+                    return Ok(false);
+                };
+                if detector.grammar_for_match(&m).is_unbarcoded() {
+                    let id = detector
+                        .grammar_for_match(&m)
+                        .molecule_identity(None, None, &r.r1_seq, &r.r2_seq)
+                        .map_err(|e| e.to_string())?;
+                    std::hint::black_box(id);
+                    return Ok(true);
+                }
+                let cell = m
+                    .get_cell(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?;
+                let umi = m
+                    .get_umi(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?;
+                let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
+                let identity = detector
+                    .grammar_for_match(&m)
+                    .molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq)
+                    .map_err(|e| e.to_string())?;
+                let cell_id = IntToStr::new(&normalized_cell).into_u64();
+                let umi_id = IntToStr::new(&umi.seq).into_u64();
+                std::hint::black_box((identity, cell_id, umi_id));
+                Ok(true)
+            },
+        )?;
     } else {
         eprintln!("4/5 skipped: provide --r2 to benchmark molecule_identity and duplicate cell/UMI encoding");
     }
@@ -316,15 +530,28 @@ fn main() -> Result<(), String> {
             for r in &reads {
                 let hit = feature_mapper.map_feature_id(&r.r1_seq, &mut stats);
                 std::hint::black_box(hit);
-                if hit.is_some() { this_hits += 1; }
+                if hit.is_some() {
+                    this_hits += 1;
+                }
             }
             let elapsed = start.elapsed();
             best = best.min(elapsed);
             total += elapsed;
-            if iteration == 0 { hits = this_hits; }
-            if hits != this_hits { return Err("non-deterministic hit count in FastTagMapper".to_string()); }
+            if iteration == 0 {
+                hits = this_hits;
+            }
+            if hits != this_hits {
+                return Err("non-deterministic hit count in FastTagMapper".to_string());
+            }
         }
-        report("6a. FastTagMapper only on R1", reads.len(), hits, best, total, cli.iterations);
+        report(
+            "6a. FastTagMapper only on R1",
+            reads.len(),
+            hits,
+            best,
+            total,
+            cli.iterations,
+        );
     }
 
     // Production-shaped cumulative benchmark, except that R1 is intentionally
@@ -339,18 +566,38 @@ fn main() -> Result<(), String> {
             let start = Instant::now();
             let mut this_called = 0usize;
             for r in &reads {
-                let Some(m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { continue; };
+                let Some(m) = detector
+                    .detect_first(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?
+                else {
+                    continue;
+                };
                 if detector.grammar_for_match(&m).is_unbarcoded() {
                     if cli.r2.is_some() {
-                        let identity = detector.grammar_for_match(&m).molecule_identity(None, None, &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+                        let identity = detector
+                            .grammar_for_match(&m)
+                            .molecule_identity(None, None, &r.r1_seq, &r.r2_seq)
+                            .map_err(|e| e.to_string())?;
                         std::hint::black_box(identity);
                     }
                 } else {
-                    let cell = m.get_cell(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
-                    let umi = m.get_umi(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?;
+                    let cell = m
+                        .get_cell(&r.r1_seq, &r.r1_qual)
+                        .map_err(|e| e.to_string())?;
+                    let umi = m
+                        .get_umi(&r.r1_seq, &r.r1_qual)
+                        .map_err(|e| e.to_string())?;
                     let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
                     if cli.r2.is_some() {
-                        let identity = detector.grammar_for_match(&m).molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq).map_err(|e| e.to_string())?;
+                        let identity = detector
+                            .grammar_for_match(&m)
+                            .molecule_identity(
+                                Some(&normalized_cell),
+                                Some(&umi.seq),
+                                &r.r1_seq,
+                                &r.r2_seq,
+                            )
+                            .map_err(|e| e.to_string())?;
                         let cell_id = IntToStr::new(&normalized_cell).into_u64();
                         let umi_id = IntToStr::new(&umi.seq).into_u64();
                         std::hint::black_box((identity, cell_id, umi_id));
@@ -363,8 +610,12 @@ fn main() -> Result<(), String> {
             let elapsed = start.elapsed();
             best = best.min(elapsed);
             total += elapsed;
-            if iteration == 0 { called = this_called; }
-            if called != this_called { return Err("non-deterministic call count in stage 6b".to_string()); }
+            if iteration == 0 {
+                called = this_called;
+            }
+            if called != this_called {
+                return Err("non-deterministic call count in stage 6b".to_string());
+            }
         }
         report(
             "6b. current identity path + FastTagMapper(R1)",
@@ -387,36 +638,61 @@ fn main() -> Result<(), String> {
             let mut output_indices = Vec::new();
             let mut stats = MappingInfo::new(None, 0.0, reads.len());
             for (idx, r) in reads.iter().enumerate() {
-                let Some(_m) = detector.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())? else { continue; };
-                if feature_mapper.map_feature_id(&r.r2_seq, &mut stats).is_none() {
+                let Some(_m) = detector
+                    .detect_first(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?
+                else {
+                    continue;
+                };
+                if feature_mapper
+                    .map_feature_id(&r.r2_seq, &mut stats)
+                    .is_none()
+                {
                     output_indices.push(idx);
                 }
             }
-            eprintln!("I/O stress population: {} R2 reads from {} input pairs ({:.2}%)", output_indices.len(), reads.len(), 100.0 * output_indices.len() as f64 / reads.len() as f64);
+            eprintln!(
+                "I/O stress population: {} R2 reads from {} input pairs ({:.2}%)",
+                output_indices.len(),
+                reads.len(),
+                100.0 * output_indices.len() as f64 / reads.len() as f64
+            );
 
-            bench_io("7a. serial FASTQ serialization -> sink (no compression)", reads.len(), output_indices.len(), cli.iterations, || {
-                let mut sink = std::io::sink();
-                let mut bytes = 0u64;
-                for &idx in &output_indices {
-                    let r = &reads[idx];
-                    write_fastq_record(&mut sink, r)?;
-                    bytes += (r.r2_id.len() + r.r2_seq.len() + r.r2_qual.len() + 7) as u64;
-                }
-                Ok(bytes)
-            })?;
+            bench_io(
+                "7a. serial FASTQ serialization -> sink (no compression)",
+                reads.len(),
+                output_indices.len(),
+                cli.iterations,
+                || {
+                    let mut sink = std::io::sink();
+                    let mut bytes = 0u64;
+                    for &idx in &output_indices {
+                        let r = &reads[idx];
+                        write_fastq_record(&mut sink, r)?;
+                        bytes += (r.r2_id.len() + r.r2_seq.len() + r.r2_qual.len() + 7) as u64;
+                    }
+                    Ok(bytes)
+                },
+            )?;
 
-            bench_io("7b. serial FASTQ serialization + gzip -> sink", reads.len(), output_indices.len(), cli.iterations, || {
-                let sink = std::io::sink();
-                let mut gz = GzEncoder::new(sink, Compression::new(cli.io_gzip_level));
-                let mut bytes = 0u64;
-                for &idx in &output_indices {
-                    let r = &reads[idx];
-                    write_fastq_record(&mut gz, r)?;
-                    bytes += (r.r2_id.len() + r.r2_seq.len() + r.r2_qual.len() + 7) as u64;
-                }
-                gz.finish().map_err(|e| e.to_string())?;
-                Ok(bytes)
-            })?;
+            bench_io(
+                "7b. serial FASTQ serialization + gzip -> sink",
+                reads.len(),
+                output_indices.len(),
+                cli.iterations,
+                || {
+                    let sink = std::io::sink();
+                    let mut gz = GzEncoder::new(sink, Compression::new(cli.io_gzip_level));
+                    let mut bytes = 0u64;
+                    for &idx in &output_indices {
+                        let r = &reads[idx];
+                        write_fastq_record(&mut gz, r)?;
+                        bytes += (r.r2_id.len() + r.r2_seq.len() + r.r2_qual.len() + 7) as u64;
+                    }
+                    gz.finish().map_err(|e| e.to_string())?;
+                    Ok(bytes)
+                },
+            )?;
         }
     }
 
@@ -425,12 +701,21 @@ fn main() -> Result<(), String> {
             PrimerDetector::from_grammar(Grammar::parse("custom", structure)?)
                 .map_err(|e| e.to_string())?
         } else {
-            PrimerDetector::from_chemistries(cli.chemistry.iter().copied()).map_err(|e| e.to_string())?
+            PrimerDetector::from_chemistries(cli.chemistry.iter().copied())
+                .map_err(|e| e.to_string())?
         }
         .with_reverse_complement_detection(false);
-        bench("reference: forward-only detect_first", &reads, cli.iterations, |r| {
-            Ok(forward.detect_first(&r.r1_seq, &r.r1_qual).map_err(|e| e.to_string())?.is_some())
-        })?;
+        bench(
+            "reference: forward-only detect_first",
+            &reads,
+            cli.iterations,
+            |r| {
+                Ok(forward
+                    .detect_first(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?
+                    .is_some())
+            },
+        )?;
     }
     Ok(())
 }
