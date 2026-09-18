@@ -1,7 +1,5 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use flate2::read::MultiGzDecoder;
-use int_to_str::IntToStr;
 use lumrik_status::{
     memory_status, public_hostname, snapshot_html, spawn_status_server, ServerContent,
     ServerSnapshot, StatusMetric, StatusSection,
@@ -15,7 +13,7 @@ use sc_vdj::{
 };
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read as IoRead, Write as IoWrite};
+use std::io::Write as IoWrite;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -558,69 +556,16 @@ fn format_knee(threshold: usize, selected: usize, observed: usize) -> String {
     format!(">={threshold} reads · {selected}/{observed} cells")
 }
 
-fn find_file(dir: &Path, names: &[&str]) -> Result<PathBuf> {
-    for name in names {
-        let path = dir.join(name);
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-    bail!("none of {} found in {}", names.join(", "), dir.display())
-}
-
-fn read_lines(path: &Path) -> Result<Box<dyn BufRead>> {
-    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let input: Box<dyn IoRead> = if path.extension().and_then(|x| x.to_str()) == Some("gz") {
-        Box::new(MultiGzDecoder::new(file))
-    } else {
-        Box::new(file)
-    };
-    Ok(Box::new(BufReader::new(input)))
-}
-
-fn final_exonic_dir(path: &Path) -> Result<PathBuf> {
-    if ["barcodes.tsv.gz", "barcodes.tsv"]
-        .iter()
-        .any(|name| path.join(name).is_file())
-    {
-        return Ok(path.to_path_buf());
-    }
-
-    let nested = path.join("exonic");
-    if ["barcodes.tsv.gz", "barcodes.tsv"]
-        .iter()
-        .any(|name| nested.join(name).is_file())
-    {
-        return Ok(nested);
-    }
-
-    bail!(
-        "{} is neither a Nelrune exonic MEX directory nor a Nelrune analysis directory containing exonic/",
-        path.display()
-    )
-}
-
 fn preliminary_cell_ids(exonic: Option<&Path>) -> Result<Option<HashSet<u64>>> {
     let Some(path) = exonic else {
         return Ok(None);
     };
-    let dir = final_exonic_dir(path)?;
-    let barcode_path = find_file(&dir, &["barcodes.tsv.gz", "barcodes.tsv"])?;
-    let mut cells = HashSet::new();
-    for line in read_lines(&barcode_path)?.lines() {
-        let line = line?;
-        let Some(barcode) = line.split('\t').next() else {
-            continue;
-        };
-        if barcode.is_empty() {
-            continue;
-        }
-        cells.insert(IntToStr::new(barcode.as_bytes()).into_u64());
-    }
+    let cells = scdata::read_mtx_cell_ids(path)
+        .with_context(|| format!("reading preliminary Nelrune cells from {}", path.display()))?;
     eprintln!(
         "[nelrune-vdj] preliminary allowed-cell set: {} barcode(s) from {}",
         cells.len(),
-        barcode_path.display()
+        path.display()
     );
     Ok(Some(cells))
 }

@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use int_to_str::IntToStr;
 use mapping_info::MappingInfo;
 
@@ -229,17 +229,48 @@ pub fn load_mtx_feature_matrix(
     Ok((cells, index, cell_barcode_len))
 }
 
-pub fn read_mtx_cell_ids(dir: impl AsRef<Path>) -> Result<HashSet<u64>> {
-    let dir = dir.as_ref();
-    Ok(read_mtx_barcodes(dir)?
+/// Return the packed cell ids from a 10x-style MEX export.
+///
+/// `path` may point either at the MEX directory itself or at a Nelrune
+/// analysis directory containing `exonic/`. Both compressed and plain TSV
+/// barcode files are accepted. Consumers should use this API instead of
+/// interpreting `barcodes.tsv[.gz]` themselves.
+pub fn read_mtx_cell_ids(path: impl AsRef<Path>) -> Result<HashSet<u64>> {
+    let dir = resolve_mtx_dir(path.as_ref())?;
+    Ok(read_mtx_barcodes(&dir)?
         .into_iter()
         .map(|(_, id)| id)
         .collect())
 }
 
+fn resolve_mtx_dir(path: &Path) -> Result<std::path::PathBuf> {
+    if barcode_path(path).is_some() {
+        return Ok(path.to_path_buf());
+    }
+
+    let exonic = path.join("exonic");
+    if barcode_path(&exonic).is_some() {
+        return Ok(exonic);
+    }
+
+    bail!(
+        "{} is neither a MEX directory nor an analysis directory containing exonic/barcodes.tsv[.gz]",
+        path.display()
+    )
+}
+
+fn barcode_path(dir: &Path) -> Option<std::path::PathBuf> {
+    ["barcodes.tsv.gz", "barcodes.tsv"]
+        .into_iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
+}
+
 fn read_mtx_barcodes(dir: &Path) -> Result<Vec<(String, u64)>> {
-    let path = dir.join("barcodes.tsv.gz");
-    let reader = gz_lines(&path)?;
+    let path = barcode_path(dir).with_context(|| {
+        format!("no barcodes.tsv.gz or barcodes.tsv found in {}", dir.display())
+    })?;
+    let reader = text_lines(&path)?;
     let mut out = Vec::new();
 
     for line in reader {
@@ -263,6 +294,15 @@ fn read_mtx_barcodes(dir: &Path) -> Result<Vec<(String, u64)>> {
 
 fn gz_lines(path: &Path) -> Result<impl Iterator<Item = std::io::Result<String>>> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let decoder = GzDecoder::new(file);
+    let decoder = MultiGzDecoder::new(file);
     Ok(BufReader::new(decoder).lines())
+}
+
+fn text_lines(path: &Path) -> Result<Box<dyn Iterator<Item = std::io::Result<String>>>> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    if path.extension().and_then(|x| x.to_str()) == Some("gz") {
+        Ok(Box::new(BufReader::new(MultiGzDecoder::new(file)).lines()))
+    } else {
+        Ok(Box::new(BufReader::new(file).lines()))
+    }
 }

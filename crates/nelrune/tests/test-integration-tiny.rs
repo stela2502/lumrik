@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -95,6 +96,71 @@ fn assert_matrix_files(path: &Path) {
     }
 }
 
+fn reverse_complement(seq: &str) -> String {
+    seq.bytes()
+        .rev()
+        .map(|base| match base {
+            b'A' => 'T',
+            b'C' => 'G',
+            b'G' => 'C',
+            b'T' => 'A',
+            b'N' => 'N',
+            other => panic!("unexpected base in tiny FASTQ fixture: {}", other as char),
+        })
+        .collect()
+}
+
+fn write_two_cell_diagonal_fixture(source_r1: &Path, source_r2: &Path, r1: &Path, r2: &Path) {
+    let r1_text = fs::read_to_string(source_r1)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", source_r1.display()));
+    let r2_text = fs::read_to_string(source_r2)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", source_r2.display()));
+
+    let r1_lines: Vec<&str> = r1_text.lines().collect();
+    let r2_lines: Vec<&str> = r2_text.lines().collect();
+
+    assert_eq!(r1_lines.len(), 8, "tiny R1 fixture must contain exactly two reads");
+    assert_eq!(r2_lines.len(), 8, "tiny R2 fixture must contain exactly two reads");
+
+    let mut out_r1 = String::new();
+    let mut out_r2 = String::new();
+
+    // Cell 1 is the existing fixture: its two reads map to gene_plus, one
+    // exonic and one intronic. Cell 2 gets the same molecules on the opposite
+    // strand, so they map to gene_minus. This creates the deliberate 2 x 2
+    // diagonal matrix in both outputs:
+    //
+    //              gene_plus  gene_minus
+    //     cell 1       1          0
+    //     cell 2       0          1
+    //
+    // The absent combinations are the regression target: a missing sparse
+    // entry is a zero, not a missing cell or feature.
+    for read in 0..2 {
+        let i = read * 4;
+        out_r1.push_str(&format!("{}\n{}\n{}\n{}\n", r1_lines[i], r1_lines[i + 1], r1_lines[i + 2], r1_lines[i + 3]));
+        out_r2.push_str(&format!("{}\n{}\n{}\n{}\n", r2_lines[i], r2_lines[i + 1], r2_lines[i + 2], r2_lines[i + 3]));
+    }
+
+    for read in 0..2 {
+        let i = read * 4;
+        let source_cell_read = r1_lines[i + 1];
+        assert!(source_cell_read.len() >= 4, "tiny R1 read is shorter than CELL:4");
+        let second_cell_read = format!("TGCA{}", &source_cell_read[4..]);
+        let second_name = format!("{}-cell2", r1_lines[i]);
+
+        out_r1.push_str(&format!("{second_name}\n{second_cell_read}\n{}\n{}\n", r1_lines[i + 2], r1_lines[i + 3]));
+
+        let second_r2_name = format!("{}-cell2", r2_lines[i]);
+        let second_r2_seq = reverse_complement(r2_lines[i + 1]);
+        let second_r2_qual: String = r2_lines[i + 3].chars().rev().collect();
+        out_r2.push_str(&format!("{second_r2_name}\n{second_r2_seq}\n{}\n{second_r2_qual}\n", r2_lines[i + 2]));
+    }
+
+    fs::write(r1, out_r1).unwrap_or_else(|err| panic!("failed to write {}: {err}", r1.display()));
+    fs::write(r2, out_r2).unwrap_or_else(|err| panic!("failed to write {}: {err}", r2.display()));
+}
+
 #[test]
 fn integration_tiny_star() {
     // --------------------------------------------------------
@@ -105,11 +171,11 @@ fn integration_tiny_star() {
 
     let gtf = test_path("tiny.gtf");
 
-    let r1 = test_path("tiny_R1.fastq");
+    let source_r1 = test_path("tiny_R1.fastq");
 
-    let r2 = test_path("tiny_R2.fastq");
+    let source_r2 = test_path("tiny_R2.fastq");
 
-    for path in [&fasta, &gtf, &r1, &r2] {
+    for path in [&fasta, &gtf, &source_r1, &source_r2] {
         require_file(path);
     }
 
@@ -155,6 +221,10 @@ fn integration_tiny_star() {
 
     std::fs::create_dir_all(&out).expect("failed to create test output directory");
 
+    let r1 = out.join("two_cell_R1.fastq");
+    let r2 = out.join("two_cell_R2.fastq");
+    write_two_cell_diagonal_fixture(&source_r1, &source_r2, &r1, &r2);
+
     let output = Command::new(env!("CARGO_BIN_EXE_nelrune"))
         .args([
             "--r1",
@@ -174,7 +244,7 @@ fn integration_tiny_star() {
             "--require-strand",
             "--min-mapq",
             "0",
-            // Two reads should survive cell filtering.
+            // Both synthetic cells have two molecules and must survive filtering.
             "--min-cell-counts",
             "1",
             "--min-insert-len",
@@ -261,57 +331,56 @@ fn integration_tiny_star() {
 
     assert_eq!(
         exonic_data.cell_ids().len(),
-        1,
-        "expected exactly one cell in exonic output"
+        2,
+        "expected both cells in exonic output"
     );
 
     assert_eq!(
         intronic_data.cell_ids().len(),
-        1,
-        "expected exactly one cell in intronic output"
-    );
-
-    let cell_id = *exonic_data.cell_ids().iter().next().unwrap();
-
-    assert!(
-        intronic_data.cell_ids().contains(&cell_id),
-        "exonic and intronic reads should belong to the same cell"
-    );
-
-    let exonic_cell = exonic_data
-        .get(&cell_id)
-        .expect("cell missing from exonic Scdata");
-
-    let intronic_cell = intronic_data
-        .get(&cell_id)
-        .expect("cell missing from intronic Scdata");
-
-    assert_eq!(
-        exonic_cell.total_umis_4_gene_id(&plus_gene),
-        1.0,
-        "spliced read should produce exactly one gene_plus exonic UMI"
+        2,
+        "expected both cells in intronic output"
     );
 
     assert_eq!(
-        intronic_cell.total_umis_4_gene_id(&plus_gene),
-        1.0,
-        "unspliced read should produce exactly one gene_plus intronic UMI"
+        exonic_data.cell_ids(),
+        intronic_data.cell_ids(),
+        "exonic and intronic outputs must retain the same two-cell axis"
     );
 
+    let mut exonic_patterns = Vec::new();
+    let mut intronic_patterns = Vec::new();
+
+    for cell_id in exonic_data.cell_ids() {
+        let exonic_cell = exonic_data
+            .get(&cell_id)
+            .expect("cell missing from exonic Scdata");
+        let intronic_cell = intronic_data
+            .get(&cell_id)
+            .expect("cell missing from intronic Scdata");
+
+        exonic_patterns.push((
+            exonic_cell.total_umis_4_gene_id(&plus_gene),
+            exonic_cell.total_umis_4_gene_id(&minus_gene),
+        ));
+        intronic_patterns.push((
+            intronic_cell.total_umis_4_gene_id(&plus_gene),
+            intronic_cell.total_umis_4_gene_id(&minus_gene),
+        ));
+
+        assert_eq!(exonic_cell.total_umis(), 1);
+        assert_eq!(intronic_cell.total_umis(), 1);
+    }
+
+    exonic_patterns.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    intronic_patterns.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let expected = vec![(0.0, 1.0), (1.0, 0.0)];
     assert_eq!(
-        exonic_cell.total_umis_4_gene_id(&minus_gene),
-        0.0,
-        "plus-strand spliced read must not be assigned to gene_minus"
+        exonic_patterns, expected,
+        "exonic output must be a 2-cell x 2-gene diagonal matrix with one implicit zero per cell"
     );
-
     assert_eq!(
-        intronic_cell.total_umis_4_gene_id(&minus_gene),
-        0.0,
-        "plus-strand intronic read must not be assigned to gene_minus"
+        intronic_patterns, expected,
+        "intronic output must be a 2-cell x 2-gene diagonal matrix with one implicit zero per cell"
     );
-
-    // Nice high-level sanity check too.
-    assert_eq!(exonic_cell.total_umis(), 1);
-
-    assert_eq!(intronic_cell.total_umis(), 1);
 }

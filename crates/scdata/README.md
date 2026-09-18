@@ -166,6 +166,32 @@ Feature order is derived from `FeatureIndex`, not data.
 
 ---
 
+## API ownership contract
+
+`scdata` owns the representation and I/O semantics of single-cell sparse data.
+Callers own biological policy.
+
+Callers may decide **what** should be retained or exported: for example, the
+canonical cell set, the feature set, or which related matrices must use the
+same axes. They should express those decisions through the public `Scdata` API.
+
+Consumers must not reimplement **how** an `Scdata` export works. In particular:
+
+- do not parse or construct `matrix.mtx[.gz]`, `barcodes.tsv[.gz]`, or
+  `features.tsv[.gz]` merely to recover information already exposed by `scdata`;
+- do not assume sparse matrices contain explicit zero entries;
+- do not reproduce `Scdata` filtering, ordering, barcode decoding, or sparse
+  serialization rules in pipeline code;
+- use `read_mtx_cell_ids(...)` when a downstream stage needs the cell ids from
+  an existing MEX/Nelrune export. It accepts either the MEX directory itself or
+  a Nelrune analysis directory containing `exonic/`.
+
+Higher-level containers such as a quantification result may coordinate several
+`Scdata` matrices so that they share caller-selected cells or features. That is
+intentional: the coordinator decides which axes should be shared, while each
+`Scdata` remains responsible for applying the selection and writing its sparse
+representation.
+
 ## Design Philosophy
 
 - UMI-centric (not raw count matrix first)

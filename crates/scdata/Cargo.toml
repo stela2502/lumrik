@@ -27,3 +27,6 @@ int-to-str = { path = "../int_to_str" }
 [features]
 default = []
 compare = []
+
+[dev-dependencies]
+tempfile = "3"
