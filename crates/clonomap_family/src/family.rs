@@ -5,7 +5,7 @@
 //! cells is deliberately owned by the outer analysis/orchestration layer. Plotting consumes the frozen
 //! result; it does not decide family membership or recompute mutation depths.
 
-use crate::NovelVRegistries;
+use crate::ReferenceModels;
 
 #[derive(Debug, Clone)]
 pub struct Receptor {
@@ -130,7 +130,7 @@ impl Family {
     /// Align all provisional members to this family's model, report mutation
     /// depths, and eject alignment failures plus robust mutation-count outliers.
     /// The surviving member set is frozen until explicit reassignment.
-    pub fn align(&mut self, cfg: &FamilyConfig, novel_v: &NovelVRegistries) -> Vec<CellReceptor> {
+    pub fn align(&mut self, cfg: &FamilyConfig, novel_v: &ReferenceModels) -> Vec<CellReceptor> {
         let candidates = std::mem::take(&mut self.candidates);
         let mut measured = Vec::new();
         let mut ejected = Vec::new();
@@ -158,7 +158,7 @@ impl Family {
     /// then the cell is aligned directly into this family's alignment model and
     /// must pass the hard alignment gate. CDR3 is not used as a second rescue
     /// veto: the alignment model is the final arbiter on reassignment.
-    pub fn try_integrate(&mut self, cell: CellReceptor, cfg: &FamilyConfig, novel_v: &NovelVRegistries) -> Result<(), CellReceptor> {
+    pub fn try_integrate(&mut self, cell: CellReceptor, cfg: &FamilyConfig, novel_v: &ReferenceModels) -> Result<(), CellReceptor> {
         if !same_hc_labels(&self.root, &cell.hc) { return Err(cell); }
         let Some(m) = align_fragment(&novel_v.effective_naive(&cell.hc), &cell.hc.observed) else { return Err(cell) };
         if m.identity < cfg.hard_alignment_identity { return Err(cell); }
@@ -179,7 +179,7 @@ impl Family {
     /// After the first structural pass, mutation-count outliers are removed
     /// from their current clone and tried against every other compatible LC
     /// clone in this HC family. A receptor that fits none becomes a new root.
-    pub fn split_light_chains(&mut self, cfg: &FamilyConfig, novel_v: &NovelVRegistries) {
+    pub fn split_light_chains(&mut self, cfg: &FamilyConfig, novel_v: &ReferenceModels) {
         self.light_clones.clear();
         let mut pending: Vec<(String, Receptor)> = self.members.iter()
             .flat_map(|m| m.cell.lc.iter().cloned().map(|lc| (m.cell.cell_id.clone(), lc)))
@@ -206,7 +206,7 @@ impl Family {
     /// the structural V/J/CDR3 gate, the hard identity gate, and its existing
     /// mutation-depth distribution. If no existing clone explains the receptor,
     /// it seeds a new LC clone rather than being discarded.
-    fn redistribute_lc_outliers(&mut self, cfg: &FamilyConfig, novel_v: &NovelVRegistries) {
+    fn redistribute_lc_outliers(&mut self, cfg: &FamilyConfig, novel_v: &ReferenceModels) {
         let mut ejected: Vec<(String, LightMember)> = Vec::new();
         for clone in &mut self.light_clones {
             let depths: Vec<usize> = clone.members.iter().map(|x| x.mutations.mutation_events()).collect();
@@ -256,7 +256,7 @@ impl Family {
 
     pub fn provisional_len(&self) -> usize { self.candidates.len() }
 
-    pub fn worst_lc_alignments(&self, limit: usize, novel_v: &NovelVRegistries) -> Vec<WorstLightAlignment> {
+    pub fn worst_lc_alignments(&self, limit: usize, novel_v: &ReferenceModels) -> Vec<WorstLightAlignment> {
         let mut rows: Vec<WorstLightAlignment> = self.light_clones.iter()
             .flat_map(|clone| clone.members.iter().filter_map(move |member| {
                 let (expected, observed, differences) = render_fragment_alignment(&novel_v.effective_naive(&member.receptor), &member.receptor.observed)?;
@@ -360,7 +360,7 @@ where
     MutationStats { n, mean: Some(mean), sd: Some(sd), max3 }
 }
 
-fn new_light_clone(cell: String, receptor: Receptor, novel_v: &NovelVRegistries) -> LightClone {
+fn new_light_clone(cell: String, receptor: Receptor, novel_v: &ReferenceModels) -> LightClone {
     let measurement = measure_receptor(&receptor, novel_v);
     /* fallback retained inside measure_receptor */
     /*
@@ -388,7 +388,7 @@ fn best_light_clone(
     exclude_name: Option<&str>,
     enforce_target_cutoff: bool,
     observed_seed: bool,
-    novel_v: &NovelVRegistries,
+    novel_v: &ReferenceModels,
 ) -> Option<(usize, MutationMeasurement)> {
     let mut best: Option<(usize, usize, MutationMeasurement)> = None;
     for (i, clone) in clones.iter().enumerate() {
@@ -423,7 +423,7 @@ fn best_light_clone(
     best.map(|(i, _, measurement)| (i, measurement))
 }
 
-fn measure_receptor(receptor: &Receptor, novel_v: &NovelVRegistries) -> MutationMeasurement {
+fn measure_receptor(receptor: &Receptor, novel_v: &ReferenceModels) -> MutationMeasurement {
     align_fragment(&novel_v.effective_naive(receptor), &receptor.observed).unwrap_or(MutationMeasurement {
         substitutions: 0, indels: Vec::new(), informative_pairs: 0, matching_pairs: 0, identity: 0.0,
     })
@@ -615,10 +615,10 @@ mod tests {
         let root_b=r("b","IGK","VK","JK","AAAT","TTTTCCCCGGGGAAAA","TTTTCCCCGGGGAAAA");
         let receptor=r("x","IGK","VK","JK","AAAT","AAAACCCCGGGGTTTT","TTTTCCCCGGGGAAAA");
         let clones=vec![
-            new_light_clone("a".into(),root_a,&NovelVRegistries::default()),
-            new_light_clone("b".into(),root_b,&NovelVRegistries::default()),
+            new_light_clone("a".into(),root_a,&ReferenceModels::default()),
+            new_light_clone("b".into(),root_b,&ReferenceModels::default()),
         ];
-        let (i,m)=best_light_clone(&clones,&receptor,&cfg,None,false,false,&NovelVRegistries::default()).unwrap();
+        let (i,m)=best_light_clone(&clones,&receptor,&cfg,None,false,false,&ReferenceModels::default()).unwrap();
         assert_eq!(i,1);
         assert_eq!(m.mutation_events(),0);
         assert_eq!(m.identity,1.0);

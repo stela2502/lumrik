@@ -8,13 +8,14 @@
 mod clone_data;
 mod encoder;
 mod family;
-mod novel_v;
 mod pca;
 mod tree;
 
+mod reference_models;
+
 pub use clone_data::CloneData;
 pub use encoder::OneHotEncoder;
-pub use novel_v::{NovelVEntry, NovelVFinder, NovelVRegistries};
+pub use reference_models::{ReferenceModelEntry, ReferenceModels};
 pub use family::{align_fragment, AlignedCell, CellReceptor, Family, FamilyConfig, FamilyMutationReport, IndelEvent, LightClone, LightMember, MutationMeasurement, Receptor};
 pub use pca::PcaModel;
 pub use tree::{MstTree, rooted_categorical_hex, rooted_continuous_hex};

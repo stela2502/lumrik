@@ -7,6 +7,7 @@ description = "Mutation-aware PCA and MST analysis of large receptor clones for 
 
 
 [dependencies]
+reference_curator = { path = "../reference_curator" }
 ndarray = "0.15"
 linfa = "0.7"
 linfa-reduction = "0.7"

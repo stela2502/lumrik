@@ -444,6 +444,7 @@ dependencies = [
  "ndarray 0.15.6",
  "plotters",
  "rayon",
+ "reference_curator",
  "sc_primer",
  "statrs",
 ]
@@ -1918,6 +1919,16 @@ dependencies = [
  "flate2",
  "mapping_info",
  "sc_primer",
+ "serde",
+]
+
+[[package]]
+name = "reference_curator"
+version = "0.4.3"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "clap",
  "serde",
 ]
 

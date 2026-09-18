@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use clonomap::{align_fragment, rooted_categorical_hex, rooted_continuous_hex, CellReceptor, ClonoMap, Family, FamilyConfig, NovelVRegistries, Receptor, MutationMeasurement, AlignedCell};
+use clonomap::{align_fragment, rooted_categorical_hex, rooted_continuous_hex, CellReceptor, ClonoMap, Family, FamilyConfig, ReferenceModels, Receptor, MutationMeasurement, AlignedCell};
 use sc_primer::{Chemistry, PrimerDetector};
 use ndarray::Array2;
 use statrs::distribution::{ContinuousCDF, StudentsT};
@@ -42,6 +42,9 @@ struct Args {
     /// Draw rooted family plots radially instead of the default layered layout.
     #[arg(long)]
     radial_layout: bool,
+    /// Persistent reference_curator store. Discovered sequences keep stable identities across runs.
+    #[arg(long)]
+    reference_curator: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -69,12 +72,11 @@ fn main() -> Result<()> {
     };
 
     let mut rows = read_vdj_output(&args.vdj_out)?;
-    // Resolve reference-incompatible V segments before family construction so
-    // provisional V identities participate in the normal HC/LC logic from the
-    // beginning. The registries remain the authority for their current sequence.
-    let mut novel_v = NovelVRegistries::with_chemistries(&args.chemistry)
+    // ClonoMap discovers reference-incompatible fragments; reference_curator
+    // owns their persistent identity, resolution state and external evidence.
+    let mut novel_v = ReferenceModels::open(args.reference_curator.as_deref(), &args.chemistry)
         .map_err(anyhow::Error::msg)
-        .context("configuring sc_primer chemistry")?;
+        .context("opening reference curator")?;
     let mut novel_receptors = 0usize;
     for row in &mut rows {
         if row.productive && novel_v.resolve_receptor(&mut row.receptor, cfg.hard_alignment_identity) { novel_receptors += 1; }
@@ -141,11 +143,15 @@ fn main() -> Result<()> {
         .filter_map(|chemistry| PrimerDetector::from_chemistry(chemistry).ok())
         .collect();
     write_cell_report(&args.out.join("cells.tsv"), &families, &cell_id_detectors)?;
-    write_novel_v_report(&args.out.join("novel_v.tsv"), &novel_v)?;
+    write_reference_candidate_report(&args.out.join("reference_candidates.tsv"), &novel_v)?;
+    if let Some(store) = &args.reference_curator {
+        novel_v.save(store).map_err(anyhow::Error::msg)
+            .with_context(|| format!("saving reference curator {}", store.display()))?;
+    }
     write_unassigned(&args.out.join("hc_unassigned.tsv"), &unassigned)?;
     if args.plots { write_family_plots(&args.out.join("plots"), &families, args.min_family_size, args.max_pearson_p, args.radial_layout)?; }
 
-    println!("\nReference-incompatible V models: {} ({} receptors assigned; evidence in novel_v.tsv)", novel_v.total(), novel_receptors);
+    println!("\nReference-incompatible models: {} ({} receptors assigned; evidence in reference_candidates.tsv)", novel_v.total(), novel_receptors);
 
     let mut selected: Vec<_> = families.iter().filter(|f| family_is_selected(f, args.min_family_size, args.max_pearson_p)).collect();
     selected.sort_by_key(|f| std::cmp::Reverse(f.members.len()));
@@ -490,7 +496,7 @@ fn build_initial_families(mut cells: Vec<CellReceptor>, cfg: &FamilyConfig) -> V
     families
 }
 
-fn reassign_cells(families: &mut [Family], rejected: Vec<(String, CellReceptor)>, cfg: &FamilyConfig, novel_v: &NovelVRegistries) -> Vec<UnassignedCell> {
+fn reassign_cells(families: &mut [Family], rejected: Vec<(String, CellReceptor)>, cfg: &FamilyConfig, novel_v: &ReferenceModels) -> Vec<UnassignedCell> {
     let mut unassigned = Vec::new();
     for (from_family, rejected_cell) in rejected {
         let mut cell = Some(rejected_cell);
@@ -720,12 +726,14 @@ fn fmt_max3(values: &[usize]) -> String {
     )
 }
 
-fn write_novel_v_report(path: &Path, registries: &NovelVRegistries) -> Result<()> {
+fn write_reference_candidate_report(path: &Path, models: &ReferenceModels) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
-    writeln!(w, "novel_v\tchain\toriginal_v\tobservations\tevidence_reads\tworking_fragment")?;
-    for entry in registries.hc.entries().iter().chain(registries.lc.entries().iter()) {
-        writeln!(w, "{}\t{}\t{}\t{}\t{}\t{}",
-            entry.name, entry.chain, entry.original_v, entry.observations, entry.evidence_reads, entry.fragment)?;
+    writeln!(w, "candidate_id\tchain\toriginal_v\tobservations_this_run\tevidence_reads_this_run\tresolved\tsequence")?;
+    for entry in models.entries() {
+        let candidate = models.curator().candidate(&entry.id).expect("session candidate must exist in curator");
+        writeln!(w, "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            entry.id, entry.chain, entry.original_v, entry.observations, entry.evidence_reads, candidate.resolved.is_some(),
+            String::from_utf8_lossy(&candidate.sequence))?;
     }
     Ok(())
 }
