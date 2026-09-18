@@ -212,3 +212,70 @@ fn singlecelldata_to_sparse_real_can_be_written_and_read() {
         scdata2.unwrap()
     );
 }
+
+
+#[test]
+fn sparse_export_ignores_explicit_zero_values_in_nnz() {
+    let mut celldata = Scdata::new(1, MatrixValueType::Real);
+    let mut report = MappingInfo::new(None, 0.0, 0);
+    let feature_index = TestFeatureIndex::new(vec!["Gene1", "Gene2", "Gene3"]);
+
+    let gene1 = feature_index.feature_id("Gene1");
+    let gene2 = feature_index.feature_id("Gene2");
+    let gene3 = feature_index.feature_id("Gene3");
+
+    // Three cells x three genes. Every cell explicitly stores one zero-valued
+    // gene. The sparse export must contain only the six positive data points.
+    let rows = [
+        (1_u64, [(gene1, 0.0), (gene2, 2.0), (gene3, 3.0)]),
+        (2_u64, [(gene1, 4.0), (gene2, 0.0), (gene3, 6.0)]),
+        (3_u64, [(gene1, 7.0), (gene2, 8.0), (gene3, 0.0)]),
+    ];
+
+    for (cell_id, values) in rows {
+        for (umi, (feature_id, value)) in values.into_iter().enumerate() {
+            assert!(celldata.try_insert_value(
+                &cell_id,
+                GeneUmiHash(feature_id, umi as u64),
+                value,
+                &mut report,
+            ));
+        }
+    }
+
+    celldata.finalize_for_export(0, &feature_index);
+    assert_eq!(celldata.dimensions(), (3, 3, 6));
+
+    let out_dir = test_out_dir("explicit_zero_values");
+    if out_dir.exists() {
+        fs::remove_dir_all(&out_dir).unwrap();
+    }
+
+    celldata
+        .write_sparse(&out_dir, &feature_index)
+        .expect("zero-valued entries must not cause an NNZ/export mismatch");
+
+    let matrix_file = std::fs::File::open(out_dir.join("matrix.mtx.gz")).unwrap();
+    let matrix_text = std::io::read_to_string(flate2::read::GzDecoder::new(matrix_file)).unwrap();
+    let matrix_lines: Vec<&str> = matrix_text.lines().collect();
+
+    assert_eq!(matrix_lines[1], "3 3 6");
+    assert_eq!(matrix_lines.len() - 2, 6);
+    assert!(matrix_lines[2..].iter().all(|line| {
+        line.split_whitespace()
+            .nth(2)
+            .and_then(|value| value.parse::<f32>().ok())
+            .is_some_and(|value| value > 0.0)
+    }));
+
+    let roundtrip = Scdata::read_matrix_market(&out_dir, &feature_index).unwrap();
+    for (cell_id, zero_gene) in [(1_u64, gene1), (2_u64, gene2), (3_u64, gene3)] {
+        assert_eq!(
+            roundtrip
+                .get(&cell_id)
+                .unwrap()
+                .total_umis_4_gene_id(&zero_gene),
+            0.0
+        );
+    }
+}

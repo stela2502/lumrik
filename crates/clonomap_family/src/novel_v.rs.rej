@@ -1,0 +1,11 @@
+--- src/novel_v.rs
++++ src/novel_v.rs
+@@ -170,7 +192,7 @@
+     // through that technical structure and retain only the sequence toward CDR3.
+     // Failure to recognize a primer is not itself a reason to reject biological
+     // evidence: the remaining sanity checks still apply.
+-    let technical_start = technical_prefix_end(raw, technical_detector).unwrap_or(0);
++    let technical_start = technical_prefix_end(raw.as_bytes(), technical_detector).unwrap_or(0);
+     let raw = &raw[technical_start..];
+     if raw.len() < MIN_ORF_NT { return None; }
+ 

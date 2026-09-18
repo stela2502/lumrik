@@ -18,7 +18,7 @@ members = [
     "crates/sc-te",
     "crates/data_table",
     "crates/valkyrn",
-    "crates/clonomap",
+    "crates/clonomap_family",
 ]
 
 [workspace.package]

@@ -7,13 +7,17 @@
 
 mod clone_data;
 mod encoder;
+mod family;
+mod novel_v;
 mod pca;
 mod tree;
 
 pub use clone_data::CloneData;
 pub use encoder::OneHotEncoder;
+pub use novel_v::{NovelVEntry, NovelVFinder, NovelVRegistries};
+pub use family::{align_fragment, AlignedCell, CellReceptor, Family, FamilyConfig, FamilyMutationReport, IndelEvent, LightClone, LightMember, MutationMeasurement, Receptor};
 pub use pca::PcaModel;
-pub use tree::MstTree;
+pub use tree::{MstTree, rooted_categorical_hex, rooted_continuous_hex};
 
 use ndarray::Array2;
 use std::error::Error;
@@ -107,6 +111,56 @@ impl ClonoMap {
         pca.fit_transform(&features)?;
         let tree = MstTree::build(&pca);
 
+        Ok(Self { encoder, pca, tree })
+    }
+
+    /// Build one full-feature-space MST per biological subgroup and attach each
+    /// subgroup explicitly to a shared root. PCA is still calculated for exported
+    /// coordinates/visualization, but it does not determine tree edges.
+    ///
+    /// `groups` is row-aligned with `features`; the root row is ignored. Within
+    /// each group all feature columns participate in the MST. The group's entry
+    /// row is the member with the smallest Euclidean distance to the root in the
+    /// first `root_distance_cols` columns (HC coordinates in Valkyrn).
+    pub fn from_grouped_feature_matrix(
+        row_labels: Vec<String>,
+        features: Array2<f32>,
+        groups: Vec<String>,
+        root_row: usize,
+        root_distance_cols: usize,
+        k: usize,
+    ) -> Result<Self, Box<dyn Error>> {
+        if row_labels.is_empty() || features.nrows() != row_labels.len() || groups.len() != row_labels.len() {
+            return Err("Grouped feature rows, labels and groups must be non-empty and row-aligned".into());
+        }
+        if root_row >= features.nrows() || root_distance_cols == 0 || root_distance_cols > features.ncols() {
+            return Err("Invalid grouped-tree root or HC distance width".into());
+        }
+
+        let mut encoder = OneHotEncoder::new();
+        encoder.set_external_states(row_labels, &features)?;
+        let mut pca = PcaModel::new(k);
+        pca.fit_transform(&features)?;
+
+        let mut by_group = std::collections::BTreeMap::<String, Vec<usize>>::new();
+        for (row, group) in groups.into_iter().enumerate() {
+            if row != root_row {
+                by_group.entry(group).or_default().push(row);
+            }
+        }
+
+        let mut edges = Vec::with_capacity(features.nrows().saturating_sub(1));
+        for rows in by_group.into_values() {
+            edges.extend(MstTree::build_feature_rows(&features, &rows).edges);
+            let entry = rows.iter().copied().min_by(|&a, &b| {
+                let da = features.row(a).iter().take(root_distance_cols).map(|x| x * x).sum::<f32>();
+                let db = features.row(b).iter().take(root_distance_cols).map(|x| x * x).sum::<f32>();
+                da.total_cmp(&db).then_with(|| a.cmp(&b))
+            }).expect("non-empty grouped rows");
+            let root_distance = features.row(entry).iter().take(root_distance_cols).map(|x| x * x).sum::<f32>().sqrt();
+            edges.push((root_row, entry, root_distance));
+        }
+        let tree = MstTree { edges };
         Ok(Self { encoder, pca, tree })
     }
 

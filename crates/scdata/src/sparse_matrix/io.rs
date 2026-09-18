@@ -157,7 +157,11 @@ impl Scdata {
             writeln!(writer_b, "{cell_name}").map_err(|e| format!("Barcode write failed: {e}"))?;
 
             for (row_idx, feature_id) in self.feature_ids_with_data.iter().enumerate() {
-                if let Some(&value) = cell.total_reads.get(feature_id).filter(|&&v| v > 0.0) {
+                if let Some(&value) = cell
+                    .total_reads
+                    .get(feature_id)
+                    .filter(|&&v| Self::is_sparse_export_value(v))
+                {
                     writeln!(
                         writer_m,
                         "{} {} {}",

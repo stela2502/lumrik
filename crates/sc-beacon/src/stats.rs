@@ -105,6 +105,20 @@ pub fn poisson_upper_tail(x: u32, lambda: f64) -> f64 {
     (1.0 - p.cdf((x - 1) as u64)).clamp(MIN_PROB, 1.0)
 }
 
+/// Raw one-sided empirical upper-tail probability.
+///
+/// This is deliberately uncorrected: family splitting currently uses the observed
+/// fraction of reference distances at least as extreme as the candidate directly
+/// against the configured p=0.05 threshold. No BH/FDR or finite-sample +1 correction
+/// is applied here.
+pub fn empirical_upper_tail(reference: &[usize], value: usize) -> f64 {
+    if reference.is_empty() {
+        return 1.0;
+    }
+    let at_least = reference.iter().filter(|&&x| x >= value).count();
+    at_least as f64 / reference.len() as f64
+}
+
 pub fn benjamini_hochberg(pvalues: &[f64]) -> Vec<f64> {
     if pvalues.is_empty() {
         return Vec::new();
@@ -130,6 +144,13 @@ pub fn benjamini_hochberg(pvalues: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empirical_upper_tail_uses_observed_reference_distribution() {
+        let reference = vec![1, 2, 2, 3, 4, 5, 8, 13, 21, 34, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43];
+        assert_eq!(empirical_upper_tail(&reference, 43), 1.0 / 20.0);
+        assert_eq!(empirical_upper_tail(&reference, 44), 0.0);
+    }
 
     #[test]
     fn bh_is_monotonic_in_rank() {

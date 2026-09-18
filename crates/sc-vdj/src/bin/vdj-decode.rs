@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use sc_vdj::{DecodedNumericRecombinationId, RecombinationId, VdjIndex};
+use sc_vdj::{
+    DecodedNumericRecombinationId, DecodedRecombinationId, RecombinationId, VdjIndex,
+};
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
@@ -22,6 +24,12 @@ struct Cli {
     /// Recombination IDs to decode. If omitted, IDs are read from stdin.
     #[arg(value_name = "CODE", num_args = 0..)]
     code: Vec<String>,
+
+    /// After decoding, print only structural fields that differ across the supplied IDs.
+    /// An index resolves segment names; index-free comparison uses numeric segment IDs.
+    /// Legacy IDs with multiple numeric interpretations still require an index.
+    #[arg(long)]
+    compare: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -71,7 +79,7 @@ fn main() -> Result<()> {
         );
     }
 
-    for s in codes {
+    for s in &codes {
         let id = RecombinationId::from_str(s.trim()).map_err(anyhow::Error::msg)?;
         if let Some(idx) = idx.as_ref() {
             let d = id.decode(idx).map_err(anyhow::Error::msg)?;
@@ -108,7 +116,118 @@ fn main() -> Result<()> {
             }
         }
     }
+
+    if c.compare {
+        if codes.len() < 2 {
+            bail!("--compare requires at least two recombination IDs");
+        }
+        if let Some(idx) = idx.as_ref() {
+            let decoded = codes
+                .iter()
+                .map(|s| {
+                    let id = RecombinationId::from_str(s.trim()).map_err(anyhow::Error::msg)?;
+                    let d = id.decode(idx).map_err(anyhow::Error::msg)?;
+                    Ok((id, d))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            print_comparison(&decoded);
+        } else {
+            let decoded = codes
+                .iter()
+                .map(|s| {
+                    let id = RecombinationId::from_str(s.trim()).map_err(anyhow::Error::msg)?;
+                    let candidates = id.decode_numeric_candidates().map_err(anyhow::Error::msg)?;
+                    if candidates.len() != 1 {
+                        bail!(
+                            "--compare without --index requires IDs with a unique numeric decode; {} has {} candidates",
+                            id,
+                            candidates.len()
+                        );
+                    }
+                    Ok((id, candidates.into_iter().next().unwrap()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            print_numeric_comparison(&decoded);
+        }
+    }
     Ok(())
+}
+
+fn print_numeric_comparison(decoded: &[(RecombinationId, DecodedNumericRecombinationId)]) {
+    let rows: Vec<(&str, Vec<String>)> = vec![
+        ("chain", decoded.iter().map(|(_, d)| d.chain.map(|x| x.to_string()).unwrap_or_default()).collect()),
+        ("V_id", decoded.iter().map(|(_, d)| d.v_id.to_string()).collect()),
+        ("D_id", decoded.iter().map(|(_, d)| d.d_id.map(|x| x.to_string()).unwrap_or_default()).collect()),
+        ("J_id", decoded.iter().map(|(_, d)| d.j_id.to_string()).collect()),
+        ("v_del_3", decoded.iter().map(|(_, d)| d.v_del_3.to_string()).collect()),
+        ("p_v3", decoded.iter().map(|(_, d)| d.p_v3_len.to_string()).collect()),
+        ("n1", decoded.iter().map(|(_, d)| d.n1_len.to_string()).collect()),
+        ("p_d5", decoded.iter().map(|(_, d)| opt(d.p_d5_len)).collect()),
+        ("d_del_5", decoded.iter().map(|(_, d)| opt(d.d_del_5)).collect()),
+        ("d_retained", decoded.iter().map(|(_, d)| opt(d.d_retained_len)).collect()),
+        ("d_del_3", decoded.iter().map(|(_, d)| opt(d.d_del_3)).collect()),
+        ("p_d3", decoded.iter().map(|(_, d)| opt(d.p_d3_len)).collect()),
+        ("n2", decoded.iter().map(|(_, d)| opt(d.n2_len)).collect()),
+        ("j_del_5", decoded.iter().map(|(_, d)| d.j_del_5.to_string()).collect()),
+        ("p_j5", decoded.iter().map(|(_, d)| d.p_j5_len.to_string()).collect()),
+        ("pn_alternative", decoded.iter().map(|(_, d)| d.pn_alternative.to_string()).collect()),
+    ];
+
+    println!("comparison (differing fields only; numeric segment IDs)");
+    print!("field");
+    for (id, _) in decoded {
+        print!("\t{id}");
+    }
+    println!();
+    for (name, values) in rows {
+        if values.windows(2).any(|w| w[0] != w[1]) {
+            print!("{name}");
+            for value in values {
+                print!("\t{value}");
+            }
+            println!();
+        }
+    }
+}
+
+fn print_comparison(decoded: &[(RecombinationId, DecodedRecombinationId)]) {
+    let rows: Vec<(&str, Vec<String>)> = vec![
+        ("chain", decoded.iter().map(|(_, d)| d.chain.to_string()).collect()),
+        ("V", decoded.iter().map(|(_, d)| d.v.clone()).collect()),
+        ("D", decoded.iter().map(|(_, d)| d.d.clone().unwrap_or_default()).collect()),
+        ("J", decoded.iter().map(|(_, d)| d.j.clone()).collect()),
+        ("v_del_3", decoded.iter().map(|(_, d)| d.v_del_3.to_string()).collect()),
+        ("p_v3", decoded.iter().map(|(_, d)| d.p_v3_len.to_string()).collect()),
+        ("n1", decoded.iter().map(|(_, d)| d.n1_len.to_string()).collect()),
+        ("p_d5", decoded.iter().map(|(_, d)| opt(d.p_d5_len)).collect()),
+        ("d_del_5", decoded.iter().map(|(_, d)| opt(d.d_del_5)).collect()),
+        ("d_retained", decoded.iter().map(|(_, d)| opt(d.d_retained_len)).collect()),
+        ("d_del_3", decoded.iter().map(|(_, d)| opt(d.d_del_3)).collect()),
+        ("p_d3", decoded.iter().map(|(_, d)| opt(d.p_d3_len)).collect()),
+        ("n2", decoded.iter().map(|(_, d)| opt(d.n2_len)).collect()),
+        ("j_del_5", decoded.iter().map(|(_, d)| d.j_del_5.to_string()).collect()),
+        ("p_j5", decoded.iter().map(|(_, d)| d.p_j5_len.to_string()).collect()),
+        (
+            "pn_alternative",
+            decoded.iter().map(|(_, d)| d.pn_alternative.to_string()).collect(),
+        ),
+    ];
+
+    println!("comparison (differing fields only)");
+    print!("field");
+    for (id, _) in decoded {
+        print!("\t{id}");
+    }
+    println!();
+    for (name, values) in rows {
+        if values.windows(2).any(|w| w[0] != w[1]) {
+            print!("{name}");
+            for value in values {
+                print!("\t{value}");
+            }
+            println!();
+        }
+    }
 }
 
 fn migrate_dir(index_path: &Path, input: &Path, output: &Path) -> Result<()> {

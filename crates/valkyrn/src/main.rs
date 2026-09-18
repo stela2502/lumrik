@@ -14,12 +14,12 @@ struct Cli {
     /// Valkyrn output directory.
     #[arg(long, default_value = "valkyrn")]
     out: PathBuf,
-    /// Retained for CLI compatibility. Primary clone identity now comes from Lumrik HC:/LC: structural recombination IDs.
-    #[arg(long, default_value_t = 1, hide = true)]
-    max_cdr3_distance: usize,
     /// Rayon worker threads used for CPU-heavy receptor alignment.
     #[arg(long, default_value_t = 8)]
     threads: usize,
+    /// Maximum nucleotide edit distance allowed between any two CDR3s in one family.
+    #[arg(long, default_value_t = 3)]
+    max_cdr3_distance: usize,
     /// Minimum IGH family size considered for structural prioritization.
     #[arg(long, default_value_t = 3)]
     min_structure_family: usize,
@@ -32,17 +32,21 @@ struct Cli {
     /// PCA dimensions retained by ClonoMap for large-family geometry.
     #[arg(long, default_value_t = 30)]
     clonomap_k: usize,
+    /// Draw rooted ClonoMaps radially around NAIVE instead of the clearer layered default.
+    #[arg(long, default_value_t = false)]
+    clonomap_radial: bool,
 }
 fn main() -> Result<()> {
     let c = Cli::parse();
     valkyrn::analyze(
         &c.vdj_dir,
         &c.out,
-        c.max_cdr3_distance,
         c.min_structure_family,
         c.threads,
         c.min_clonomap_family,
         c.min_clonomap_paired_family,
         c.clonomap_k,
+        c.clonomap_radial,
+        c.max_cdr3_distance,
     )
 }

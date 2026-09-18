@@ -398,11 +398,18 @@ impl Scdata {
         passing.into_iter().collect()
     }
 
+    /// MatrixMarket stores only actual data points. Zero and negative values are
+    /// absent from the sparse matrix and therefore must never contribute to NNZ.
+    #[inline]
+    pub(crate) fn is_sparse_export_value(value: f32) -> bool {
+        value > 0.0
+    }
+
     /// Rebuild cached export metadata from the currently retained cells.
     ///
-    /// The feature id cache is collected from the per-cell `total_reads` keys.
-    /// The total number of exported sparse entries is the sum of
-    /// `cell.total_reads.len()` across all retained cells.
+    /// Both the feature cache and NNZ count use exactly the same value predicate
+    /// as the MatrixMarket writer. Consumers do not need to validate or repair
+    /// sparse export metadata themselves.
     fn rebuild_feature_ids_with_data<I: FeatureIndex>(&mut self, index: &I) {
         let allowed: HashSet<u64> = index.ordered_feature_ids().into_iter().collect();
 
@@ -415,9 +422,7 @@ impl Scdata {
 
                 for cell in bucket.values() {
                     for (feature_id, value) in &cell.total_reads {
-                        // Keep export metadata identical to the MatrixMarket
-                        // writer: non-positive entries are not serialized.
-                        if *value > 0.0 && allowed.contains(feature_id) {
+                        if Self::is_sparse_export_value(*value) && allowed.contains(feature_id) {
                             local_ids.insert(*feature_id);
                             local_entries += 1;
                         }

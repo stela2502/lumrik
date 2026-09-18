@@ -22,7 +22,8 @@ pub use index::{
     VdjSegment,
 };
 pub use recombination::{
-    ConstantRegionEvidence, DecodedNumericRecombinationId, JunctionStructure, ProductivityStatus,
+    ConstantRegionEvidence, DecodedNumericRecombinationId, DecodedRecombinationId, JunctionStructure,
+    ProductivityStatus,
     ReceptorRole, Recombination, RecombinationId,
 };
 pub use runner::{

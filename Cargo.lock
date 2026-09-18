@@ -444,6 +444,8 @@ dependencies = [
  "ndarray 0.15.6",
  "plotters",
  "rayon",
+ "sc_primer",
+ "statrs",
 ]
 
 [[package]]

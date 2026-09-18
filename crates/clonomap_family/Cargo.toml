@@ -1,8 +1,8 @@
 [package]
 name = "clonomap"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.4.2"
+edition = "2024"
+license = "AGPL-3.0-or-later"
 description = "Mutation-aware PCA and MST analysis of large receptor clones for Lumrik"
 
 
@@ -13,8 +13,10 @@ linfa-reduction = "0.7"
 plotters = {
     version = "0.3",
     default-features = false,
-    features = ["svg_backend", "line_series"]
+    features = ["svg_backend", "line_series", "point_series"]
 }
 rayon = "1"
 anyhow = "1"
-clap = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+statrs = "0.18"
+sc_primer = { path = "../sc_primer" }

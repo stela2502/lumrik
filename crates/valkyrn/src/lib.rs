@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct Call {
@@ -15,11 +16,16 @@ pub struct Call {
     pub j: String,
     pub c: String,
     pub pn_alternative: bool,
+    pub v_del_3: u16,
+    pub j_del_5: u16,
+    pub d_retained_len: u16,
+    pub p_total_len: u16,
     pub productivity: String,
     pub support: u64,
     pub rediscovery: u64,
     pub naive: String,
     pub observed: String,
+    pub cdr3_nt: String,
     pub cdr3_aa: String,
 }
 impl Call {
@@ -38,27 +44,82 @@ pub struct Mutation {
     pub to: u8,
 }
 
-/// Align the reconstructed naive receptor to the observed receptor before
-/// comparing bases.  The previous implementation zipped the strings directly,
-/// so one indel shifted every downstream coordinate and manufactured hundreds
-/// of false substitutions.
+/// Measure substitutions after family membership has already been established.
 ///
-/// This is a compact Needleman-Wunsch edit alignment. Receptor sequences are
-/// short enough that the O(n*m) matrix is tiny compared with VDJ reconstruction.
-/// Mutation coordinates are always in the naive/ancestral sequence coordinate
-/// system. Insertions/deletions establish the alignment but are not emitted as
-/// substitutions here; they can become first-class lineage events later.
-pub fn mutations(naive: &str, observed: &str) -> Vec<Mutation> {
+/// Family admission is deliberately strict (V/J plus the configured CDR3 edit
+/// gate). Mutation measurement has a different job: establish homologous
+/// coordinates between the reconstructed naive receptor and an observed
+/// receptor that may start/end at a slightly different position. A compact
+/// Needleman-Wunsch edit alignment is therefore appropriate here.
+///
+/// Gaps participate in the alignment but are NOT counted as somatic mutations.
+/// Only aligned, non-N nucleotide substitutions are emitted. This prevents a
+/// one-base terminal truncation from shifting the whole receptor and creating
+/// hundreds of false substitutions.
+#[derive(Debug, Clone)]
+pub struct MutationAlignment {
+    /// Aligned nucleotide substitutions (SHM SNV events).
+    pub mutations: Vec<Mutation>,
+    /// Internal contiguous indel runs. Terminal sequence truncation is coverage,
+    /// not an indel event, and is deliberately excluded.
+    pub indels: Vec<IndelEvent>,
+    aligned: Vec<(Option<usize>, Option<usize>)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndelKind {
+    Insertion,
+    Deletion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndelEvent {
+    /// Naive-coordinate boundary immediately before the event.
+    pub pos: usize,
+    pub kind: IndelKind,
+    pub len: usize,
+}
+
+impl MutationAlignment {
+    /// Biological mutation-event depth: each substitution is one event and each
+    /// contiguous internal indel, regardless of length, is one event.
+    pub fn event_count(&self) -> usize {
+        self.mutations.len() + self.indels.len()
+    }
+
+    pub fn inserted_nt(&self) -> usize {
+        self.indels.iter().filter(|x| x.kind == IndelKind::Insertion).map(|x| x.len).sum()
+    }
+
+    pub fn deleted_nt(&self) -> usize {
+        self.indels.iter().filter(|x| x.kind == IndelKind::Deletion).map(|x| x.len).sum()
+    }
+}
+
+pub fn measure_mutations_nw(naive: &str, observed: &str) -> Option<MutationAlignment> {
     let a = naive.as_bytes();
     let b = observed.as_bytes();
     if a.is_empty() || b.is_empty() {
-        return Vec::new();
+        return None;
     }
 
+    // MUTATION MEASUREMENT ONLY.
+    //
+    // `naive` is commonly the complete reconstructed/germline receptor while
+    // `observed` may only cover an internal fragment. A global alignment would
+    // force the complete germline ends through that fragment and can turn
+    // missing coverage into tens/hundreds of apparent mutations. Use a
+    // semi-global Needleman-Wunsch alignment instead: the complete observed
+    // fragment must align, but unused naive prefix/suffix is free terminal
+    // coverage. Family admission is already frozen before this function runs.
     let cols = b.len() + 1;
     let mut score = vec![0u32; (a.len() + 1) * cols];
+
+    // Any naive prefix may be skipped for free; observed sequence may not be
+    // skipped. This lets the alignment discover where the fragment starts in
+    // the complete germline/reconstructed receptor.
     for i in 0..=a.len() {
-        score[i * cols] = i as u32;
+        score[i * cols] = 0;
     }
     for j in 0..=b.len() {
         score[j] = j as u32;
@@ -66,44 +127,212 @@ pub fn mutations(naive: &str, observed: &str) -> Vec<Mutation> {
 
     for i in 1..=a.len() {
         for j in 1..=b.len() {
-            let subst = score[(i - 1) * cols + (j - 1)] + u32::from(a[i - 1] != b[j - 1]);
+            let subst = score[(i - 1) * cols + (j - 1)]
+                + u32::from(!a[i - 1].eq_ignore_ascii_case(&b[j - 1]));
             let delete = score[(i - 1) * cols + j] + 1;
             let insert = score[i * cols + (j - 1)] + 1;
             score[i * cols + j] = subst.min(delete).min(insert);
         }
     }
 
-    let mut aligned = Vec::new();
-    let (mut i, mut j) = (a.len(), b.len());
-    while i > 0 || j > 0 {
-        if i > 0 && j > 0 {
-            let subst_cost = u32::from(a[i - 1] != b[j - 1]);
+    // The observed fragment may finish before the complete naive receptor.
+    // Pick the best endpoint after consuming all observed bases.
+    let mut end_i = 0usize;
+    let mut end_score = score[b.len()];
+    for i in 1..=a.len() {
+        let candidate = score[i * cols + b.len()];
+        if candidate < end_score {
+            end_score = candidate;
+            end_i = i;
+        }
+    }
+
+    let mut aligned = Vec::with_capacity(a.len().max(b.len()));
+
+    // Naive suffix beyond the observed fragment is terminal missing coverage.
+    for ai in (end_i..a.len()).rev() {
+        aligned.push((Some(ai), None));
+    }
+
+    let (mut i, mut j) = (end_i, b.len());
+    while j > 0 {
+        if i > 0 {
+            let subst_cost = u32::from(!a[i - 1].eq_ignore_ascii_case(&b[j - 1]));
             if score[i * cols + j] == score[(i - 1) * cols + (j - 1)] + subst_cost {
                 aligned.push((Some(i - 1), Some(j - 1)));
                 i -= 1;
                 j -= 1;
                 continue;
             }
+            if score[i * cols + j] == score[(i - 1) * cols + j] + 1 {
+                aligned.push((Some(i - 1), None));
+                i -= 1;
+                continue;
+            }
         }
-        if i > 0 && score[i * cols + j] == score[(i - 1) * cols + j] + 1 {
-            aligned.push((Some(i - 1), None));
-            i -= 1;
-        } else {
-            aligned.push((None, Some(j - 1)));
-            j -= 1;
-        }
+        aligned.push((None, Some(j - 1)));
+        j -= 1;
+    }
+
+    // Naive prefix before the fragment is terminal missing coverage.
+    while i > 0 {
+        aligned.push((Some(i - 1), None));
+        i -= 1;
     }
     aligned.reverse();
 
-    aligned
-        .into_iter()
+    // Refuse to manufacture a mutation distance for an unrelated/very poor
+    // match. Ns are coverage uncertainty and do not contribute to this check.
+    let mut informative = 0usize;
+    let mut matches = 0usize;
+    for (ai, bj) in aligned.iter().copied() {
+        let (Some(ai), Some(bj)) = (ai, bj) else { continue };
+        let from = a[ai].to_ascii_uppercase();
+        let to = b[bj].to_ascii_uppercase();
+        if from == b'N' || to == b'N' {
+            continue;
+        }
+        informative += 1;
+        if from == to {
+            matches += 1;
+        }
+    }
+    if informative == 0 || matches * 2 < informative {
+        return None;
+    }
+
+    let mutations = aligned
+        .iter()
+        .copied()
         .filter_map(|(ai, bj)| {
             let (ai, bj) = (ai?, bj?);
             let from = a[ai].to_ascii_uppercase();
             let to = b[bj].to_ascii_uppercase();
             (from != to && from != b'N' && to != b'N').then_some(Mutation { pos: ai, from, to })
         })
-        .collect()
+        .collect();
+
+    // Convert internal gap runs into indel events. Leading/trailing gaps are
+    // incomplete receptor coverage and must not masquerade as SHM indels.
+    let first_paired = aligned.iter().position(|(ai, bj)| ai.is_some() && bj.is_some());
+    let last_paired = aligned.iter().rposition(|(ai, bj)| ai.is_some() && bj.is_some());
+    let mut indels = Vec::new();
+    if let (Some(first), Some(last)) = (first_paired, last_paired) {
+        let mut k = first + 1;
+        while k < last {
+            let kind = match aligned[k] {
+                (None, Some(_)) => Some(IndelKind::Insertion),
+                (Some(_), None) => Some(IndelKind::Deletion),
+                _ => None,
+            };
+            let Some(kind) = kind else { k += 1; continue };
+            let start = k;
+            while k < last {
+                let same = matches!((kind, aligned[k]),
+                    (IndelKind::Insertion, (None, Some(_))) |
+                    (IndelKind::Deletion, (Some(_), None)));
+                if !same { break; }
+                k += 1;
+            }
+            let pos = aligned[..start]
+                .iter()
+                .rev()
+                .find_map(|(ai, _)| *ai)
+                .map(|x| x + 1)
+                .unwrap_or(0);
+            indels.push(IndelEvent { pos, kind, len: k - start });
+        }
+    }
+
+    Some(MutationAlignment { mutations, indels, aligned })
+}
+
+#[derive(Debug, Clone)]
+struct HcCellRejection {
+    cell: String,
+    reason: &'static str,
+    valid_hc_ids: Vec<String>,
+}
+
+/// Valkyrn's entry contract for B-cell lineage analysis: exactly one
+/// productive IGH reconstruction with a biologically established AIRR CDR3
+/// per cell. Cells with zero or multiple such heavy chains are excluded before
+/// family construction; their light-chain calls must not leak into an
+/// unqualified HC background.
+///
+/// TODO(later): investigate whether some multiple-HC cells are duplicate
+/// reconstructions of one biological HC. Do not collapse/rescue them here;
+/// qualification stays deliberately literal until that behavior is proven.
+fn qualify_cells_by_hc(calls: Vec<Call>) -> (Vec<Call>, Vec<HcCellRejection>, usize) {
+    let mut hc_by_cell: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut all_cells: BTreeSet<String> = BTreeSet::new();
+    for c in &calls {
+        all_cells.insert(c.cell.clone());
+        if c.productive() && c.chain == "IGH" && c.id.starts_with("HC:") && !c.cdr3_nt.is_empty() {
+            hc_by_cell
+                .entry(c.cell.clone())
+                .or_default()
+                .push(c.id.clone());
+        }
+    }
+
+    let mut accepted = BTreeSet::new();
+    let mut rejected = Vec::new();
+    for cell in &all_cells {
+        let ids = hc_by_cell.get(cell).cloned().unwrap_or_default();
+        match ids.len() {
+            1 => { accepted.insert(cell.clone()); }
+            0 => rejected.push(HcCellRejection {
+                cell: cell.clone(),
+                reason: "no_valid_hc",
+                valid_hc_ids: ids,
+            }),
+            _ => rejected.push(HcCellRejection {
+                cell: cell.clone(),
+                reason: "multiple_valid_hc",
+                valid_hc_ids: ids,
+            }),
+        }
+    }
+
+    let qualified = calls
+        .into_iter()
+        .filter(|c| accepted.contains(&c.cell))
+        .collect();
+    (qualified, rejected, all_cells.len())
+}
+
+fn write_hc_rejections(out: &Path, rejected: &[HcCellRejection]) -> Result<()> {
+    let mut w = writer(out.join("valkyrn_rejected_cells.tsv"))?;
+    writeln!(w, "cell\treason\tvalid_hc_count\tvalid_hc_ids")?;
+    for r in rejected {
+        writeln!(
+            w,
+            "{}\t{}\t{}\t{}",
+            r.cell,
+            r.reason,
+            r.valid_hc_ids.len(),
+            r.valid_hc_ids.join(",")
+        )?;
+    }
+    Ok(())
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, &x) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &y) in b.iter().enumerate() {
+            cur[j + 1] = (prev[j + 1] + 1)
+                .min(cur[j] + 1)
+                .min(prev[j] + usize::from(x != y));
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 pub fn read_calls(vdj_dir: &Path) -> Result<Vec<Call>> {
@@ -128,6 +357,13 @@ pub fn read_calls(vdj_dir: &Path) -> Result<Vec<Call>> {
     let j = ix("j")?;
     let c = ix("c")?;
     let pn_alternative = ix("pn_alternative")?;
+    let v_del_3 = ix("v_del_3")?;
+    let j_del_5 = ix("j_del_5")?;
+    let d_retained_len = ix("d_retained_len")?;
+    let p_v3_len = ix("p_v3_len")?;
+    let p_d5_len = ix("p_d5_len")?;
+    let p_d3_len = ix("p_d3_len")?;
+    let p_j5_len = ix("p_j5_len")?;
     let productivity = ix("productivity_status")?;
     let support = ix("support_features")?;
     let rediscovery = ix("receptor_rediscovery_reads")?;
@@ -151,18 +387,26 @@ pub fn read_calls(vdj_dir: &Path) -> Result<Vec<Call>> {
             j: get(j).into(),
             c: get(c).into(),
             pn_alternative: get(pn_alternative).eq_ignore_ascii_case("true"),
+            v_del_3: get(v_del_3).parse().unwrap_or(0),
+            j_del_5: get(j_del_5).parse().unwrap_or(0),
+            d_retained_len: get(d_retained_len).parse().unwrap_or(0),
+            p_total_len: [p_v3_len, p_d5_len, p_d3_len, p_j5_len]
+                .into_iter()
+                .filter_map(|col| get(col).parse::<u16>().ok())
+                .sum(),
             productivity: get(productivity).into(),
             support: get(support).parse().unwrap_or(0),
             rediscovery: get(rediscovery).parse().unwrap_or(0),
             naive: get(naive).into(),
             observed: get(observed).into(),
-            cdr3_aa: airr.get(&rid).cloned().unwrap_or_default(),
+            cdr3_nt: airr.get(&rid).map(|x| x.0.clone()).unwrap_or_default(),
+            cdr3_aa: airr.get(&rid).map(|x| x.1.clone()).unwrap_or_default(),
         });
     }
     Ok(out)
 }
 
-fn read_airr_cdr3(path: &Path) -> Result<HashMap<String, String>> {
+fn read_airr_cdr3(path: &Path) -> Result<HashMap<String, (String, String)>> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut lines = BufReader::new(file).lines();
     let header = lines.next().context("airr_rearrangements.tsv is empty")??;
@@ -171,7 +415,11 @@ fn read_airr_cdr3(path: &Path) -> Result<HashMap<String, String>> {
         .iter()
         .position(|x| *x == "lumrik_recombination_id")
         .context("AIRR lacks lumrik_recombination_id")?;
-    let cdr = h
+    let cdr_nt = h
+        .iter()
+        .position(|x| *x == "cdr3")
+        .context("AIRR lacks cdr3")?;
+    let cdr_aa = h
         .iter()
         .position(|x| *x == "cdr3_aa")
         .context("AIRR lacks cdr3_aa")?;
@@ -179,8 +427,8 @@ fn read_airr_cdr3(path: &Path) -> Result<HashMap<String, String>> {
     for line in lines {
         let line = line?;
         let f: Vec<&str> = line.split('\t').collect();
-        if let (Some(id), Some(c)) = (f.get(seq), f.get(cdr)) {
-            out.insert((*id).into(), (*c).into());
+        if let (Some(id), Some(nt), Some(aa)) = (f.get(seq), f.get(cdr_nt), f.get(cdr_aa)) {
+            out.insert((*id).into(), ((*nt).into(), (*aa).into()));
         }
     }
     Ok(out)
@@ -192,138 +440,382 @@ pub struct Family {
     pub members: Vec<usize>,
 }
 
-/// Build heavy-chain families from Lumrik's structural recombination ID.
-///
-/// HC:<HEX> is already the compact, reversible representation of V/D/J plus
-/// the measured junction architecture. It is therefore the primary clone key;
-/// Valkyrn must not throw that information away and re-cluster on V/J+CDR3 AA.
-///
-/// `pn_alternative` marks junctions where P/N decomposition is not unique. For
-/// those calls only, a conservative fallback can connect otherwise distinct
-/// compact IDs when V/D/J, CDR3-AA length and reconstructed naive length agree.
-/// The exact compact IDs remain visible on every member in valkyrn_mutations.tsv.
-fn heavy_families(calls: &[Call]) -> Vec<Family> {
-    let eligible: Vec<usize> = calls
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.productive() && c.chain == "IGH" && c.id.starts_with("HC:"))
-        .map(|(i, _)| i)
-        .collect();
+/// Hard CDR3 family gate. Structural IDs, P/N decomposition and mutation
+/// measurements are provenance only and may never override this distance.
+fn cdr3_compatible(a: &str, b: &str, max_cdr3_distance: usize) -> bool {
+    !a.is_empty() && !b.is_empty() && edit_distance(a, b) <= max_cdr3_distance
+}
 
-    let mut parent: Vec<usize> = (0..eligible.len()).collect();
-    fn root(p: &mut [usize], mut x: usize) -> usize {
-        while p[x] != x {
-            p[x] = p[p[x]];
-            x = p[x];
-        }
-        x
-    }
-
-    let mut by_id: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (local, &global) in eligible.iter().enumerate() {
-        by_id
-            .entry(calls[global].id.as_str())
-            .or_default()
-            .push(local);
-    }
-    for locals in by_id.values() {
-        if let Some((&first, rest)) = locals.split_first() {
-            for &x in rest {
-                let a = root(&mut parent, first);
-                let b = root(&mut parent, x);
-                if a != b {
-                    parent[b] = a;
+/// Deterministic complete-link clustering over a hard compatibility predicate.
+///
+/// A candidate cluster is merged only when *every* cross-cluster pair is
+/// compatible.  This deliberately rejects transitive chaining (A~B, B~C, but
+/// A!~C), because that would put a <75%-matching CDR3 pair into the same family.
+fn complete_link_groups<F>(indices: &[usize], compatible: F) -> Vec<Vec<usize>>
+where
+    F: Fn(usize, usize) -> bool,
+{
+    let mut groups: Vec<Vec<usize>> = indices.iter().copied().map(|i| vec![i]).collect();
+    loop {
+        let mut merge = None;
+        'outer: for left in 0..groups.len() {
+            for right in left + 1..groups.len() {
+                if groups[left]
+                    .iter()
+                    .all(|&a| groups[right].iter().all(|&b| compatible(a, b)))
+                {
+                    merge = Some((left, right));
+                    break 'outer;
                 }
+            }
+        }
+        let Some((left, right)) = merge else { break };
+        let other = groups.remove(right);
+        groups[left].extend(other);
+    }
+    groups
+}
+
+/// Fraction of informative aligned nucleotide pairs that agree. Gaps and Ns do
+/// not improve this score. `measure_mutations_nw` already applies the permissive
+/// >=50% fail-safe; reassignment deliberately uses the harder >=75% gate.
+fn mutation_alignment_identity(calls: &[Call], reference_i: usize, call_i: usize) -> Option<f64> {
+    let aln = measure_mutations_nw(&calls[reference_i].naive, &calls[call_i].observed)?;
+    let a = calls[reference_i].naive.as_bytes();
+    let b = calls[call_i].observed.as_bytes();
+    let mut informative = 0usize;
+    let mut matches = 0usize;
+    for (ai, bj) in aln.aligned.iter().copied() {
+        let (Some(ai), Some(bj)) = (ai, bj) else { continue };
+        let from = a[ai].to_ascii_uppercase();
+        let to = b[bj].to_ascii_uppercase();
+        if from == b'N' || to == b'N' { continue; }
+        informative += 1;
+        matches += usize::from(from == to);
+    }
+    (informative > 0).then_some(matches as f64 / informative as f64)
+}
+
+fn family_reference_index(calls: &[Call], members: &[usize]) -> Option<usize> {
+    members.iter().copied().max_by_key(|&i| {
+        (
+            calls[i].observed.len(),
+            calls[i].support.saturating_add(calls[i].rediscovery),
+        )
+    })
+}
+
+fn structurally_compatible_with_family(
+    calls: &[Call],
+    call_i: usize,
+    members: &[usize],
+    max_cdr3_distance: usize,
+) -> bool {
+    let c = &calls[call_i];
+    members.iter().all(|&j| {
+        let x = &calls[j];
+        c.chain == x.chain
+            && c.v == x.v
+            && c.j == x.j
+            && cdr3_compatible(&c.cdr3_nt, &x.cdr3_nt, max_cdr3_distance)
+    })
+}
+
+/// Second-stage HC validation. Initial families are created exclusively by the
+/// hard structural gate. A member whose observed receptor cannot be measured
+/// against its provisional family root is removed, tried against every other
+/// structurally legal HC family, and re-added only when the hard mutation
+/// identity gate succeeds. Failure leaves the HC unassigned; it never becomes
+/// plot input merely because a permissive NW path exists.
+fn refine_heavy_families(
+    calls: &[Call],
+    mut fams: Vec<Family>,
+    max_cdr3_distance: usize,
+) -> (Vec<Family>, Vec<usize>) {
+    let roots: Vec<Option<usize>> = fams
+        .iter()
+        .map(|f| family_reference_index(calls, &f.members))
+        .collect();
+    let mut failed = Vec::new();
+
+    // First pass is deliberately permissive: only a genuinely unmeasurable
+    // member is evicted from its provisional family.
+    for fi in 0..fams.len() {
+        let Some(root) = roots[fi] else { continue };
+        let old = std::mem::take(&mut fams[fi].members);
+        for i in old {
+            if i == root || mutation_alignment_identity(calls, root, i).is_some() {
+                fams[fi].members.push(i);
+            } else {
+                failed.push(i);
             }
         }
     }
 
-    // Only ambiguous P/N decompositions get a fallback. Exact structural IDs
-    // remain the normal path. Requiring the same V/D/J, CDR3 length and naive
-    // rearrangement length prevents the old broad V/J+CDR3-distance clustering.
-    let ambiguous: Vec<usize> = eligible
-        .iter()
-        .enumerate()
-        .filter(|(_, g)| calls[**g].pn_alternative)
-        .map(|(l, _)| l)
-        .collect();
-    for a in 0..ambiguous.len() {
-        for b in a + 1..ambiguous.len() {
-            let la = ambiguous[a];
-            let lb = ambiguous[b];
-            let ca = &calls[eligible[la]];
-            let cb = &calls[eligible[lb]];
-            if ca.id != cb.id
-                && ca.v == cb.v
-                && ca.d == cb.d
-                && ca.j == cb.j
-                && !ca.cdr3_aa.is_empty()
-                && ca.cdr3_aa.len() == cb.cdr3_aa.len()
-                && ca.naive.len() == cb.naive.len()
+    // Retry evicted HCs against every other legal family. Re-admission is hard:
+    // complete-link structural compatibility plus >=75% informative identity.
+    for i in failed.iter().copied() {
+        let mut best: Option<(usize, f64)> = None;
+        for fi in 0..fams.len() {
+            if fams[fi].members.is_empty()
+                || !structurally_compatible_with_family(calls, i, &fams[fi].members, max_cdr3_distance)
             {
-                let ra = root(&mut parent, la);
-                let rb = root(&mut parent, lb);
-                if ra != rb {
-                    parent[rb] = ra;
-                }
+                continue;
             }
+            let Some(root) = family_reference_index(calls, &fams[fi].members) else { continue };
+            let Some(identity) = mutation_alignment_identity(calls, root, i) else { continue };
+            if identity < 0.75 { continue; }
+            if best.map(|(_, x)| identity > x).unwrap_or(true) {
+                best = Some((fi, identity));
+            }
+        }
+        if let Some((fi, _)) = best {
+            fams[fi].members.push(i);
         }
     }
 
-    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for (local, &global) in eligible.iter().enumerate() {
-        let r = root(&mut parent, local);
-        groups.entry(r).or_default().push(global);
+    let assigned: BTreeSet<usize> = fams.iter().flat_map(|f| f.members.iter().copied()).collect();
+    let unassigned = failed.into_iter().filter(|i| !assigned.contains(i)).collect();
+    fams.retain(|f| !f.members.is_empty());
+    for f in &mut fams {
+        f.members.sort_unstable();
+        let c = &calls[f.members[0]];
+        f.name = format!("HC:{}:{}:CDR3:{}", c.v, c.j, family_cdr3(calls, &f.members));
     }
+    (fams, unassigned)
+}
+
+fn family_cdr3(calls: &[Call], members: &[usize]) -> String {
+    members
+        .iter()
+        .map(|&i| calls[i].cdr3_nt.as_str())
+        .filter(|x| !x.is_empty())
+        .min()
+        .unwrap_or("MISSING")
+        .to_string()
+}
+
+/// Heavy-chain families use only robust receptor labels plus the CDR3 sequence.
+///
+/// The old HC:<HEX>/P-N family merger is intentionally gone.  HC compact IDs
+/// remain provenance in the output, but they no longer decide clonality.  Two
+/// productive IGH calls can share a family only when V and J agree and their
+/// CDR3 nucleotide sequences have edit distance within the configured maximum.  Complete-link grouping
+/// makes the configured CDR3-distance rule true for every pair in the final family.
+fn heavy_families(calls: &[Call], max_cdr3_distance: usize) -> Vec<Family> {
+    // Bucket first by the hard V/J labels, then collapse identical CDR3s before
+    // complete-link clustering.  The previous implementation fed every call to
+    // the agglomerator individually.  Large expanded clones therefore contained
+    // hundreds/thousands of duplicate CDR3 nodes and turned a tiny biological
+    // comparison into a cubic amount of repeated cluster bookkeeping.
+    //
+    // Collapsing identical CDR3s is semantics-preserving: compatibility inside
+    // a V/J bucket depends only on the CDR3 sequence, so all calls carrying the
+    // same sequence are interchangeable for the hard configured CDR3-distance invariant.
+    let mut buckets: BTreeMap<(String, String), BTreeMap<String, Vec<usize>>> = BTreeMap::new();
+    for (i, c) in calls.iter().enumerate() {
+        if c.productive() && c.chain == "IGH" && c.id.starts_with("HC:") && !c.cdr3_nt.is_empty() {
+            buckets
+                .entry((c.v.clone(), c.j.clone()))
+                .or_default()
+                .entry(c.cdr3_nt.clone())
+                .or_default()
+                .push(i);
+        }
+    }
+
     let mut out = Vec::new();
-    for members in groups.into_values() {
-        let mut ids: BTreeSet<&str> = members.iter().map(|&i| calls[i].id.as_str()).collect();
-        let representative = ids.pop_first().unwrap_or("HC:UNKNOWN");
-        let name = if ids.is_empty() {
-            representative.to_string()
-        } else {
-            format!("{}~PNALT", representative)
-        };
-        out.push(Family { name, members });
+    for ((v, j), variants) in buckets {
+        let variant_members: Vec<Vec<usize>> = variants.into_values().collect();
+        let variant_indices: Vec<usize> = (0..variant_members.len()).collect();
+        let groups = complete_link_groups(&variant_indices, |a, b| {
+            let left = &calls[variant_members[a][0]].cdr3_nt;
+            let right = &calls[variant_members[b][0]].cdr3_nt;
+            cdr3_compatible(left, right, max_cdr3_distance)
+        });
+
+        for group in groups {
+            let mut members = Vec::new();
+            for variant in group {
+                members.extend_from_slice(&variant_members[variant]);
+            }
+            members.sort_by(|&a, &b| {
+                (&calls[a].cdr3_nt, &calls[a].cell, &calls[a].id)
+                    .cmp(&(&calls[b].cdr3_nt, &calls[b].cell, &calls[b].id))
+            });
+            let cdr3 = family_cdr3(calls, &members);
+            out.push(Family {
+                name: format!("HC:{}:{}:CDR3:{}", v, j, cdr3),
+                members,
+            });
+        }
     }
     out
 }
 
-/// Build repertoire groups with deliberately asymmetric trust.
+/// Canonicalize productive light chains inside one HC background.
 ///
-/// Heavy-chain clone identity comes from sc-vdj's compact structural HC:<HEX>
-/// recombination ID. Light-chain LC:<HEX> identity is useful, but is only
-/// treated as a multi-cell clone in the context of the same HC family.
-pub fn families(calls: &[Call], _max_cdr3_distance: usize) -> Vec<Family> {
-    let mut out = heavy_families(calls);
-
-    let mut heavy_family_by_cell: HashMap<&str, &str> = HashMap::new();
-    for f in &out {
-        for &i in &f.members {
-            heavy_family_by_cell
-                .entry(calls[i].cell.as_str())
-                .or_insert(f.name.as_str());
+/// LC compact recombination IDs are provenance only.  Light-chain families
+/// require the same light chain, V and J calls, and pairwise CDR3 edit distance within the configured maximum
+/// nucleotide identity.  As for HC, complete-link grouping prevents chaining
+/// across the hard CDR3 boundary.
+fn canonical_light_ids_with_distance(calls: &[Call], indices: &[usize], max_cdr3_distance: usize) -> HashMap<usize, String> {
+    // As for HC, cluster unique CDR3 variants rather than individual receptor
+    // calls.  The HC background has already been fixed by the caller; chain/V/J
+    // are the remaining hard labels and are used as buckets here.
+    let mut buckets: BTreeMap<(String, String, String), BTreeMap<String, Vec<usize>>> =
+        BTreeMap::new();
+    for &i in indices {
+        let c = &calls[i];
+        if c.productive()
+            && matches!(c.chain.as_str(), "IGK" | "IGL")
+            && c.id.starts_with("LC:")
+            && !c.cdr3_nt.is_empty()
+        {
+            buckets
+                .entry((c.chain.clone(), c.v.clone(), c.j.clone()))
+                .or_default()
+                .entry(c.cdr3_nt.clone())
+                .or_default()
+                .push(i);
         }
     }
 
-    let mut light: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
-    for (i, c) in calls.iter().enumerate().filter(|(_, c)| {
-        c.productive() && matches!(c.chain.as_str(), "IGK" | "IGL") && c.id.starts_with("LC:")
-    }) {
-        let bg = heavy_family_by_cell
-            .get(c.cell.as_str())
-            .map(|x| (*x).to_string())
-            .unwrap_or_else(|| format!("UNPAIRED:{}", c.cell));
-        light.entry((bg, c.id.clone())).or_default().push(i);
+    let mut out = HashMap::new();
+    for ((chain, v, j), variants) in buckets {
+        let variant_members: Vec<Vec<usize>> = variants.into_values().collect();
+        let variant_indices: Vec<usize> = (0..variant_members.len()).collect();
+        let groups = complete_link_groups(&variant_indices, |a, b| {
+            let left = &calls[variant_members[a][0]].cdr3_nt;
+            let right = &calls[variant_members[b][0]].cdr3_nt;
+            cdr3_compatible(left, right, max_cdr3_distance)
+        });
+
+        for group in groups {
+            let mut members = Vec::new();
+            for variant in group {
+                members.extend_from_slice(&variant_members[variant]);
+            }
+            members.sort_by(|&a, &b| {
+                (&calls[a].cdr3_nt, &calls[a].cell, &calls[a].id)
+                    .cmp(&(&calls[b].cdr3_nt, &calls[b].cell, &calls[b].id))
+            });
+            let cdr3 = family_cdr3(calls, &members);
+            let name = format!("LC:{}:{}:{}:CDR3:{}", chain, v, j, cdr3);
+            for i in members {
+                out.insert(i, name.clone());
+            }
+        }
     }
-    for ((bg, lc), members) in light {
-        let name = if bg.starts_with("UNPAIRED:") {
-            format!("{}@{}", lc, bg)
-        } else {
-            format!("{}+{}", bg, lc)
+    out
+}
+
+fn canonical_light_ids(calls: &[Call], indices: &[usize]) -> HashMap<usize, String> {
+    canonical_light_ids_with_distance(calls, indices, 3)
+}
+
+/// Build repertoire families with asymmetric HC/LC trust.
+///
+/// HC families are defined first.  LC families are then defined only within an
+/// HC background; the same LC-like CDR3 on unrelated HC backgrounds is not one
+/// clone.  Missing CDR3 calls are not family evidence and therefore stay out of
+/// family clustering rather than bypassing the 75% invariant.
+pub fn families(calls: &[Call], max_cdr3_distance: usize) -> Vec<Family> {
+    let provisional_hc = heavy_families(calls, max_cdr3_distance);
+    let (mut out, unassigned_hc) = refine_heavy_families(calls, provisional_hc, max_cdr3_distance);
+    if !unassigned_hc.is_empty() {
+        eprintln!(
+            "Valkyrn: HC mutation validation left {} structurally qualified cells unassigned after hard reassignment",
+            unassigned_hc.len()
+        );
+    }
+
+    // LC is asymmetric by design. It lives only inside a finalized HC family.
+    // If an LC does not measure against its provisional LC root, try every other
+    // structurally legal LC clone in that HC background with the hard mutation
+    // gate. If none fits, the fragment becomes a NEW LC clone root rather than
+    // being discarded or contaminating another clone.
+    let heavy_families_snapshot: Vec<(String, Vec<usize>)> = out
+        .iter()
+        .map(|f| (f.name.clone(), f.members.clone()))
+        .collect();
+
+    for (hc_name, hc_members) in heavy_families_snapshot {
+        let cells: BTreeSet<&str> = hc_members.iter().map(|&i| calls[i].cell.as_str()).collect();
+        let indices: Vec<usize> = calls.iter().enumerate().filter(|(_, c)| {
+            cells.contains(c.cell.as_str())
+                && c.productive()
+                && matches!(c.chain.as_str(), "IGK" | "IGL")
+                && c.id.starts_with("LC:")
+                && !c.cdr3_nt.is_empty()
+        }).map(|(i, _)| i).collect();
+
+        let canonical = canonical_light_ids_with_distance(calls, &indices, max_cdr3_distance);
+        let mut clones: Vec<Vec<usize>> = {
+            let mut grouped: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+            for &i in &indices {
+                if let Some(name) = canonical.get(&i) {
+                    grouped.entry(name.clone()).or_default().push(i);
+                }
+            }
+            grouped.into_values().collect()
         };
-        out.push(Family { name, members });
+
+        let roots: Vec<Option<usize>> = clones.iter().map(|m| family_reference_index(calls, m)).collect();
+        let mut failed = Vec::new();
+        for ci in 0..clones.len() {
+            let Some(root) = roots[ci] else { continue };
+            let old = std::mem::take(&mut clones[ci]);
+            for i in old {
+                if i == root || mutation_alignment_identity(calls, root, i).is_some() {
+                    clones[ci].push(i);
+                } else {
+                    failed.push(i);
+                }
+            }
+        }
+
+        for i in failed {
+            let mut best: Option<(usize, f64)> = None;
+            for ci in 0..clones.len() {
+                if clones[ci].is_empty()
+                    || !structurally_compatible_with_family(calls, i, &clones[ci], max_cdr3_distance)
+                {
+                    continue;
+                }
+                let Some(root) = family_reference_index(calls, &clones[ci]) else { continue };
+                let Some(identity) = mutation_alignment_identity(calls, root, i) else { continue };
+                if identity < 0.75 { continue; }
+                if best.map(|(_, x)| identity > x).unwrap_or(true) {
+                    best = Some((ci, identity));
+                }
+            }
+            if let Some((ci, _)) = best {
+                clones[ci].push(i);
+            } else {
+                // No existing LC clone is a convincing home: this fragment is
+                // the root of a new LC clone in this finalized HC background.
+                clones.push(vec![i]);
+            }
+        }
+
+        for mut members in clones {
+            if members.is_empty() { continue; }
+            members.sort_unstable();
+            let c = &calls[members[0]];
+            let lc_name = format!(
+                "LC:{}:{}:{}:CDR3:{}",
+                c.chain,
+                c.v,
+                c.j,
+                family_cdr3(calls, &members)
+            );
+            out.push(Family { name: format!("{}+{}", hc_name, lc_name), members });
+        }
     }
+
+    // Plot/report thresholds are applied by downstream writers only after this
+    // final HC reassignment and LC clone-root pass has frozen family membership.
     out.sort_by_key(|f| std::cmp::Reverse(f.members.len()));
     out
 }
@@ -331,12 +823,13 @@ pub fn families(calls: &[Call], _max_cdr3_distance: usize) -> Vec<Family> {
 pub fn analyze(
     vdj_dir: &Path,
     out_dir: &Path,
-    max_cdr3_distance: usize,
     min_structure_family: usize,
     threads: usize,
     min_clonomap_family: usize,
     min_clonomap_paired_family: usize,
     clonomap_k: usize,
+    clonomap_radial: bool,
+    max_cdr3_distance: usize,
 ) -> Result<()> {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads.max(1))
@@ -346,11 +839,12 @@ pub fn analyze(
         analyze_inner(
             vdj_dir,
             out_dir,
-            max_cdr3_distance,
             min_structure_family,
             min_clonomap_family,
             min_clonomap_paired_family,
             clonomap_k,
+            clonomap_radial,
+            max_cdr3_distance,
         )
     })
 }
@@ -358,27 +852,83 @@ pub fn analyze(
 fn analyze_inner(
     vdj_dir: &Path,
     out_dir: &Path,
-    max_cdr3_distance: usize,
     min_structure_family: usize,
     min_clonomap_family: usize,
     min_clonomap_paired_family: usize,
     clonomap_k: usize,
+    clonomap_radial: bool,
+    max_cdr3_distance: usize,
 ) -> Result<()> {
-    fs::create_dir_all(out_dir)?;
+    // Validate the input before touching output, then make every Valkyrn run
+    // self-contained. Reusing an output directory otherwise leaves stale plots
+    // behind and makes it impossible to tell which renderer produced them.
+    eprintln!("Valkyrn: loading VDJ calls from {}", vdj_dir.display());
     let calls = read_calls(vdj_dir)?;
     if calls.is_empty() {
         bail!("no VDJ calls found")
     }
+    eprintln!("Valkyrn: loaded {} receptor calls", calls.len());
+    let (calls, rejected_cells, cells_examined) = qualify_cells_by_hc(calls);
+    let no_hc = rejected_cells.iter().filter(|r| r.reason == "no_valid_hc").count();
+    let multiple_hc = rejected_cells.iter().filter(|r| r.reason == "multiple_valid_hc").count();
+    let accepted_cells = cells_examined - rejected_cells.len();
+    eprintln!("Valkyrn: HC validation");
+    eprintln!("  cells examined:                 {cells_examined}");
+    eprintln!("  accepted: exactly one valid HC: {accepted_cells}");
+    eprintln!("  skipped: no valid HC:           {no_hc}");
+    eprintln!("  skipped: multiple valid HCs:    {multiple_hc}");
+    if calls.is_empty() {
+        bail!("no cells with exactly one valid productive IGH/CDR3 reconstruction")
+    }
+    if out_dir.exists() {
+        let vdj_canonical = fs::canonicalize(vdj_dir)
+            .context("canonicalizing Valkyrn VDJ input directory")?;
+        let out_canonical = fs::canonicalize(out_dir)
+            .context("canonicalizing existing Valkyrn output directory")?;
+        if out_canonical == vdj_canonical {
+            bail!("refusing to purge Valkyrn output because --out is the VDJ input directory")
+        }
+        eprintln!("Valkyrn: purging previous output {}", out_dir.display());
+        let purge_started = Instant::now();
+        fs::remove_dir_all(out_dir).context("purging previous Valkyrn output directory")?;
+        eprintln!(
+            "Valkyrn: previous output purged in {:.2?}",
+            purge_started.elapsed()
+        );
+    }
+    fs::create_dir_all(out_dir)?;
+    write_hc_rejections(out_dir, &rejected_cells)?;
+    eprintln!("Valkyrn: wrote {} rejected cells to {}", rejected_cells.len(), out_dir.join("valkyrn_rejected_cells.tsv").display());
+    eprintln!("Valkyrn: output directory ready; clustering receptor families from {accepted_cells} HC-qualified cells (max CDR3 edit distance = {})", max_cdr3_distance);
+    let family_started = Instant::now();
     let fams = families(&calls, max_cdr3_distance);
+    eprintln!(
+        "Valkyrn: clustered {} receptor families in {:.2?}; computing mutation cache",
+        fams.len(),
+        family_started.elapsed()
+    );
     // Needleman-Wunsch is by far the expensive operation. Compute every
     // rearrangement exactly once, in parallel, then reuse the immutable cache
     // for family summaries, recurrence classification and TSV output.
-    let mutation_cache: Vec<Vec<Mutation>> = calls
+    let mutation_started = Instant::now();
+    let mutation_cache: Vec<Option<Vec<Mutation>>> = calls
         .par_iter()
-        .map(|c| mutations(&c.naive, &c.observed))
+        .map(|c| {
+            measure_mutations_nw(&c.naive, &c.observed)
+                .map(|x| x.mutations)
+        })
         .collect();
+    let rejected_alignments = mutation_cache.iter().filter(|x| x.is_none()).count();
+    eprintln!(
+        "Valkyrn: mutation cache computed for {} receptor calls in {:.2?} ({} rejected: empty receptor sequence); writing summary tables",
+        calls.len(),
+        mutation_started.elapsed(),
+        rejected_alignments
+    );
     write_families(out_dir, &calls, &fams, &mutation_cache)?;
+    write_receptors(out_dir, &calls, &fams)?;
     write_mutations(out_dir, &calls, &fams, &mutation_cache)?;
+    write_indel_events(out_dir, &calls)?;
     write_cell_qc(out_dir, &calls, &mutation_cache)?;
     write_structure_candidates(out_dir, &calls, &fams, min_structure_family)?;
     write_clonomap(
@@ -388,8 +938,68 @@ fn analyze_inner(
         min_clonomap_family,
         min_clonomap_paired_family,
         clonomap_k,
+        clonomap_radial,
     )?;
+    eprintln!("Valkyrn: writing report");
     write_report(out_dir, &calls, &fams)?;
+    eprintln!("Valkyrn: finished -> {}", out_dir.display());
+    Ok(())
+}
+
+fn pn_reference_index(calls: &[Call], members: &[usize]) -> Option<usize> {
+    // Family membership is already fixed by V/J + the hard CDR3 rule.  P/N and
+    // retained-D measurements are used only to choose a descriptive ancestral
+    // reconstruction for downstream distance plots; they cannot merge families.
+    // Ties prefer more explicit P sequence, then stronger receptor evidence.
+    members.iter().copied().max_by_key(|&i| {
+        (
+            calls[i].d_retained_len,
+            calls[i].p_total_len,
+            calls[i].support.saturating_add(calls[i].rediscovery),
+        )
+    })
+}
+
+fn family_pn_reference<'a>(calls: &'a [Call], f: &Family) -> Option<&'a str> {
+    pn_reference_index(calls, &f.members).map(|i| calls[i].naive.as_str())
+}
+
+fn pn_distance_for_call(c: &Call, reference: Option<&str>) -> Option<usize> {
+    let reference = reference?;
+    if reference.is_empty() || c.naive.is_empty() {
+        None
+    } else {
+        Some(edit_distance(reference, &c.naive))
+    }
+}
+
+fn write_receptors(out: &Path, calls: &[Call], fams: &[Family]) -> Result<()> {
+    let mut w = writer(out.join("valkyrn_receptors.tsv"))?;
+    writeln!(
+        w,
+        "family\trecombination_id\tcell\tchain\tcdr3_nt\tcdr3_aa\tpn_alternative\tpn_reconstruction_distance_nt"
+    )?;
+    for f in fams {
+        let reference = family_pn_reference(calls, f);
+        for &i in &f.members {
+            let c = &calls[i];
+            let pn_distance = pn_distance_for_call(c, reference)
+                .map(|x| x.to_string())
+                .unwrap_or_default();
+            writeln!(
+                w,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                f.name,
+                c.id,
+                c.cell,
+                c.chain,
+                c.cdr3_nt,
+                c.cdr3_aa,
+                c.pn_alternative,
+                pn_distance
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -397,21 +1007,38 @@ fn write_families(
     out: &Path,
     calls: &[Call],
     fams: &[Family],
-    mutation_cache: &[Vec<Mutation>],
+    mutation_cache: &[Option<Vec<Mutation>>],
 ) -> Result<()> {
     let mut w = writer(out.join("valkyrn_families.tsv"))?;
     writeln!(
         w,
-        "family\tchain\tcells\tv\td\tj\tstructural_recombination_ids\tcdr3_aa_variants\tisotypes\tisotype_counts\tlight_partners\tdominant_light_fraction\tshared_mutations\tvariable_mutations"
+        "family\tchain\tcells\tv\td\tj\tstructural_recombination_ids\tcdr3_nt_variants\tcdr3_aa_variants\tpn_alternative_members\tpn_distance_min_nt\tpn_distance_median_nt\tpn_distance_max_nt\tisotypes\tisotype_counts\tlight_partners\tdominant_light_fraction\tshared_mutations\tvariable_mutations"
     )?;
     for f in fams {
         let cells: BTreeSet<_> = f.members.iter().map(|&i| calls[i].cell.as_str()).collect();
         let c = &calls[f.members[0]];
-        let cdr: BTreeSet<_> = f
+        let cdr_nt: BTreeSet<_> = f
             .members
             .iter()
-            .map(|&i| calls[i].cdr3_aa.as_str())
+            .filter_map(|&i| (!calls[i].cdr3_nt.is_empty()).then_some(calls[i].cdr3_nt.as_str()))
             .collect();
+        let cdr_aa: BTreeSet<_> = f
+            .members
+            .iter()
+            .filter_map(|&i| (!calls[i].cdr3_aa.is_empty()).then_some(calls[i].cdr3_aa.as_str()))
+            .collect();
+        let pn_reference = family_pn_reference(calls, f);
+        let pn_distances: Vec<usize> = f
+            .members
+            .iter()
+            .filter_map(|&i| pn_distance_for_call(&calls[i], pn_reference))
+            .collect();
+        let pn_alt_members = f.members.iter().filter(|&&i| calls[i].pn_alternative).count();
+        let pn_min = pn_distances.iter().min().map(|x| x.to_string()).unwrap_or_default();
+        let pn_med = median_usize(pn_distances.clone())
+            .map(|x| format!("{x:.1}"))
+            .unwrap_or_default();
+        let pn_max = pn_distances.iter().max().map(|x| x.to_string()).unwrap_or_default();
         let structural: BTreeSet<_> = f.members.iter().map(|&i| calls[i].id.as_str()).collect();
         let lights = if c.chain == "IGH" {
             light_partners(calls, &cells)
@@ -435,7 +1062,7 @@ fn write_families(
         let (shared, var) = family_mutation_sets(mutation_cache, f);
         writeln!(
             w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{}",
             f.name,
             c.chain,
             cells.len(),
@@ -443,7 +1070,12 @@ fn write_families(
             c.d,
             c.j,
             structural.len(),
-            cdr.len(),
+            cdr_nt.into_iter().collect::<Vec<_>>().join(","),
+            cdr_aa.into_iter().collect::<Vec<_>>().join(","),
+            pn_alt_members,
+            pn_min,
+            pn_med,
+            pn_max,
             isotype_names,
             isotype_counts,
             lights.len(),
@@ -459,25 +1091,28 @@ fn write_families(
     Ok(())
 }
 fn light_partners(calls: &[Call], cells: &BTreeSet<&str>) -> BTreeMap<String, usize> {
-    let mut x = BTreeMap::new();
-    for c in calls.iter().filter(|c| {
+    let indices: Vec<usize> = calls.iter().enumerate().filter(|(_, c)| {
         cells.contains(c.cell.as_str())
             && c.productive()
             && matches!(c.chain.as_str(), "IGK" | "IGL")
-    }) {
-        *x.entry(c.id.clone()).or_default() += 1;
+    }).map(|(i, _)| i).collect();
+    let canonical = canonical_light_ids(calls, &indices);
+    let mut x = BTreeMap::new();
+    for i in indices {
+        let id = canonical.get(&i).cloned().unwrap_or_else(|| calls[i].id.clone());
+        *x.entry(id).or_default() += 1;
     }
     x
 }
 
 fn family_mutation_sets(
-    mutation_cache: &[Vec<Mutation>],
+    mutation_cache: &[Option<Vec<Mutation>>],
     f: &Family,
 ) -> (BTreeSet<Mutation>, BTreeSet<Mutation>) {
     let sets: Vec<BTreeSet<Mutation>> = f
         .members
         .iter()
-        .map(|&i| mutation_cache[i].iter().cloned().collect())
+        .map(|&i| mutation_cache[i].as_deref().unwrap_or(&[]).iter().cloned().collect())
         .collect();
     if sets.is_empty() {
         return (Default::default(), Default::default());
@@ -496,7 +1131,7 @@ fn write_mutations(
     out: &Path,
     calls: &[Call],
     fams: &[Family],
-    mutation_cache: &[Vec<Mutation>],
+    mutation_cache: &[Option<Vec<Mutation>>],
 ) -> Result<()> {
     let mut w = writer(out.join("valkyrn_mutations.tsv"))?;
     writeln!(
@@ -513,7 +1148,7 @@ fn write_mutations(
         let mut seen = BTreeSet::new();
         for &i in &f.members {
             let c = &calls[i];
-            for m in mutation_cache[i].iter().cloned() {
+            for m in mutation_cache[i].as_deref().unwrap_or(&[]).iter().cloned() {
                 seen.insert((c.chain.clone(), c.v.clone(), m));
             }
         }
@@ -530,7 +1165,7 @@ fn write_mutations(
         let cells: BTreeSet<_> = f.members.iter().map(|&i| calls[i].cell.as_str()).collect();
         for &i in &f.members {
             let c = &calls[i];
-            for m in mutation_cache[i].iter().cloned() {
+            for m in mutation_cache[i].as_deref().unwrap_or(&[]).iter().cloned() {
                 let n = recurrence
                     .get(&(c.chain.clone(), c.v.clone(), m.clone()))
                     .map_or(1, |x| x.len());
@@ -577,7 +1212,26 @@ fn median_usize(mut values: Vec<usize>) -> Option<f64> {
     })
 }
 
-fn write_cell_qc(out: &Path, calls: &[Call], mutation_cache: &[Vec<Mutation>]) -> Result<()> {
+fn write_indel_events(out: &Path, calls: &[Call]) -> Result<()> {
+    let mut w = writer(out.join("valkyrn_indels.tsv"))?;
+    writeln!(w, "cell\treceptor_id\tchain\tsubstitutions\tindel_events\tinserted_nt\tdeleted_nt\tindels")?;
+    for c in calls {
+        let Some(aln) = measure_mutations_nw(&c.naive, &c.observed) else { continue };
+        if aln.indels.is_empty() {
+            continue;
+        }
+        let events = aln.indels.iter().map(|x| {
+            let kind = match x.kind { IndelKind::Insertion => "ins", IndelKind::Deletion => "del" };
+            format!("{kind}@{}:{}nt", x.pos, x.len)
+        }).collect::<Vec<_>>().join(",");
+        writeln!(w, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            c.cell, c.id, c.chain, aln.mutations.len(), aln.indels.len(),
+            aln.inserted_nt(), aln.deleted_nt(), events)?;
+    }
+    Ok(())
+}
+
+fn write_cell_qc(out: &Path, calls: &[Call], mutation_cache: &[Option<Vec<Mutation>>]) -> Result<()> {
     let mut by: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (i, c) in calls.iter().enumerate() {
         by.entry(&c.cell).or_default().push(i)
@@ -616,7 +1270,7 @@ fn write_cell_qc(out: &Path, calls: &[Call], mutation_cache: &[Vec<Mutation>]) -
             .iter()
             .copied()
             .filter(|&i| calls[i].productive() && calls[i].chain == "IGH")
-            .map(|i| mutation_cache[i].len())
+            .filter_map(|i| mutation_cache[i].as_ref().map(Vec::len))
             .collect();
         let lc_depths: Vec<usize> = idxs
             .iter()
@@ -624,7 +1278,7 @@ fn write_cell_qc(out: &Path, calls: &[Call], mutation_cache: &[Vec<Mutation>]) -
             .filter(|&i| {
                 calls[i].productive() && matches!(calls[i].chain.as_str(), "IGK" | "IGL")
             })
-            .map(|i| mutation_cache[i].len())
+            .filter_map(|i| mutation_cache[i].as_ref().map(Vec::len))
             .collect();
         let hc_med = median_usize(hc_depths.clone());
         let lc_med = median_usize(lc_depths.clone());
@@ -691,47 +1345,16 @@ fn write_structure_candidates(
     Ok(())
 }
 
-fn observed_on_naive_coordinates(naive: &str, observed: &str) -> String {
-    let a = naive.as_bytes();
+fn observed_on_naive_coordinates(naive: &str, observed: &str) -> Option<String> {
+    let aln = measure_mutations_nw(naive, observed)?;
     let b = observed.as_bytes();
-    if a.is_empty() {
-        return String::new();
-    }
-    let cols = b.len() + 1;
-    let mut score = vec![0u32; (a.len() + 1) * cols];
-    for i in 0..=a.len() {
-        score[i * cols] = i as u32;
-    }
-    for j in 0..=b.len() {
-        score[j] = j as u32;
-    }
-    for i in 1..=a.len() {
-        for j in 1..=b.len() {
-            let subst = score[(i - 1) * cols + j - 1] + u32::from(a[i - 1] != b[j - 1]);
-            score[i * cols + j] = subst
-                .min(score[(i - 1) * cols + j] + 1)
-                .min(score[i * cols + j - 1] + 1);
+    let mut out = vec![b'-'; naive.len()];
+    for (ai, bj) in aln.aligned {
+        if let (Some(ai), Some(bj)) = (ai, bj) {
+            out[ai] = b[bj].to_ascii_uppercase();
         }
     }
-    let mut out = vec![b'-'; a.len()];
-    let (mut i, mut j) = (a.len(), b.len());
-    while i > 0 || j > 0 {
-        if i > 0 && j > 0 {
-            let cost = u32::from(a[i - 1] != b[j - 1]);
-            if score[i * cols + j] == score[(i - 1) * cols + j - 1] + cost {
-                out[i - 1] = b[j - 1].to_ascii_uppercase();
-                i -= 1;
-                j -= 1;
-                continue;
-            }
-        }
-        if i > 0 && score[i * cols + j] == score[(i - 1) * cols + j] + 1 {
-            i -= 1;
-        } else {
-            j -= 1;
-        }
-    }
-    String::from_utf8(out).unwrap_or_default()
+    String::from_utf8(out).ok()
 }
 
 fn xml_escape(x: &str) -> String {
@@ -775,7 +1398,7 @@ fn write_lc_constellation(
                 let lc = &calls[li];
                 let m = by_lc.entry(lc.id.clone()).or_default();
                 m.cells.insert((*cell).to_string());
-                m.depths.push(mutations(&lc.naive, &lc.observed).len());
+                m.depths.push(measure_mutations_nw(&lc.naive, &lc.observed).map(|x| x.event_count()).unwrap_or(0));
                 m.chain = lc.chain.clone();
                 m.v = lc.v.clone();
                 m.j = lc.j.clone();
@@ -938,6 +1561,7 @@ fn write_clonomap(
     min_size: usize,
     min_paired_size: usize,
     k: usize,
+    radial_layout: bool,
 ) -> Result<()> {
     use clonomap::ClonoMap;
     #[derive(Default)]
@@ -947,6 +1571,9 @@ fn write_clonomap(
         lights: BTreeMap<String, usize>,
         hc_depths: Vec<usize>,
         lc_depths: Vec<usize>,
+        pn_distances: Vec<usize>,
+        original_hc_ids: BTreeSet<String>,
+        original_lc_ids: BTreeSet<String>,
     }
     fn fmt_counts(x: &BTreeMap<String, usize>) -> String {
         x.iter()
@@ -994,26 +1621,44 @@ fn write_clonomap(
         lights_by_cell: &HashMap<String, Vec<usize>>,
         required_lc: Option<&str>,
         k: usize,
+        radial_layout: bool,
     ) -> Result<usize> {
         use ndarray::Array2;
-
-        const LC_ID_WEIGHT: f32 = 8.0;
 
         let Some(&anchor_i) = member_indices.first() else {
             return Ok(0);
         };
-        let hc_width = calls[anchor_i].naive.len();
+        // Plotting must not require every reconstructed HC naive sequence to have
+        // exactly the same length. Junction reconstruction can legitimately vary
+        // within an already-frozen HC family. Pad mutation feature vectors to the
+        // widest member instead of dropping those cells.
+        let hc_width = member_indices
+            .iter()
+            .map(|&i| calls[i].naive.len())
+            .max()
+            .unwrap_or_else(|| calls[anchor_i].naive.len());
+        let member_cells: BTreeSet<&str> = member_indices.iter().map(|&i| calls[i].cell.as_str()).collect();
+        let light_indices: Vec<usize> = lights_by_cell.iter()
+            .filter(|(cell, _)| member_cells.contains(cell.as_str()))
+            .flat_map(|(_, xs)| xs.iter().copied())
+            .collect();
+        let canonical_lc = canonical_light_ids(calls, &light_indices);
+        // Use the compatible reconstruction retaining the most explicit P bases
+        // as the P/N reference. Ties prefer stronger receptor support. Distances
+        // to this sequence are descriptive; they are never used as a merge cutoff.
+        let pn_reference_i = pn_reference_index(calls, member_indices).unwrap_or(anchor_i);
+        let pn_reference = calls[pn_reference_i].naive.as_str();
 
-        // The old whole-HC map built geometry from HC sequence alone and painted
-        // LC identity on afterwards. That necessarily allowed an HC edge to look
-        // like an LC-A -> LC-B transition. Build the geometry from the paired
-        // receptor state instead: HC mutation state + LC mutation state + a
-        // weighted one-hot structural LC identity.
+        // Build every HC coordinate against the one family-level HC NAIVE
+        // reconstruction.  A family must have one coordinate origin; allowing
+        // every member to use its own reconstructed naive sequence hides exactly
+        // the P/N reconstruction differences that the PN heat layer reports.
         //
-        // LC mutation coordinates are relative to each LC's own reconstructed
-        // naive sequence. The categorical block tells the metric that two
-        // different structural LC rearrangements are not ordinary mutations of
-        // one another.
+        // LC keeps the original two signals -- mutation state relative to each
+        // LC rearrangement's own reconstructed naive plus the weighted structural
+        // LC identity -- and ADDS the family-level artificial LC CDR3 coordinate.
+        // The latter supplies a shared cross-LC sequence reference without throwing
+        // away the local SHM or structural-recombination information.
         #[derive(Clone)]
         struct PairedState {
             label: String,
@@ -1024,87 +1669,208 @@ fn write_clonomap(
         }
 
         let mut lc_ids: BTreeSet<String> = BTreeSet::new();
-        let mut lc_width = 0usize;
+        let mut lc_local_width = 0usize;
+        let mut lc_cdr3s: Vec<&str> = Vec::new();
         for &i in member_indices {
             if let Some(ls) = lights_by_cell.get(&calls[i].cell) {
                 for &li in ls {
                     let lc = &calls[li];
-                    if required_lc.is_some_and(|want| lc.id != want) {
+                    let lc_id = canonical_lc.get(&li).map(String::as_str).unwrap_or(lc.id.as_str());
+                    if required_lc.is_some_and(|want| lc_id != want) {
                         continue;
                     }
-                    lc_ids.insert(lc.id.clone());
-                    lc_width = lc_width.max(lc.naive.len());
+                    lc_ids.insert(lc_id.to_string());
+                    lc_local_width = lc_local_width.max(lc.naive.len());
+                    if !lc.cdr3_nt.is_empty() {
+                        lc_cdr3s.push(lc.cdr3_nt.as_str());
+                    }
                 }
             }
         }
         if lc_ids.is_empty() {
             lc_ids.insert("unpaired".to_string());
         }
-        let lc_id_col: BTreeMap<String, usize> = lc_ids
+        let lc_common_width = lc_cdr3s.iter().map(|x| x.len()).max().unwrap_or(0);
+        let mut lc_counts = vec![[0usize; 4]; lc_common_width];
+        for seq in &lc_cdr3s {
+            for (pos, base) in seq.bytes().enumerate() {
+                let slot = match base.to_ascii_uppercase() {
+                    b'A' => Some(0),
+                    b'C' => Some(1),
+                    b'G' => Some(2),
+                    b'T' => Some(3),
+                    _ => None,
+                };
+                if let Some(slot) = slot {
+                    lc_counts[pos][slot] += 1;
+                }
+            }
+        }
+        let lc_consensus: Vec<u8> = lc_counts
             .iter()
-            .cloned()
-            .enumerate()
-            .map(|(i, id)| (id, i))
+            .map(|counts| {
+                let max = counts.iter().copied().max().unwrap_or(0);
+                if max == 0 || counts.iter().filter(|&&n| n == max).count() != 1 {
+                    b'N'
+                } else {
+                    b"ACGT"[counts.iter().position(|&n| n == max).unwrap()]
+                }
+            })
             .collect();
 
-        let mutation_vector = |naive: &str, observed: &str, width: usize| -> Vec<f32> {
+        let lc_consensus_vector = |observed: &str| -> Vec<f32> {
+            let obs = observed.as_bytes();
+            (0..lc_common_width)
+                .map(|pos| {
+                    let Some(&reference) = lc_consensus.get(pos) else { return 0.0 };
+                    if reference == b'N' {
+                        0.0
+                    } else {
+                        match obs.get(pos).map(|b| b.to_ascii_uppercase()) {
+                            Some(base) if base == reference => 0.0,
+                            // A different base or a shorter CDR3 is a difference
+                            // from the artificial family LC reference.
+                            _ => 1.0,
+                        }
+                    }
+                })
+                .collect()
+        };
+
+        // Build one representative CDR3 sequence per canonical LC identity and
+        // order identities by sequence proximity.  This ordering is visualization
+        // metadata only: it does not alter PCA, MST construction, or LC merging.
+        // Start from the most abundant LC, then repeatedly take the nearest
+        // unvisited LC by nucleotide edit distance.  Thus adjacent legend symbols
+        // (and therefore visually similar split-circle codes) tend to denote close
+        // LC CDR3 sequences.
+        let mut lc_cdr3_counts: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+        for &li in &light_indices {
+            let lc = &calls[li];
+            if lc.cdr3_nt.is_empty() {
+                continue;
+            }
+            let lc_id = canonical_lc.get(&li).map(String::as_str).unwrap_or(lc.id.as_str());
+            *lc_cdr3_counts
+                .entry(lc_id.to_string())
+                .or_default()
+                .entry(lc.cdr3_nt.clone())
+                .or_default() += 1;
+        }
+        let mut lc_representative: BTreeMap<String, (String, usize)> = BTreeMap::new();
+        for (lc_id, seqs) in lc_cdr3_counts {
+            let total = seqs.values().sum();
+            let representative = seqs
+                .into_iter()
+                .max_by(|(sa, na), (sb, nb)| na.cmp(nb).then_with(|| sb.cmp(sa)))
+                .map(|(seq, _)| seq)
+                .unwrap_or_default();
+            lc_representative.insert(lc_id, (representative, total));
+        }
+        let mut lc_visual_order = Vec::with_capacity(lc_representative.len() + 1);
+        if let Some((start, _)) = lc_representative
+            .iter()
+            .max_by(|(ida, (_, na)), (idb, (_, nb))| na.cmp(nb).then_with(|| idb.cmp(ida)))
+        {
+            let mut current = start.clone();
+            lc_visual_order.push(current.clone());
+            while lc_visual_order.len() < lc_representative.len() {
+                let current_seq = &lc_representative[&current].0;
+                let next = lc_representative
+                    .iter()
+                    .filter(|(id, _)| !lc_visual_order.contains(id))
+                    .min_by(|(ida, (sa, na)), (idb, (sb, nb))| {
+                        edit_distance(current_seq, sa)
+                            .cmp(&edit_distance(current_seq, sb))
+                            .then_with(|| nb.cmp(na))
+                            .then_with(|| ida.cmp(idb))
+                    })
+                    .map(|(id, _)| id.clone());
+                let Some(next) = next else { break };
+                lc_visual_order.push(next.clone());
+                current = next;
+            }
+        }
+        if lc_ids.contains("unpaired") {
+            lc_visual_order.push("unpaired".to_string());
+        }
+
+        let mutation_vector = |naive: &str, observed: &str, width: usize| -> Option<Vec<f32>> {
             let mut v = vec![0.0; width];
-            for m in mutations(naive, observed) {
+            for m in measure_mutations_nw(naive, observed)?.mutations {
                 if m.pos < width {
                     v[m.pos] = 1.0;
                 }
             }
-            v
+            Some(v)
         };
 
         let mut states: BTreeMap<String, PairedState> = BTreeMap::new();
         let mut raw_meta: HashMap<String, StateMeta> = HashMap::new();
         for &i in member_indices {
             let hc = &calls[i];
-            if hc.naive.len() != hc_width || hc.observed.is_empty() {
+            if hc.naive.is_empty() || hc.observed.is_empty() {
                 continue;
             }
-            let hc_seq = observed_on_naive_coordinates(&hc.naive, &hc.observed);
-            if hc_seq.len() != hc_width {
-                continue;
-            }
-            let hc_mut = mutation_vector(&hc.naive, &hc.observed, hc_width);
+            // Family membership is already frozen. Mutation measurement is local
+            // to this receptor: its own reconstructed naive -> observed sequence.
+            // Failure here must never change family admission.
+            let hc_seq = observed_on_naive_coordinates(&hc.naive, &hc.observed)
+                .unwrap_or_else(|| hc.observed.clone());
+            let hc_mut = mutation_vector(&hc.naive, &hc.observed, hc_width)
+                .unwrap_or_else(|| vec![0.0; hc_width]);
             let mut paired_any = false;
 
             if let Some(ls) = lights_by_cell.get(&hc.cell) {
                 for &li in ls {
                     let lc = &calls[li];
-                    if required_lc.is_some_and(|want| lc.id != want) {
+                    let lc_id = canonical_lc.get(&li).map(String::as_str).unwrap_or(lc.id.as_str());
+                    if required_lc.is_some_and(|want| lc_id != want) {
                         continue;
                     }
                     if lc.observed.is_empty() {
                         continue;
                     }
+                    if lc.cdr3_nt.is_empty() {
+                        continue;
+                    }
                     paired_any = true;
-                    let lc_mut = mutation_vector(&lc.naive, &lc.observed, lc_width);
+                    let Some(lc_mut) = mutation_vector(&lc.naive, &lc.observed, lc_local_width) else { continue };
+                    let lc_common_mut = lc_consensus_vector(&lc.cdr3_nt);
                     let lc_pattern = lc_mut
                         .iter()
                         .map(|x| if *x > 0.0 { '1' } else { '0' })
                         .collect::<String>();
-                    let label = format!("{}|{}|{}", hc_seq, lc.id, lc_pattern);
+                    let lc_common_pattern = lc_common_mut
+                        .iter()
+                        .map(|x| if *x > 0.0 { '1' } else { '0' })
+                        .collect::<String>();
+                    let label = format!("{}|{}|{}|{}", hc_seq, lc_id, lc_pattern, lc_common_pattern);
                     states.entry(label.clone()).or_insert_with(|| PairedState {
                         label: label.clone(),
                         hc_seq: hc_seq.clone(),
-                        lc_id: lc.id.clone(),
+                        lc_id: lc_id.to_string(),
                         hc_mut: hc_mut.clone(),
                         lc_mut: lc_mut.clone(),
                     });
                     let m = raw_meta.entry(label).or_default();
                     m.cells.insert(hc.cell.clone());
-                    m.hc_depths.push(mutations(&hc.naive, &hc.observed).len());
+                    m.original_hc_ids.insert(hc.id.clone());
+                    m.original_lc_ids.insert(lc.id.clone());
+                    if let Some(aln) = measure_mutations_nw(&hc.naive, &hc.observed) {
+                        m.hc_depths.push(aln.event_count());
+                    }
+                    m.pn_distances.push(edit_distance(pn_reference, &hc.naive));
                     let iso = if hc.c.is_empty() {
                         "unknown"
                     } else {
                         hc.c.as_str()
                     };
                     *m.isotypes.entry(iso.to_string()).or_default() += 1;
-                    *m.lights.entry(lc.id.clone()).or_default() += 1;
-                    m.lc_depths.push(mutations(&lc.naive, &lc.observed).len());
+                    *m.lights.entry(lc_id.to_string()).or_default() += 1;
+                    if let Some(aln) = measure_mutations_nw(&lc.naive, &lc.observed) {
+                        m.lc_depths.push(aln.event_count());
+                    }
                 }
             }
 
@@ -1117,11 +1883,15 @@ fn write_clonomap(
                     hc_seq: hc_seq.clone(),
                     lc_id: "unpaired".to_string(),
                     hc_mut: hc_mut.clone(),
-                    lc_mut: vec![0.0; lc_width],
+                    lc_mut: vec![0.0; lc_local_width],
                 });
                 let m = raw_meta.entry(label).or_default();
                 m.cells.insert(hc.cell.clone());
-                m.hc_depths.push(mutations(&hc.naive, &hc.observed).len());
+                m.original_hc_ids.insert(hc.id.clone());
+                if let Some(aln) = measure_mutations_nw(&hc.naive, &hc.observed) {
+                    m.hc_depths.push(aln.event_count());
+                }
+                m.pn_distances.push(edit_distance(pn_reference, &hc.naive));
                 let iso = if hc.c.is_empty() {
                     "unknown"
                 } else {
@@ -1135,9 +1905,28 @@ fn write_clonomap(
             return Ok(0);
         }
 
-        let rows: Vec<PairedState> = states.into_values().collect();
-        let feature_cols = hc_width + lc_width + lc_id_col.len();
+        // Add the inferred unmutated heavy-chain state as a real ClonoMap row.
+        // It has zero HC mutations, zero LC mutations, and deliberately no LC
+        // one-hot identity: the root represents HC ancestry without inventing an
+        // ancestral light-chain rearrangement.
+        const HC_NAIVE_STATE: &str = "HC NAIVE";
+        let mut rows: Vec<PairedState> = states.into_values().collect();
+        rows.insert(0, PairedState {
+            label: HC_NAIVE_STATE.to_string(),
+            hc_seq: pn_reference.to_string(),
+            lc_id: String::new(),
+            hc_mut: vec![0.0; hc_width],
+            lc_mut: vec![0.0; lc_local_width],
+        });
+        // Topology is inferred independently inside each paired LC lineage.
+        // Unrelated LC rearrangements therefore never compete for an MST edge.
+        // Within a lineage the metric contains only biologically commensurate
+        // mutation coordinates: HC vs the family HC NAIVE plus LC vs that LC's
+        // reconstructed naive. The artificial cross-LC CDR3 and categorical LC
+        // identity remain state/visualization metadata and do not pull the tree.
+        let feature_cols = hc_width + lc_local_width;
         let mut features = Array2::<f32>::zeros((rows.len(), feature_cols));
+        let mut topology_groups = Vec::with_capacity(rows.len());
         for (r, state) in rows.iter().enumerate() {
             for (j, x) in state.hc_mut.iter().enumerate() {
                 features[[r, j]] = *x;
@@ -1145,15 +1934,20 @@ fn write_clonomap(
             for (j, x) in state.lc_mut.iter().enumerate() {
                 features[[r, hc_width + j]] = *x;
             }
-            if let Some(&j) = lc_id_col.get(&state.lc_id) {
-                features[[r, hc_width + lc_width + j]] = LC_ID_WEIGHT;
-            }
+            topology_groups.push(if r == 0 {
+                HC_NAIVE_STATE.to_string()
+            } else {
+                state.lc_id.clone()
+            });
         }
         fs::create_dir_all(fdir)?;
         let n_seqs = rows.len();
-        let model = ClonoMap::from_feature_matrix(
+        let model = ClonoMap::from_grouped_feature_matrix(
             rows.iter().map(|x| x.label.clone()).collect(),
             features,
+            topology_groups,
+            0,
+            hc_width,
             k,
         )
         .map_err(|e| anyhow::anyhow!("ClonoMap failed for {label}: {e}"))?;
@@ -1168,26 +1962,19 @@ fn write_clonomap(
             .to_tsv(fdir.join("rows.tsv"))
             .map_err(|e| anyhow::anyhow!("failed to write ClonoMap rows: {e}"))?;
 
-        // Root at the observed paired state closest to its reconstructed naive
-        // receptors. This remains a virtual display root; it is not an observed
-        // cell and does not create a biological LC-to-LC transition.
-        let (naive_root, naive_dist) = model
+        // HC NAIVE is part of the PCA/MST geometry itself. Because its feature
+        // vector is all zeroes, it is the unmutated HC state with an empty LC
+        // state rather than an observed LC-bearing receptor chosen after the fact.
+        // All observed HC rows are encoded against this same HC reference; all
+        // observed LC rows retain their local-naive mutation coordinates and
+        // structural identity, with the family artificial LC CDR3 model appended.
+        let naive_root = model
             .encoder
             .sequences
             .dna
             .iter()
-            .enumerate()
-            .map(|(i, key)| {
-                let m = raw_meta.get(key);
-                let h = m
-                    .and_then(|x| median(&x.hc_depths))
-                    .unwrap_or(f32::INFINITY);
-                let l = m.and_then(|x| median(&x.lc_depths)).unwrap_or(0.0);
-                (i, h + l)
-            })
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, d)| (i, if d.is_finite() { d } else { 0.0 }))
-            .unwrap_or((0, 0.0));
+            .position(|x| x == HC_NAIVE_STATE)
+            .ok_or_else(|| anyhow::anyhow!("HC NAIVE state missing from ClonoMap model"))?;
 
         let mut iso_cat = Vec::new();
         let mut iso_mixed = Vec::new();
@@ -1197,12 +1984,33 @@ fn write_clonomap(
         let mut hc_depth = Vec::new();
         let mut lc_depth = Vec::new();
         let mut paired_depth = Vec::new();
+        let mut pn_distance = Vec::new();
         let mut nodes = writer(fdir.join("nodes.tsv"))?;
         writeln!(
             nodes,
-            "node\tstate\thc_dna\tcells\tisotypes\tdominant_isotype\tlight_chains\tdominant_light_chain\thc_depth_nt\tlc_depth_median_nt\tlc_depth_min_nt\tlc_depth_max_nt\tpaired_depth_median_nt"
+            "node\thc_family\tcell_ids\toriginal_hc_ids\toriginal_lc_ids\tstate\thc_dna\tcell_count\tisotypes\tdominant_isotype\tlight_chains\tdominant_light_chain\thc_depth_nt\tlc_depth_median_nt\tlc_depth_min_nt\tlc_depth_max_nt\tpaired_depth_median_nt\tpn_reconstruction_distance_nt"
         )?;
         for (node, key) in model.encoder.sequences.dna.iter().enumerate() {
+            if key == HC_NAIVE_STATE {
+                iso_mixed.push(false);
+                lc_mixed.push(false);
+                iso_cat.push(HC_NAIVE_STATE.to_string());
+                lc_cat.push(HC_NAIVE_STATE.to_string());
+                abundance.push(1);
+                hc_depth.push(None);
+                lc_depth.push(None);
+                paired_depth.push(None);
+                pn_distance.push(Some(0.0));
+                writeln!(
+                    nodes,
+                    "{}\t{}\t\t\t\t{}\t{}\t0\t\tHC NAIVE\t\tLC empty\t\t\t\t\t\t0",
+                    node,
+                    label,
+                    key,
+                    pn_reference
+                )?;
+                continue;
+            }
             let m = raw_meta.get(key);
             let empty_iso = BTreeMap::new();
             let empty_lc = BTreeMap::new();
@@ -1219,6 +2027,8 @@ fn write_clonomap(
             let hc_depths = m.map(|x| x.hc_depths.as_slice()).unwrap_or(&[]);
             let hd = median(hc_depths);
             hc_depth.push(hd);
+            let pnd = median(m.map(|x| x.pn_distances.as_slice()).unwrap_or(&[]));
+            pn_distance.push(pnd);
             let depths = m.map(|x| x.lc_depths.as_slice()).unwrap_or(&[]);
             let med = median(depths);
             lc_depth.push(med);
@@ -1244,11 +2054,16 @@ fn write_clonomap(
                 (Some(h), None) => format!("{h:.1}"),
                 _ => String::new(),
             };
+            let pnd_s = pnd.map(|x| format!("{x:.1}")).unwrap_or_default();
             let hc_dna = rows.get(node).map(|x| x.hc_seq.as_str()).unwrap_or("");
             writeln!(
                 nodes,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 node,
+                label,
+                m.map(|x| x.cells.iter().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default(),
+                m.map(|x| x.original_hc_ids.iter().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default(),
+                m.map(|x| x.original_lc_ids.iter().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default(),
                 key,
                 hc_dna,
                 n,
@@ -1260,7 +2075,8 @@ fn write_clonomap(
                 med_s,
                 min,
                 max,
-                pair_s
+                pair_s,
+                pnd_s
             )?;
         }
         let cells: BTreeSet<_> = member_indices
@@ -1281,8 +2097,8 @@ fn write_clonomap(
             .plot_rooted_annotated_cached(
                 model.coords().nrows(),
                 naive_root,
-                naive_dist,
                 &iso_cat,
+                None,
                 &iso_mixed,
                 &abundance,
                 "IGH constant class",
@@ -1290,6 +2106,7 @@ fn write_clonomap(
                 fdir.join("mst_rooted_isotype.svg")
                     .to_string_lossy()
                     .as_ref(),
+                radial_layout,
             )
             .map_err(|e| anyhow::anyhow!("failed to plot isotype-rooted MST: {e}"))?;
         model
@@ -1297,8 +2114,8 @@ fn write_clonomap(
             .plot_rooted_annotated_cached(
                 model.coords().nrows(),
                 naive_root,
-                naive_dist,
                 &lc_cat,
+                Some(&lc_visual_order),
                 &lc_mixed,
                 &abundance,
                 "Structural light-chain identity",
@@ -1306,6 +2123,7 @@ fn write_clonomap(
                 fdir.join("mst_rooted_light_chain.svg")
                     .to_string_lossy()
                     .as_ref(),
+                radial_layout,
             )
             .map_err(|e| anyhow::anyhow!("failed to plot light-chain-rooted MST: {e}"))?;
         model
@@ -1313,7 +2131,6 @@ fn write_clonomap(
             .plot_rooted_continuous_cached(
                 model.coords().nrows(),
                 naive_root,
-                naive_dist,
                 &hc_depth,
                 &abundance,
                 "HC mutational depth (nt from NAIVE)",
@@ -1321,6 +2138,7 @@ fn write_clonomap(
                 fdir.join("mst_rooted_hc_depth.svg")
                     .to_string_lossy()
                     .as_ref(),
+                radial_layout,
             )
             .map_err(|e| anyhow::anyhow!("failed to plot HC-depth MST: {e}"))?;
         model
@@ -1328,7 +2146,21 @@ fn write_clonomap(
             .plot_rooted_continuous_cached(
                 model.coords().nrows(),
                 naive_root,
-                naive_dist,
+                &pn_distance,
+                &abundance,
+                "P/N reconstruction distance (nt)",
+                &title,
+                fdir.join("mst_rooted_pn_distance.svg")
+                    .to_string_lossy()
+                    .as_ref(),
+                radial_layout,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to plot P/N-distance MST: {e}"))?;
+        model
+            .tree
+            .plot_rooted_continuous_cached(
+                model.coords().nrows(),
+                naive_root,
                 &lc_depth,
                 &abundance,
                 "Linked LC mutational depth (median nt)",
@@ -1336,6 +2168,7 @@ fn write_clonomap(
                 fdir.join("mst_rooted_lc_depth.svg")
                     .to_string_lossy()
                     .as_ref(),
+                radial_layout,
             )
             .map_err(|e| anyhow::anyhow!("failed to plot LC-depth MST: {e}"))?;
         model
@@ -1343,7 +2176,6 @@ fn write_clonomap(
             .plot_rooted_continuous_cached(
                 model.coords().nrows(),
                 naive_root,
-                naive_dist,
                 &paired_depth,
                 &abundance,
                 "Paired HC+LC mutational depth (median nt)",
@@ -1351,6 +2183,7 @@ fn write_clonomap(
                 fdir.join("mst_rooted_paired_depth.svg")
                     .to_string_lossy()
                     .as_ref(),
+                radial_layout,
             )
             .map_err(|e| anyhow::anyhow!("failed to plot paired-depth MST: {e}"))?;
         Ok(n_seqs)
@@ -1367,25 +2200,38 @@ Each family is drawn on one cached ClonoMap minimum-spanning-tree topology built
 from the **paired receptor state**: HC mutation coordinates + LC mutation
 coordinates + a weighted one-hot structural LC identity. LC identity therefore
 participates in the geometry instead of being painted onto an HC-only tree after
-the fact. The virtual `NAIVE` root is attached to the observed paired state with
-the smallest measured HC+LC substitution depth. The topology is a paired
-sequence-state landscape, not a claim of chronological phylogeny.
+the fact. `HC NAIVE` is a synthetic **but real ClonoMap state** included in the
+PCA and MST: its HC mutation coordinates are zero, its LC mutation coordinates
+are zero, and its LC identity block is empty. It therefore represents the
+reconstructed unmutated HC without assigning any observed LC as ancestral.
+`HC NAIVE` is drawn grey, like a missing LC, and is not an observed cell.
+Rooted ClonoMaps use a layered
+left-to-right layout by default; `--clonomap-radial` restores the radial view. The topology is a paired sequence-state landscape, not a
+claim of chronological phylogeny.
 
 ## Visual encoding
 
 - **Node size = clone/state abundance**: the number of distinct cells represented
-  by that observed HC sequence state. The same size encoding is used in every
-  annotation view.
+  by that observed HC sequence state. Every SVG includes reference circles drawn
+  with the same radius transform, so circle size can be read back as cell count.
 - **Edges = the same cached ClonoMap MST** in every view. Annotation never changes
   the topology.
-- **Thin black ring = mixed state** in categorical views: cells with the same HC
+- **Black node border** keeps adjacent states visually distinct. An additional
+  outer black ring marks a mixed categorical state: cells with the same HC
   sequence state carry more than one isotype or productive LC identity.
+- Categorical views use deterministic **slash-split two-colour circles**. The
+  eight Okabe-Ito base colours are deliberately discrete (no near-shade variants);
+  ordered pairs provide 56 categorical identities without perceptual shade copies.
 - `mst_rooted_isotype.svg`: node fill is IGH constant-region class/isotype.
 - `lc_repertoire.svg` (whole-HC families): a cheap radial repertoire overview.
   Every structural LC is an independent sector attached to the HC family; there
   are deliberately no LC-to-LC edges. Sector angle and outer-dot size both encode
   distinct-cell abundance. This is a composition view, not a lineage tree.
 - `mst_rooted_hc_depth.svg`: node fill is HC mutational depth.
+- `mst_rooted_pn_distance.svg`: node fill is the nucleotide edit distance from
+  the family's most P-supported compatible naive junction reconstruction. This
+  exposes P/N ambiguity continuously on the **same MST topology**; there is no
+  mutation cutoff and the value is not used to decide family membership.
 - `mst_rooted_light_chain.svg`: structural LC identity on the paired-receptor
   topology. Different LC identities are separated in the feature space by a
   weighted categorical block rather than inferred from HC sequence alone.
@@ -1427,17 +2273,41 @@ coordinate and MST data for downstream analysis.
         summary,
         "kind\tfamily\tlight_chain\tcells\tsequences\tstatus\toutput_dir"
     )?;
-    for f in fams.iter().filter(|f| calls[f.members[0]].chain == "IGH") {
+    let selected: Vec<_> = fams
+        .iter()
+        .filter(|f| calls[f.members[0]].chain == "IGH")
+        .filter(|f| {
+            f.members
+                .iter()
+                .map(|&i| calls[i].cell.as_str())
+                .collect::<BTreeSet<_>>()
+                .len()
+                >= min_size
+        })
+        .collect();
+    eprintln!(
+        "Valkyrn: generating {} ClonoMap HC families (>= {} cells; layout={})",
+        selected.len(),
+        min_size,
+        if radial_layout { "radial" } else { "layered" }
+    );
+    let selected_total = selected.len();
+    for (family_no, f) in selected.into_iter().enumerate() {
+        let started = std::time::Instant::now();
         let cells: BTreeSet<_> = f.members.iter().map(|&i| calls[i].cell.as_str()).collect();
-        if cells.len() < min_size {
-            continue;
-        }
+        eprintln!(
+            "  [HC {}/{}] {} — {} cells ...",
+            family_no + 1,
+            selected_total,
+            f.name,
+            cells.len()
+        );
         let safe = safe_name(&f.name);
         let fdir = dir.join(&safe);
         fs::create_dir_all(&fdir)?;
         let lc_n =
             write_lc_constellation(&fdir.join("lc_repertoire.svg"), f, calls, &lights_by_cell)?;
-        match render_group(&fdir, &f.name, &f.members, calls, &lights_by_cell, None, k) {
+        match render_group(&fdir, &f.name, &f.members, calls, &lights_by_cell, None, k, radial_layout) {
             Ok(n) => writeln!(
                 summary,
                 "heavy_family\t{}\t\t{}\t{}\tok;lc_repertoire={}\t{}",
@@ -1460,14 +2330,17 @@ coordinate and MST data for downstream analysis.
             }
         }
 
+        let hc_light_indices: Vec<usize> = cells.iter()
+            .filter_map(|cell| lights_by_cell.get(*cell))
+            .flat_map(|xs| xs.iter().copied())
+            .collect();
+        let canonical_lc = canonical_light_ids(calls, &hc_light_indices);
         let mut lc_cells: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for cell in &cells {
             if let Some(ls) = lights_by_cell.get(*cell) {
                 for &li in ls {
-                    lc_cells
-                        .entry(calls[li].id.clone())
-                        .or_default()
-                        .insert((*cell).to_string());
+                    let lc_id = canonical_lc.get(&li).cloned().unwrap_or_else(|| calls[li].id.clone());
+                    lc_cells.entry(lc_id).or_default().insert((*cell).to_string());
                 }
             }
         }
@@ -1492,6 +2365,7 @@ coordinate and MST data for downstream analysis.
                 &lights_by_cell,
                 Some(&lc_id),
                 k,
+                radial_layout,
             ) {
                 Ok(n) => writeln!(
                     summary,
@@ -1515,6 +2389,13 @@ coordinate and MST data for downstream analysis.
                 }
             }
         }
+        eprintln!(
+            "  [HC {}/{}] {} done ({:.1}s)",
+            family_no + 1,
+            selected_total,
+            f.name,
+            started.elapsed().as_secs_f32()
+        );
     }
     Ok(())
 }
@@ -1537,7 +2418,7 @@ fn write_report(out: &Path, calls: &[Call], fams: &[Family]) -> Result<()> {
     let mut w = writer(out.join("README.txt"))?;
     writeln!(
         w,
-        "Valkyrn repertoire interpretation\n===============================\n\nCells: {}\nRearrangements: {}\nProductive rearrangements: {}\nProductive receptor families: {}\nIGH families: {}\nExpanded IGH families: {}\nIGH families with >1 productive LC partner: {}\n\nInterpretation notes\n--------------------\nIGH family membership is defined primarily by Lumrik's reversible structural HC:<HEX> recombination identifier. Only calls flagged pn_alternative may use a conservative fallback requiring the same V/D/J, CDR3-AA length and naive rearrangement length. IGK/IGL LC:<HEX> identity is only allowed to form a multi-cell clone inside the same inferred IGH background; a shared light-chain rearrangement across different heavy backgrounds is treated as recurrence, not clonal evidence. Mutation classes compare Lumrik's reconstructed naive rearrangement with its error-corrected observed receptor. A mutation shared by all members of a family is a lineage-shared candidate, not proof of somatic hypermutation: recurrent changes across unrelated families using the same germline segment may indicate an unrepresented germline allele. Structure candidates are deliberately restricted to expanded IGH families with multiple observed productive light-chain partners.\n",
+        "Valkyrn repertoire interpretation\n===============================\n\nCells: {}\nRearrangements: {}\nProductive rearrangements: {}\nProductive receptor families: {}\nIGH families: {}\nExpanded IGH families: {}\nIGH families with >1 productive LC partner: {}\n\nInterpretation notes\n--------------------\nIGH family membership requires the same V and J calls plus a CDR3 nucleotide edit distance no greater than --max-cdr3-distance between every pair of family members. This is a hard boundary: structural HC:<HEX> IDs, P/N decomposition and mutation-distance measurements cannot override it. IGK/IGL families likewise require the same light-chain type, V and J plus at least the configured maximum pairwise CDR3 edit distance, and are only formed inside the same inferred IGH background; a similar light chain across different heavy backgrounds is treated as recurrence, not clonal evidence. Mutation classes compare Lumrik's reconstructed naive rearrangement with its error-corrected observed receptor. A mutation shared by all members of a family is a lineage-shared candidate, not proof of somatic hypermutation: recurrent changes across unrelated families using the same germline segment may indicate an unrepresented germline allele. Structure candidates are deliberately restricted to expanded IGH families with multiple observed productive light-chain partners.\n",
         cells.len(),
         calls.len(),
         productive,
@@ -1561,35 +2442,92 @@ mod tests {
     use super::*;
     #[test]
     fn mutation_diff() {
-        let m = mutations("AACCGG", "AATCGA");
+        let m = measure_mutations_nw("AACCGG", "AATCGA").unwrap().mutations;
         assert_eq!(m.len(), 2);
         assert_eq!(m[0].pos, 2);
         assert_eq!(m[1].pos, 5);
     }
     #[test]
-    fn insertion_does_not_shift_mutations() {
-        let m = mutations("AACCGGTT", "AACTCGGTA");
-        assert_eq!(m.len(), 1);
-        assert_eq!(
-            m[0],
-            Mutation {
-                pos: 7,
-                from: b'T',
-                to: b'A'
-            }
-        );
+    fn naive_cdr3_is_not_subject_to_family_distance_threshold() {
+        // --max-cdr3-distance constrains observed family members, not SHM from
+        // naive. Four substitutions in the naive CDR3 must still establish an
+        // ungapped coordinate anchor.
+        let m = measure_mutations_nw("AAAACCCCGGGG", "AAAATTTTGGGG")
+            .unwrap()
+            .mutations;
+        assert_eq!(m.len(), 4);
     }
+
     #[test]
-    fn deletion_does_not_shift_mutations() {
-        let m = mutations("AACCTGGTT", "AACCGGTA");
+    fn left_and_right_are_anchored_independently() {
+        // Extra observed prefix must not shift the J-side comparison.
+        let m = measure_mutations_nw("AACCGGTT", "XXAACCGGTA")
+            .unwrap()
+            .mutations;
         assert_eq!(m.len(), 1);
-        assert_eq!(
-            m[0],
-            Mutation {
-                pos: 8,
-                from: b'T',
-                to: b'A'
-            }
-        );
+        assert_eq!(m[0].pos, 7);
+    }
+
+    #[test]
+    fn anchored_comparison_never_shifts_after_a_mismatch() {
+        let m = measure_mutations_nw("AACCGGTT", "AATCGGTA")
+            .unwrap()
+            .mutations;
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].pos, 2);
+        assert_eq!(m[1].pos, 7);
+    }
+
+    #[test]
+    fn internal_three_nt_indel_is_one_mutation_event() {
+        let aln = measure_mutations_nw("AAAACCCCGGGG", "AAAATTTCCCCGGGG").unwrap();
+        assert_eq!(aln.mutations.len(), 0);
+        assert_eq!(aln.indels.len(), 1);
+        assert_eq!(aln.indels[0].kind, IndelKind::Insertion);
+        assert_eq!(aln.indels[0].len, 3);
+        assert_eq!(aln.event_count(), 1);
+    }
+
+    #[test]
+    fn terminal_truncation_is_not_an_indel_event() {
+        let aln = measure_mutations_nw("ATGAACCGGTT", "GAACCGGTT").unwrap();
+        assert!(aln.indels.is_empty());
+        assert_eq!(aln.event_count(), 0);
+    }
+
+    #[test]
+    fn complete_germline_is_trimmed_to_observed_internal_fragment() {
+        let aln = measure_mutations_nw("TTTTAAAACCCCGGGGAAAA", "AAAACCCCGGGG").unwrap();
+        assert!(aln.mutations.is_empty());
+        assert!(aln.indels.is_empty());
+        assert_eq!(aln.event_count(), 0);
+    }
+
+    #[test]
+    fn unrelated_fragment_has_no_mutation_measurement() {
+        assert!(measure_mutations_nw("AAAAAAAAAAAAAAAAAAAA", "CCCCCCCCCCCCCCCCCCCC").is_none());
+    }
+
+    #[test]
+    fn cdr3_distance_has_a_hard_configurable_boundary() {
+        assert!(cdr3_compatible("AACCGGTT", "AACCGGTT", 3));
+        assert!(cdr3_compatible("AACCGGTT", "AATCAGTA", 3));
+        assert!(!cdr3_compatible("AACCGGTT", "AATCAATA", 3));
+        assert!(cdr3_compatible("AACCGGTT", "AATCAATA", 4));
+        assert!(!cdr3_compatible("", "AACCGGTT", 3));
+    }
+
+    #[test]
+    fn complete_link_prevents_cdr3_chaining() {
+        // 0~1 and 1~2 at distance <=2, but 0!~2. Complete-link must not
+        // bridge the two endpoints through the middle sequence.
+        let seqs = ["AAAAAAAA", "AAAAAACC", "AAAACCCC"];
+        let groups = complete_link_groups(&[0, 1, 2], |a, b| {
+            cdr3_compatible(seqs[a], seqs[b], 2)
+        });
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|g| g.iter().all(|&a| {
+            g.iter().all(|&b| cdr3_compatible(seqs[a], seqs[b], 2))
+        })));
     }
 }

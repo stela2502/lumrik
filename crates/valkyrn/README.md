@@ -16,11 +16,13 @@ Given a `nelrune-vdj` output directory, Valkyrn joins `vdj_calls.tsv` to `airr_r
 
 ### 2. Find receptor families
 
-Valkyrn does not invent a second clonotyping definition. `sc-vdj` already emits compact reversible structural recombination IDs. `HC:<HEX>` encodes chain-local V/D/J identity plus V/D/J trimming, retained D length, P-addition lengths, N1/N2 lengths and the P/N ambiguity flag. Constant-region identity and nucleotide substitutions are intentionally excluded. That makes the existing HC ID the primary heavy-chain clone/lineage key and allows somatic sequence changes to accumulate without changing the underlying recombination identity.
+Valkyrn now treats the CDR3 nucleotide sequence as a hard clonality boundary. The old HC compact-recombination/P-N merger has been removed: `HC:<HEX>` and `LC:<HEX>` remain useful provenance, but their reconstructed junction geometry is no longer allowed to overrule a contradictory CDR3.
 
-P/N decomposition is not always unique. `sc-vdj` marks such calls with `pn_alternative`. Valkyrn keeps exact `HC:<HEX>` identity as the normal rule, but ambiguous calls may be connected across different compact IDs only when V, D and J calls, CDR3 amino-acid length, and reconstructed naive-rearrangement length all agree. Such a family is marked with `~PNALT` in the family name; the original recombination IDs remain present in the detailed output. This fallback is intentionally much narrower than the old V/J + CDR3-distance clustering.
+For heavy chains, two productive IGH calls can enter the same family only when they have the same V call, the same J call, and a **CDR3 nucleotide edit distance ≤ `--max-cdr3-distance`** (default **3**). The threshold is a hard invariant. Valkyrn uses complete-link grouping, so every pair of receptors in a final family must satisfy it; a chain such as A≈B and B≈C cannot drag A and C into one family when A and C fall below 75%. Calls without a CDR3 are not used as family evidence.
 
-Light chains retain the stricter trust boundary. `LC:<HEX>` is a structural light-chain rearrangement identity, but LC identity alone is not treated as proof of clonality across cells. A multi-cell light-chain clone is represented as the paired state `HC:<HEX>+LC:<HEX>` (or the HC `~PNALT` family plus LC ID). The same LC recombination on different HC backgrounds is recurrence, not one clone.
+Light chains use the same rule with an additional chain constraint: productive IGK/IGL calls must agree on chain, V and J and have at least 75% pairwise CDR3 nucleotide edit identity. LC families are still evaluated only inside an HC background. Therefore a similar light chain on unrelated heavy-chain backgrounds is recurrence, not proof of one clone.
+
+The original structural recombination IDs remain in the detailed output so the reconstruction can still be inspected, but family assignment no longer depends on P/N decomposition, trimming geometry, empirical mutation-distance rescue, or `pn_alternative` bridging. Those measurements may be descriptive downstream evidence; they are not clonality overrides.
 
 ### 3. Inspect the underlying mutation pattern
 
@@ -66,7 +68,6 @@ cargo run --release -p valkyrn -- \
 Useful controls:
 
 ```text
---max-cdr3-distance 1     retained for CLI compatibility; not used for primary clone identity
 --min-structure-family 3 minimum IGH family size for structural prioritization
 --min-clonomap-family 100 minimum IGH family size for ClonoMap plots
 --clonomap-k 30          PCA dimensions retained by ClonoMap
@@ -120,6 +121,6 @@ reads
 
 ## Near-term development
 
-The family builder deliberately reuses sc-vdj structural recombination identity rather than reclustering receptors from a lossy CDR3 summary. HC can define a lineage candidate; LC cannot define a multi-cell clone without a shared HC background. P/N-ambiguous HC calls have an explicit conservative fallback based on V/D/J and junction length information. The next important steps are to infer family ancestors within these structural families; detect probable unrepresented germline alleles across independent families; build mutation/lineage trees over the full reconstructed receptor, including established junction/CDR3 sequence; annotate HC lineage leaves with their observed LC partners; quantify LC-diverse versus LC-restricted HC families; and add structural comparison results back to the same family IDs.
+The family builder uses V/J identity plus a hard 75% pairwise CDR3 nucleotide identity floor. HC can define a lineage candidate; LC cannot define a multi-cell clone without a shared HC background. Structural recombination and P/N measurements remain provenance rather than family-merging evidence. The next important steps are to infer family ancestors within these CDR3-gated families; detect probable unrepresented germline alleles across independent families; build mutation/lineage trees over the full reconstructed receptor, including established junction/CDR3 sequence; annotate HC lineage leaves with their observed LC partners; quantify LC-diverse versus LC-restricted HC families; and add structural comparison results back to the same family IDs.
 
 Valkyrn should remain evidence-first: **hunt through immune repertoires for the interesting bastards, then say exactly why they are interesting.**

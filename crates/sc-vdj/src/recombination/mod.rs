@@ -7,7 +7,9 @@ use anyhow::{bail, Result};
 mod constant_region_linkage;
 mod identifier;
 mod recombination_evidence_rescan;
-pub use identifier::{DecodedNumericRecombinationId, ReceptorRole, RecombinationId};
+pub use identifier::{
+    DecodedNumericRecombinationId, DecodedRecombinationId, ReceptorRole, RecombinationId,
+};
 pub(crate) use recombination_evidence_rescan::{
     rescue_missing_constants_from_bam, rescue_missing_constants_from_bam_with_report,
     rescue_missing_constants_from_bam_with_report_and_progress,
