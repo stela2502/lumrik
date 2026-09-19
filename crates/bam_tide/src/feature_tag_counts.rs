@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -116,6 +118,65 @@ impl FeatureTagCounts {
 
     pub fn mapper(&self) -> &FastTagMapper {
         &self.mapper
+    }
+
+    /// Persist the raw cell/feature/UMI observations produced during FASTQ
+    /// preparation.  This deliberately stores molecule observations rather
+    /// than a finalized matrix so the later quantification stage can apply
+    /// canonical GEX cell filtering without changing feature semantics.
+    pub fn save_observations(&self, path: &Path) -> Result<()> {
+        #[derive(serde::Serialize)]
+        struct Observation {
+            cell: u64,
+            feature: u64,
+            umi: u64,
+        }
+
+        let mut observations = Vec::new();
+        for cell in self.data.values() {
+            observations.extend(cell.seen.iter().map(|entry| Observation {
+                cell: cell.name,
+                feature: entry.0,
+                umi: entry.1,
+            }));
+        }
+
+        let writer = BufWriter::new(File::create(path)
+            .with_context(|| format!("creating {}", path.display()))?);
+        bincode::serialize_into(writer, &observations)
+            .with_context(|| format!("writing {}", path.display()))
+    }
+
+    /// Reload raw preparation observations using the same feature definition
+    /// sources that were used during preparation.
+    pub fn load_observations(
+        path: &Path,
+        sources: &[AdditionalFeatureSource],
+        min_hits: u32,
+    ) -> Result<Self> {
+        #[derive(serde::Deserialize)]
+        struct Observation {
+            cell: u64,
+            feature: u64,
+            umi: u64,
+        }
+
+        let reader = BufReader::new(File::open(path)
+            .with_context(|| format!("opening {}", path.display()))?);
+        let observations: Vec<Observation> = bincode::deserialize_from(reader)
+            .with_context(|| format!("reading {}", path.display()))?;
+
+        let mut ret = Self::from_sources(sources, min_hits)?;
+        let mut report = mapping_info::MappingInfo::new(None, 0.0, 0);
+        for observation in observations {
+            ret.data.try_insert(
+                &observation.cell,
+                scdata::GeneUmiHash(observation.feature, observation.umi),
+                0.0,
+                &mut report,
+            );
+        }
+        Ok(ret)
     }
 
     pub(crate) fn data_mut(&mut self) -> &mut Scdata {

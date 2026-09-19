@@ -1,3 +1,5 @@
+mod prepare_fastqs;
+mod quant;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -23,6 +25,12 @@ use nelrune::cli::Cli;
 use nelrune::progress::RunProgress;
 
 fn main() -> Result<()> {
+    match std::env::args().nth(1).as_deref() {
+        Some("prepare-fastqs") => return prepare_fastqs::run(),
+        Some("quant") => return quant::run(),
+        _ => {}
+    }
+
     let command = Cli::command();
     let matches = command.clone().get_matches();
 

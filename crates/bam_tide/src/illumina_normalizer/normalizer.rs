@@ -13,6 +13,7 @@ use scdata::{GeneUmiHash, Scdata};
 
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use std::collections::HashSet;
+use std::sync::Mutex;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -548,6 +549,62 @@ impl IlluminaNormalizer {
         }
 
         Ok(())
+    }
+
+    /// Normalize one logical FASTQ stream and write mapper-facing R2 records
+    /// into one gzip FASTQ per actual Rayon worker.  Output order is explicitly
+    /// unspecified; each worker appends to its own persistent writer.
+    pub fn prepare_fastqs_sharded<P>(
+        &mut self,
+        inputs: &[(PathBuf, PathBuf)],
+        out_dir: &Path,
+        mut report_progress: P,
+    ) -> Result<Vec<PathBuf>>
+    where
+        P: FnMut(&MappingInfo),
+    {
+        std::fs::create_dir_all(out_dir)
+            .with_context(|| format!("creating {}", out_dir.display()))?;
+
+        let workers = rayon::current_num_threads().max(1);
+        let paths: Vec<PathBuf> = (0..workers)
+            .map(|worker| out_dir.join(format!("prepared.thread-{worker:03}.fastq.gz")))
+            .collect();
+        let writers: Vec<Mutex<Option<FastqWriter>>> = paths
+            .iter()
+            .map(|path| FastqWriter::new(path, true, self.config.gzip_level).map(|w| Mutex::new(Some(w))))
+            .collect::<Result<_>>()?;
+
+        for (r1_path, r2_path) in inputs {
+            self.nelrune_run(
+                r1_path,
+                r2_path,
+                |reads| {
+                    reads.par_chunks(256).try_for_each(|chunk| -> Result<()> {
+                        let worker = rayon::current_thread_index().unwrap_or(0).min(writers.len() - 1);
+                        let mut guard = writers[worker].lock().map_err(|_| anyhow::anyhow!("prepared FASTQ writer lock poisoned"))?;
+                        let writer = guard.as_mut().context("prepared FASTQ writer already closed")?;
+                        for (_r1, r2) in chunk {
+                            // Preserve current Nelrune mapping semantics: STAR receives
+                            // the normalized biological insert (R2) as single-end input.
+                            writer.write(r2)?;
+                        }
+                        Ok(())
+                    })?;
+                    Ok(true)
+                },
+                |stats| report_progress(stats),
+            )?;
+        }
+
+        for writer in &writers {
+            let mut guard = writer.lock().map_err(|_| anyhow::anyhow!("prepared FASTQ writer lock poisoned"))?;
+            if let Some(writer) = guard.take() {
+                writer.finish()?;
+            }
+        }
+
+        Ok(paths)
     }
 
     pub fn stats(&self) -> &MappingInfo {

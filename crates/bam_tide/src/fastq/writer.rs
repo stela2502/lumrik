@@ -9,7 +9,7 @@ use std::path::Path;
 const BUFFER_SIZE: usize = 4 * 1024 * 1024;
 
 pub struct FastqWriter {
-    writer: Box<dyn Write>,
+    writer: Box<dyn Write + Send>,
     qual_buf: Vec<u8>,
 }
 
@@ -17,7 +17,7 @@ impl FastqWriter {
     pub fn new<P: AsRef<Path>>(path: P, gzip: bool, gzip_level: u32) -> Result<Self> {
         let path = path.as_ref();
 
-        let writer: Box<dyn Write> = if path == Path::new("-") {
+        let writer: Box<dyn Write + Send> = if path == Path::new("-") {
             // stdout is always plain FASTQ.
             // Use: bam-ont-normalizer --out - --no-tags | pigz -p 8 -1 > out.fastq.gz
             Box::new(BufWriter::with_capacity(64 * 1024, io::stdout()))
