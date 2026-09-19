@@ -6,6 +6,7 @@ use read_tag_table::{ReadTagRecord, ReadTagTable};
 
 use anyhow::{Context, Result, bail};
 use int_to_str::IntToStr;
+use onehot_dna::OneHotSequence;
 use mapping_info::MappingInfo;
 use rayon::prelude::*;
 use sc_primer::PrimerDetector;
@@ -127,14 +128,19 @@ impl IlluminaPartial {
             }))
         };
 
-        let identity = matched_grammar
-            .molecule_identity(
+        let Some(identity) = matched_grammar
+            .molecule_identity_if_exact(
                 normalized_cell_seq.as_deref(),
                 umi.as_ref().map(|x| x.seq.as_slice()),
                 &r1.seq,
                 &r2.seq,
             )
-            .map_err(anyhow::Error::msg)?;
+            .map_err(anyhow::Error::msg)?
+        else {
+            self.stats.report("ambiguous_molecule_identity");
+            self.stats.report("no_cell_umi");
+            return Ok(());
+        };
 
         let dedup_key = DedupKey {
             cell_id: identity.cell_id,
@@ -257,105 +263,34 @@ impl IlluminaPartial {
 
 /// Remove R1-primer read-through from the 3' end of a raw R2 read.
 ///
-/// Both the expected R1-derived read-through sequence and the complete raw R2
-/// are encoded once with IntToStr.  The hot scan then compares packed 4-base
-/// u8 values only; no per-position strings, reverse complements, or slices are
-/// allocated.
-///
-/// A four-base match is deliberately sufficient only when exactly four R2
-/// bases remain.  For longer read-through we require a 12-base exact match.
-/// R2 itself is never reverse-complemented, preserving sequencing orientation.
+/// Encode the R1-derived reverse primer and raw R2 once as nibble-packed
+/// OneHot DNA. The first nibble is the cheap lookup; every remaining available
+/// primer base is mandatory IUPAC-compatible evidence. Only a physical R2 end
+/// may shorten the proof, and lookup + one neighbour is always required.
 fn trim_r2_primer_readthrough(
-    r1: &FastqRecord,
-    r2: &mut FastqRecord,
-    primer_match: &sc_primer::PrimerMatch,
+    r1: &FastqRecord, r2: &mut FastqRecord, primer_match: &sc_primer::PrimerMatch,
 ) -> bool {
     use sc_primer::Orientation;
-
-    if primer_match.orientation != Orientation::Forward
-        || primer_match.primer_start >= primer_match.insert_start
-        || primer_match.insert_start > r1.seq.len()
-    {
-        return false;
-    }
-
+    if primer_match.orientation != Orientation::Forward || primer_match.primer_start >= primer_match.insert_start || primer_match.insert_start > r1.seq.len() { return false; }
     let r1_primer = &r1.seq[primer_match.primer_start..primer_match.insert_start];
-    if r1_primer.len() < 4 || r2.seq.len() < 4 {
-        return false;
-    }
-
-    // Prepare the R1 structure for raw-R2 orientation; never flip R2.
+    if r1_primer.len() < 2 || r2.seq.len() < 2 { return false; }
     let expected_seq = PrimerDetector::reverse_complement(r1_primer);
-    let Ok(expected) = IntToStr::try_new(&expected_seq) else {
-        return false;
-    };
-    let Ok(encoded_r2) = IntToStr::try_new(&r2.seq) else {
-        return false;
-    };
-
-    // Four consecutive packed primer clips are cheap to prepare.  The first
-    // three provide the required 12-bp proof; the fourth is retained so this
-    // path can cheaply extend confirmation without changing representation.
-    let primer_clips = [
-        expected.packed_u8_at(0),
-        expected.packed_u8_at(4),
-        expected.packed_u8_at(8),
-        expected.packed_u8_at(12),
-    ];
-    let Some(first_clip) = primer_clips[0] else {
-        return false;
-    };
-
-    for start in 0..=r2.seq.len() - 4 {
-        if encoded_r2.packed_u8_at(start) != Some(first_clip) {
-            continue;
+    let expected = OneHotSequence::from_iupac_bytes(&expected_seq);
+    let observed = OneHotSequence::from_iupac_bytes(&r2.seq);
+    let lookup = expected.mask_at(0).unwrap();
+    let external: Vec<_> = (1..expected.len()).map(|i| expected.mask_at(i).unwrap()).collect();
+    let mut hit = observed.find_with_external_after(lookup, &external);
+    // Only weaken proof at the physical R2 end. Every base available there is
+    // mandatory and at least lookup + one neighbouring nibble must exist.
+    if hit.is_none() {
+        let max_proof = expected.len().min(r2.seq.len());
+        for proof in (2..=max_proof).rev() {
+            let start = r2.seq.len() - proof;
+            if observed.find_next_with_external_after(lookup, &external[..proof - 1], start) == Some(start) { hit = Some(start); break; }
         }
-
-        let remaining = r2.seq.len() - start;
-
-        // If only four bases would be removed, a false positive costs almost
-        // no evidence and the user explicitly prefers trimming it.
-        if remaining == 4 {
-            r2.seq.truncate(start);
-            r2.qual.truncate(start);
-            return true;
-        }
-
-        // Any longer trim needs 12 bp of exact molecule-specific agreement.
-        if remaining < 12 || expected_seq.len() < 12 {
-            continue;
-        }
-
-        let Some(second_clip) = primer_clips[1] else {
-            continue;
-        };
-        let Some(third_clip) = primer_clips[2] else {
-            continue;
-        };
-
-        if encoded_r2.packed_u8_at(start + 4) != Some(second_clip)
-            || encoded_r2.packed_u8_at(start + 8) != Some(third_clip)
-        {
-            continue;
-        }
-
-        // IntToStr intentionally maps N to A.  For this trimming decision we
-        // require literal A/C/G/T evidence, so reject a packed hit containing
-        // ambiguous bases before calling it exact.
-        if !r2.seq[start..start + 12]
-            .iter()
-            .chain(expected_seq[..12].iter())
-            .all(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
-        {
-            continue;
-        }
-
-        r2.seq.truncate(start);
-        r2.qual.truncate(start);
-        return true;
     }
-
-    false
+    let Some(start) = hit else { return false; };
+    r2.seq.truncate(start); r2.qual.truncate(start); true
 }
 
 fn usable_insert(seq: &[u8], min_len: usize, max_single_base_fraction: f64) -> bool {

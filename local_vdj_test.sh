@@ -19,8 +19,8 @@ THREADS="${THREADS:-4}"
 
 if [[ -n "${NELRUNE_VDJ:-}" ]]; then
     :
-elif [[ -x "./target/x86_64-unknown-linux-musl/release/nelrune-vdj" ]]; then
-    NELRUNE_VDJ="./target/x86_64-unknown-linux-musl/release/nelrune-vdj"
+elif [[ -x "./target/release/nelrune-vdj" ]]; then
+    NELRUNE_VDJ="./target/release/nelrune-vdj"
 elif [[ -x "./target/release/nelrune-vdj" ]]; then
     NELRUNE_VDJ="./target/release/nelrune-vdj"
 else

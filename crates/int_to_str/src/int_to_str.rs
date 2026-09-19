@@ -1,4 +1,4 @@
-use onehot_dna::{OneHot, OneHotError};
+use onehot_dna::{OneHot, OneHotError, OneHotSequence};
 use std::collections::BTreeMap;
 use std::fmt;
 //use crate::errors::SeqError;
@@ -259,14 +259,71 @@ impl IntToStr {
             return None;
         }
 
-        let mut packed = 0u8;
-        for target_pos in 0..4 {
-            let source_pos = base_offset + target_pos;
-            let source_byte = self.u8_encoded[source_pos / 4];
-            let base = (source_byte >> ((source_pos % 4) * 2)) & 0b11;
-            packed |= base << (target_pos * 2);
+        let byte = base_offset / 4;
+        let shift = (base_offset % 4) * 2;
+        if shift == 0 {
+            return self.u8_encoded.get(byte).copied();
         }
-        Some(packed)
+
+        let low = self.u8_encoded[byte] >> shift;
+        let high = self.u8_encoded.get(byte + 1).copied().unwrap_or(0) << (8 - shift);
+        Some(low | high)
+    }
+
+    /// Find the first packed 4-base anchor whose immediately following packed
+    /// evidence matches `external`. Returns the anchor's exact base position.
+    ///
+    /// The scan advances one base at a time, so all four packed reading frames
+    /// are covered without constructing shifted `IntToStr` objects. Empty
+    /// external evidence is allowed and reduces this to an anchor search.
+    #[inline]
+    pub fn find_with_external_after(&self, lookup_id: u8, external: &[u8]) -> Option<usize> {
+        let needed = 4usize.checked_mul(external.len().checked_add(1)?)?;
+        if self.size < needed {
+            return None;
+        }
+
+        for pos in 0..=self.size - needed {
+            if self.packed_u8_at(pos) != Some(lookup_id) {
+                continue;
+            }
+            if external
+                .iter()
+                .enumerate()
+                .all(|(i, expected)| self.packed_u8_at(pos + (i + 1) * 4) == Some(*expected))
+            {
+                return Some(pos);
+            }
+        }
+        None
+    }
+
+    /// Find the first packed 4-base anchor whose immediately preceding packed
+    /// evidence matches `external`. Returns the anchor's exact base position.
+    ///
+    /// `external` is supplied in sequence order, i.e. `[a, b]` matches
+    /// `[a][b][lookup_id]`. Any evidence length is accepted.
+    #[inline]
+    pub fn find_with_external_before(&self, lookup_id: u8, external: &[u8]) -> Option<usize> {
+        let prefix_bases = 4usize.checked_mul(external.len())?;
+        if self.size < prefix_bases + 4 {
+            return None;
+        }
+
+        for anchor_pos in prefix_bases..=self.size - 4 {
+            if self.packed_u8_at(anchor_pos) != Some(lookup_id) {
+                continue;
+            }
+            let start = anchor_pos - prefix_bases;
+            if external
+                .iter()
+                .enumerate()
+                .all(|(i, expected)| self.packed_u8_at(start + i * 4) == Some(*expected))
+            {
+                return Some(anchor_pos);
+            }
+        }
+        None
     }
 
     /// Return the maximally informative packed byte for the final four bases.
@@ -308,6 +365,13 @@ impl IntToStr {
     /// exactly `N` meaningful bases. Note that `IntToStr` historically maps
     /// `N` to `A` during 2-bit encoding; callers that need unknown bases to
     /// remain mismatches must reject them before constructing `IntToStr`.
+    /// Expand this 2-bit sequence directly into a read-sized OneHotSequence.
+    /// No intermediate A/C/G/T byte string is allocated.
+    #[inline]
+    pub fn as_one_hot_sequence(&self) -> OneHotSequence {
+        OneHotSequence::from_2bit_bytes(&self.u8_encoded, self.size)
+    }
+
     pub fn as_one_hot<const N: usize>(&self) -> Result<OneHot<N>, OneHotError> {
         if N > OneHot::<N>::MAX_LEN {
             return Err(OneHotError::TooLong {
@@ -626,6 +690,33 @@ mod tests {
         assert_eq!(encoded.packed_u8_at(4), Some(IntToStr::new(b"TTGC").first_u8()));
         assert_eq!(encoded.packed_u8_at(5), Some(IntToStr::new(b"TGCA").first_u8()));
         assert_eq!(encoded.packed_u8_at(6), None);
+    }
+
+    #[test]
+    fn packed_external_search_covers_all_frames_and_returns_anchor_position() {
+        let encoded = IntToStr::new(b"TTACGTTGCAGGAACC");
+        let pattern = IntToStr::new(b"ACGTTGCAGGAA");
+        let external = [pattern.packed_u8_at(0).unwrap(), pattern.packed_u8_at(4).unwrap()];
+        let lookup = pattern.packed_u8_at(8).unwrap();
+
+        assert_eq!(encoded.find_with_external_before(lookup, &external), Some(10));
+
+        let after_external = [pattern.packed_u8_at(4).unwrap(), pattern.packed_u8_at(8).unwrap()];
+        let first = pattern.packed_u8_at(0).unwrap();
+        assert_eq!(encoded.find_with_external_after(first, &after_external), Some(2));
+    }
+
+    #[test]
+    fn packed_external_search_accepts_only_the_evidence_supplied() {
+        let encoded = IntToStr::new(b"GGGGACGTCCCCACGT");
+        let lookup = IntToStr::new(b"ACGT").first_u8();
+        let gggg = IntToStr::new(b"GGGG").first_u8();
+        let cccc = IntToStr::new(b"CCCC").first_u8();
+
+        assert_eq!(encoded.find_with_external_before(lookup, &[]), Some(4));
+        assert_eq!(encoded.find_with_external_before(lookup, &[gggg]), Some(4));
+        assert_eq!(encoded.find_with_external_before(lookup, &[cccc]), Some(12));
+        assert_eq!(encoded.find_with_external_after(lookup, &[cccc]), Some(4));
     }
 
     #[test]

@@ -446,7 +446,7 @@ fn illumina_normalize_pair_trims_four_base_terminal_readthrough() -> Result<()> 
 }
 
 #[test]
-fn illumina_normalize_pair_does_not_trim_only_eight_base_readthrough() -> Result<()> {
+fn illumina_normalize_pair_trims_eight_base_terminal_readthrough() -> Result<()> {
     let config = test_config();
     let cell = b"ACGTTGCA";
     let umi = b"CCTAGG";
@@ -464,6 +464,6 @@ fn illumina_normalize_pair_does_not_trim_only_eight_base_readthrough() -> Result
     let feature_mapper = fast_tag_mapper::FastTagMapper::new();
     partial.normalize_pair(&r1, &fastq("read1", &r2_seq), &config, &feature_mapper)?;
 
-    assert_eq!(partial.candidates[0].fastq_record.seq, r2_seq);
+    assert_eq!(partial.candidates[0].fastq_record.seq, reverse_complement(biological));
     Ok(())
 }

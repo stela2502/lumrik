@@ -672,25 +672,7 @@ pub(crate) fn normalize_reference_dna(seq: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 pub(crate) fn reference_base_matches(r: u8, q: u8) -> bool {
-    let q = q.to_ascii_uppercase();
-    match r.to_ascii_uppercase() {
-        b'A' => q == b'A',
-        b'C' => q == b'C',
-        b'G' => q == b'G',
-        b'T' => q == b'T',
-        b'R' => matches!(q, b'A' | b'G'),
-        b'Y' => matches!(q, b'C' | b'T'),
-        b'S' => matches!(q, b'C' | b'G'),
-        b'W' => matches!(q, b'A' | b'T'),
-        b'K' => matches!(q, b'G' | b'T'),
-        b'M' => matches!(q, b'A' | b'C'),
-        b'B' => matches!(q, b'C' | b'G' | b'T'),
-        b'D' => matches!(q, b'A' | b'G' | b'T'),
-        b'H' => matches!(q, b'A' | b'C' | b'T'),
-        b'V' => matches!(q, b'A' | b'C' | b'G'),
-        b'N' => matches!(q, b'A' | b'C' | b'G' | b'T'),
-        _ => false,
-    }
+    onehot_dna::compatible_masks(onehot_dna::iupac_mask(r), onehot_dna::iupac_mask(q))
 }
 
 #[cfg(test)]

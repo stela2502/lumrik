@@ -4,6 +4,7 @@ version.workspace = true
 edition = "2024"
 
 [dependencies]
+onehot_dna = { path = "../onehot_dna" }
 anyhow = "1.0.100"
 bigtools = "0.5.6"
 clap = { workspace = true }

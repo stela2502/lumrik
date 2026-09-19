@@ -147,6 +147,43 @@ impl Grammar {
     /// bases from R2.  The synthetic cell id is constant so all molecules are
     /// quantified as one sample/cell while the sequence-derived molecule id
     /// provides PCR deduplication.
+    /// Build the exact 2-bit molecule identity when all bases contributing to
+    /// the key are canonical A/C/G/T. Ambiguous IUPAC bases are normal read
+    /// rejection, not a fatal pipeline error. Structural/coordinate failures
+    /// are still returned as errors.
+    pub fn molecule_identity_if_exact(
+        &self,
+        cell: Option<&[u8]>,
+        umi: Option<&[u8]>,
+        r1: &[u8],
+        r2: &[u8],
+    ) -> PrimerResult<Option<MoleculeIdentity>> {
+        let canonical = |seq: &[u8]| {
+            seq.iter()
+                .all(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
+        };
+
+        if self.is_unbarcoded() {
+            if r1.len() < UNBARCODED_BASES_PER_MATE || r2.len() < UNBARCODED_BASES_PER_MATE {
+                return self.molecule_identity(cell, umi, r1, r2).map(Some);
+            }
+            if !canonical(&r1[..UNBARCODED_BASES_PER_MATE])
+                || !canonical(&r2[..UNBARCODED_BASES_PER_MATE])
+            {
+                return Ok(None);
+            }
+        } else {
+            let cell = cell.ok_or_else(|| PrimerError::invalid_coordinates("missing CELL sequence"))?;
+            let umi = umi.ok_or_else(|| PrimerError::invalid_coordinates("missing UMI sequence"))?;
+            let remaining = MOLECULE_KEY_BASES.saturating_sub(umi.len());
+            if !canonical(cell) || !canonical(umi) || !canonical(&r2[..remaining.min(r2.len())]) {
+                return Ok(None);
+            }
+        }
+
+        self.molecule_identity(cell, umi, r1, r2).map(Some)
+    }
+
     pub fn molecule_identity(
         &self,
         cell: Option<&[u8]>,
@@ -199,13 +236,18 @@ impl Grammar {
                 "molecule identity sequence exceeds {MOLECULE_KEY_BASES} bases"
             )));
         }
-        if !seq
+        if let Some((pos, &base)) = seq
             .iter()
-            .all(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
+            .enumerate()
+            .find(|(_, b)| !matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
         {
-            return Err(PrimerError::invalid_coordinates(
-                "molecule identity sequence contains a non-ACGT base",
-            ));
+            return Err(PrimerError::invalid_coordinates(format!(
+                "cannot encode exact molecule identity: non-ACGT base {:?} at position {} in sequence of length {}: {:?}",
+                base as char,
+                pos,
+                seq.len(),
+                String::from_utf8_lossy(seq),
+            )));
         }
 
         Ok(IntToStr::new(seq).into_u64())

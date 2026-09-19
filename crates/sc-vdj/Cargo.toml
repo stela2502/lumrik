@@ -18,6 +18,7 @@ rust-htslib = { path = "../rust-htslib" }
 scdata = { path = "../scdata" }
 sc_primer = { path = "../sc_primer" }
 int-to-str = { path = "../int_to_str" }
+onehot_dna = { path = "../onehot_dna" }
 
 [dev-dependencies]
 tempfile = "3"

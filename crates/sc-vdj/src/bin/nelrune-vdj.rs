@@ -50,6 +50,11 @@ struct Cli {
     exonic: Option<PathBuf>,
     #[arg(long)]
     write_sequences: bool,
+    /// Stop the initial evidence-collection BAM pass after approximately this many
+    /// records, finishing the current physical query before reconstruction.
+    /// Later confirmation/rescan passes still scan the full BAM.
+    #[arg(long)]
+    max_bam_records: Option<usize>,
     /// BD/Rhapsody whitelist version used to emit the official positional
     /// Rustody cell id in AIRR output (v1, v2.96, or v2.384).
     #[arg(long)]
@@ -916,10 +921,11 @@ fn main() -> Result<()> {
     mapping_info.start_counter();
     mapping_info.start_timer("vdj.bam_read");
     let status_for_read = Arc::clone(&status);
-    let n = runner.read_bam_with_progress_for_cells(
+    let n = runner.read_bam_with_progress_for_cells_limited(
         &c.bam,
         &NelruneIdentityResolver,
         preliminary_cells.as_ref(),
+        c.max_bam_records,
         move |progress, evidence, index| {
             sync_evidence_status(&status_for_read, progress, evidence, index);
         },
@@ -1002,6 +1008,7 @@ fn main() -> Result<()> {
         &c.bam,
         &NelruneIdentityResolver,
         &mut calls,
+        c.max_bam_records,
         move |progress| {
             update_status(&status_for_rescan, |state| {
                 state.rescan_records = progress.bam_records_scanned;

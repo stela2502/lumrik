@@ -22,6 +22,7 @@ pub struct PrimerDetector {
     grammar: Grammar,
     pub single_cell_system: Option<SingleCellSystem>,
     detect_reverse_complement: bool,
+    read_wide_primer_search: bool,
     // source_cell -> (target_cell, count)
     primer_translation: HashMap<u64, (u64, usize)>,
     umi_translation: HashMap<u64, usize>,
@@ -82,6 +83,7 @@ impl PrimerDetector {
             grammar,
             single_cell_system,
             detect_reverse_complement: true,
+            read_wide_primer_search: false,
             primer_translation: HashMap::new(),
             umi_translation: HashMap::new(),
             alternates: Vec::new(),
@@ -92,6 +94,19 @@ impl PrimerDetector {
         self.detect_reverse_complement = enabled;
         for detector in &mut self.alternates {
             detector.detect_reverse_complement = enabled;
+        }
+        self
+    }
+
+    /// Enable read-wide primer/cassette discovery.
+    ///
+    /// This is intended for long-read/ONT input where a cassette may occur at
+    /// an arbitrary coordinate. Short-read input is positional by default and
+    /// must only test coordinates permitted by its grammar.
+    pub fn with_read_wide_primer_search(mut self, enabled: bool) -> Self {
+        self.read_wide_primer_search = enabled;
+        for detector in &mut self.alternates {
+            detector.read_wide_primer_search = enabled;
         }
         self
     }
@@ -379,9 +394,8 @@ impl PrimerDetector {
     ) -> PrimerResult<Vec<PrimerMatch>> {
         let mut hits = Vec::new();
         let mut cursor = 0usize;
-        let packed = self
-            .leading_bd_search()
-            .map(|_| OneHotSequence::from_bytes(seq));
+        let packed = (self.read_wide_primer_search && self.grammar.anchor_search().is_some())
+            .then(|| OneHotSequence::from_iupac_bytes(seq));
 
         while let Some(offset) = self.next_candidate_start(seq, packed.as_ref(), cursor) {
             match self.try_from_start_with_packed(
@@ -415,9 +429,8 @@ impl PrimerDetector {
         orientation: Orientation,
     ) -> PrimerResult<Option<PrimerMatch>> {
         let mut cursor = 0usize;
-        let packed = self
-            .leading_bd_search()
-            .map(|_| OneHotSequence::from_bytes(seq));
+        let packed = (self.read_wide_primer_search && self.grammar.anchor_search().is_some())
+            .then(|| OneHotSequence::from_iupac_bytes(seq));
 
         while let Some(offset) = self.next_candidate_start(seq, packed.as_ref(), cursor) {
             if let Some(hit) =
@@ -446,34 +459,24 @@ impl PrimerDetector {
     fn next_candidate_start(
         &self,
         seq: &[u8],
-        _packed: Option<&OneHotSequence>,
+        packed: Option<&OneHotSequence>,
         from: usize,
     ) -> Option<usize> {
+        // Illumina/short-read structures are positional. SEARCH inside the
+        // grammar owns the small tolerated offset window; do not turn FIXED
+        // anchors into a read-wide scan. Only ONT explicitly enables arbitrary
+        // cassette discovery.
+        if !self.read_wide_primer_search {
+            return (from == 0 && !seq.is_empty()).then_some(0);
+        }
+
+        // ONT/read-wide discovery uses the packed OneHot 8-base seed path so
+        // IUPAC ambiguity and the grammar's mismatch allowance are preserved.
         if let Some(anchor) = self.grammar.anchor_search() {
-            return anchor.find_next_cell_start(seq, from);
-        }
-
-        // Built-in 10x read structures are positional: the cell barcode begins
-        // at the start of R1.  Do not turn the millions-entry whitelist into a
-        // read-wide search index by retrying it at every base.  Long-read / ONT
-        // cassette discovery must provide an explicit anchor/search grammar
-        // instead of relying on TENX_CELL itself to discover coordinates.
-        if self.leading_tenx_cell() {
-            return (from == 0 && !seq.is_empty()).then_some(0);
-        }
-
-        // Built-in BD read structures are positional, just like 10x. The
-        // leading SEARCH operation describes the small tolerated shift of the
-        // cassette itself (normally 0..=4); it must not turn the linker into a
-        // read-wide search index. This rule is applied identically to forward
-        // and reverse-complement detection.
-        if self.leading_bd_search().is_some()
-            && matches!(
-                &self.single_cell_system,
-                Some(SingleCellSystem::Rhapsody(_))
-            )
-        {
-            return (from == 0 && !seq.is_empty()).then_some(0);
+            return match packed {
+                Some(packed) => anchor.find_next_cell_start_packed(packed, from),
+                None => anchor.find_next_cell_start(seq, from),
+            };
         }
 
         (from < seq.len()).then_some(from)
@@ -631,10 +634,20 @@ impl PrimerDetector {
                     seq: fixed,
                     mismatches,
                 } => {
-                    let chosen = Self::find_fixed(seq, pos, fixed, *mismatches, search)?;
+                    let chosen = Self::find_fixed(
+                        seq,
+                        packed,
+                        pos,
+                        fixed,
+                        *mismatches,
+                        search,
+                    )?;
                     let Some(next_pos) = chosen else {
                         return Ok(None);
                     };
+                    if pos == start && search != (0, 0) {
+                        primer_match.primer_start = next_pos;
+                    }
                     pos = next_pos + fixed.len();
                     search = (0, 0);
                 }
@@ -677,7 +690,9 @@ impl PrimerDetector {
                 } => {
                     //saw_insert_constraint = true;
 
-                    let Ok(Some(_chosen)) = Self::find_fixed(seq, pos, fixed, *mismatches, search)
+                    let Ok(Some(_chosen)) = Self::find_fixed(
+                        seq, packed, pos, fixed, *mismatches, search,
+                    )
                     else {
                         /*eprintln!(
                             "I have not found the INSERT {} in sequence {} at position {}",
@@ -836,13 +851,41 @@ impl PrimerDetector {
 
     pub fn find_fixed(
         seq: &[u8],
+        packed: Option<&OneHotSequence>,
         pos: usize,
         fixed: &[u8],
         mismatches: usize,
         search: (usize, usize),
     ) -> PrimerResult<Option<usize>> {
-        let start = pos + search.0;
-        let end = pos + search.1;
+        let start = pos.saturating_add(search.0);
+        let end = pos.saturating_add(search.1);
+
+        // No SEARCH: FIXED is positional. This is the normal short-read path
+        // and deliberately performs exactly one comparison.
+        if search == (0, 0) {
+            if !Self::has_range(seq, pos, fixed.len()) {
+                return Ok(None);
+            }
+            return Ok((Self::hamming(&seq[pos..pos + fixed.len()], fixed)? <= mismatches)
+                .then_some(pos));
+        }
+
+        // SEARCH immediately consumed by FIXED: search the declared window
+        // once with the OneHot anchor instead of testing the complete primer at
+        // every possible start. Short FIXED elements fall back to the bounded
+        // scalar matcher because AnchorSearch intentionally requires 8 bases.
+        if let Some(anchor) = crate::anchor::AnchorSearch::new(fixed, mismatches) {
+            let owned;
+            let observed = match packed {
+                Some(packed) => packed,
+                None => {
+                    owned = OneHotSequence::from_iupac_bytes(seq);
+                    &owned
+                }
+            };
+            return Ok(anchor.find_cell_start_in_range_packed(observed, start, end));
+        }
+
         for candidate in start..=end {
             if !Self::has_range(seq, candidate, fixed.len()) {
                 continue;

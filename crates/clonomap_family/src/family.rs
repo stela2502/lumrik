@@ -6,6 +6,7 @@
 //! result; it does not decide family membership or recompute mutation depths.
 
 use crate::ReferenceModels;
+use onehot_dna::{compatible_masks, iupac_mask};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
@@ -527,7 +528,11 @@ const INDEL_RESCUE_ANCHOR: usize = 4;
 fn rescue_anchor_matches(a: &[u8], b: &[u8], i: usize, j: usize) -> bool {
     let available = (a.len() - i).min(b.len() - j);
     if available < INDEL_RESCUE_ANCHOR { return false; }
-    (0..INDEL_RESCUE_ANCHOR).all(|k| a[i+k].eq_ignore_ascii_case(&b[j+k]))
+    (0..INDEL_RESCUE_ANCHOR).all(|k| {
+        let left = iupac_mask(a[i + k]);
+        let right = iupac_mask(b[j + k]);
+        left != 0 && right != 0 && compatible_masks(left, right)
+    })
 }
 
 fn walk_in_register(a: &[u8], b: &[u8]) -> Vec<(Option<usize>, Option<usize>)> {

@@ -110,7 +110,7 @@ fn one_cell_real_fixture_detects_expected_recombinations() {
 
     assert_eq!(
         recombinations.len(),
-        4,
+        3,
         "expected exactly IGH, IGK and IGL recombinations"
     );
 

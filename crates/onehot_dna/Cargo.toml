@@ -31,3 +31,4 @@ name = "onehot_dna"
 path = "src/lib.rs"
 
 [dependencies]
+anyhow = "1"

@@ -7,6 +7,7 @@ use crate::runner::BamIdentityResolver;
 use anyhow::{Context, Result};
 use fast_tag_mapper::{FastLocusMapper, FeatureEntry, MapStatus};
 use int_to_str::IntToStr;
+use onehot_dna::OneHotSequence;
 use rayon::prelude::*;
 use rust_htslib::bam::{self, Read};
 use scdata::CellHash;
@@ -412,6 +413,7 @@ pub(crate) fn rescue_missing_constants_from_bam_with_report<
         index,
         calls,
         threads,
+        None,
         |_| {},
     )
 }
@@ -422,6 +424,7 @@ pub(crate) fn rescue_missing_constants_from_bam_with_report_and_progress<P, R, F
     index: &VdjIndex,
     calls: &mut [(u64, Vec<Recombination>)],
     threads: usize,
+    max_bam_records: Option<usize>,
     mut progress: F,
 ) -> Result<RecombinationEvidenceRescanReport>
 where
@@ -528,6 +531,9 @@ where
     // cells that already have reconstructed calls, but the BAM denominator and
     // live progress always reflect the complete file scan.
     for record in reader.records() {
+        if max_bam_records.is_some_and(|limit| report.bam_records_scanned >= limit) {
+            break;
+        }
         let record = record?;
         report.bam_records_scanned += 1;
         if report.bam_records_scanned % RESCAN_PROGRESS_EVERY_BAM_RECORDS == 0 {
@@ -924,41 +930,30 @@ fn refinement_region(call: &Recombination, index: &VdjIndex) -> Option<(usize, u
 /// every Stage-3 receptor hit. A unique offset supported by at least two exact
 /// anchors is required before a read is allowed to vote on junction bases.
 fn infer_ungapped_offset(
-    query: &[u8],
-    reference: &[u8],
-    start: usize,
-    end: usize,
-    k: usize,
+    query: &[u8], reference: &[u8], start: usize, end: usize, k: usize,
 ) -> Option<isize> {
-    if k == 0 || query.len() < k || end.saturating_sub(start) < k || end > reference.len() {
-        return None;
-    }
+    if k < 2 || query.len() < k || end.saturating_sub(start) < k || end > reference.len() { return None; }
+    let query = OneHotSequence::from_iupac_bytes(query);
+    let reference = OneHotSequence::from_iupac_bytes(reference);
     let mut votes = HashMap::<isize, u16>::new();
     let last = end - k;
     let mut reference_pos = start;
     while reference_pos <= last {
-        let anchor = &reference[reference_pos..reference_pos + k];
-        for (query_pos, window) in query.windows(k).enumerate() {
-            if window == anchor {
-                let offset = query_pos as isize - reference_pos as isize;
-                let vote = votes.entry(offset).or_default();
-                *vote = vote.saturating_add(1);
-            }
+        let lookup = reference.mask_at(reference_pos)?;
+        let external: Vec<_> = (1..k).map(|i| reference.mask_at(reference_pos + i).unwrap()).collect();
+        let mut from = 0usize;
+        while let Some(query_pos) = query.find_next_with_external_after(lookup, &external, from) {
+            let offset = query_pos as isize - reference_pos as isize;
+            let vote = votes.entry(offset).or_default(); *vote = vote.saturating_add(1);
+            from = query_pos.saturating_add(1);
         }
         reference_pos = reference_pos.saturating_add(4);
     }
     let mut ranked: Vec<_> = votes.into_iter().collect();
     ranked.sort_by_key(|(offset, count)| (std::cmp::Reverse(*count), *offset));
     let (best_offset, best_votes) = ranked.first().copied()?;
-    if best_votes < 2 {
-        return None;
-    }
-    if ranked
-        .get(1)
-        .is_some_and(|(_, second_votes)| *second_votes == best_votes)
-    {
-        return None;
-    }
+    if best_votes < 2 { return None; }
+    if ranked.get(1).is_some_and(|(_, second_votes)| *second_votes == best_votes) { return None; }
     Some(best_offset)
 }
 
@@ -1052,12 +1047,12 @@ fn refine_junction_from_pileup(call: &mut Recombination, pileup: &JunctionPileup
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+    if needle.len() < 2 || needle.len() > haystack.len() { return None; }
+    let haystack = OneHotSequence::from_iupac_bytes(haystack);
+    let needle = OneHotSequence::from_iupac_bytes(needle);
+    let lookup = needle.mask_at(0)?;
+    let external: Vec<_> = (1..needle.len()).map(|i| needle.mask_at(i).unwrap()).collect();
+    haystack.find_with_external_after(lookup, &external)
 }
 
 fn base_index(base: u8) -> Option<usize> {

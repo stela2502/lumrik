@@ -173,7 +173,9 @@ impl TenxOntMultimerTest {
 
     fn run() {
         let grammar = TestData::tenx_3p_v3_no_polyt_grammar("tenx-ont-stress");
-        let detector = PrimerDetector::from_grammar(grammar.clone()).unwrap();
+        let detector = PrimerDetector::from_grammar(grammar.clone())
+            .unwrap()
+            .with_read_wide_primer_search(true);
         let built = Self::build_read(&grammar);
 
         let matches = detector.detect_all(&built.seq, &built.qual).unwrap();
@@ -286,13 +288,13 @@ fn test_custom_10x_adapter_allows_one_fixed_error_after_synthesis() {
     let grammar = TestData::tenx_3p_v3_grammar("tenx-fixed-error");
     let detector = PrimerDetector::from_grammar(grammar.clone()).unwrap();
 
-    let mut seq = TestData::cat(&[b"NN", &TestData::synthesized_tenx_read(&grammar)]);
-    seq[2 + 5] = b'A';
+    let mut seq = TestData::synthesized_tenx_read(&grammar);
+    seq[5] = b'A';
 
     let qual = TestData::qual(seq.len());
     let hit = detector.detect_first(&seq, &qual).unwrap().unwrap();
 
-    assert_eq!(hit.primer_start, 2);
+    assert_eq!(hit.primer_start, 0);
     assert_eq!(
         hit.get_cell(&seq, &qual).unwrap().seq.as_slice(),
         TestData::tenx_cell()
@@ -300,6 +302,28 @@ fn test_custom_10x_adapter_allows_one_fixed_error_after_synthesis() {
     assert_eq!(
         hit.get_umi(&seq, &qual).unwrap().seq.as_slice(),
         TestData::tenx_umi()
+    );
+}
+
+#[test]
+fn test_search_then_fixed_finds_shifted_adapter_with_fixed_mismatch() {
+    let grammar = Grammar::parse(
+        "tenx-search-fixed",
+        "SEARCH:0..4+FIXED:CTACACGACGCTCTTCCGATCT:mm=2+CELL:16+UMI:12+POLYT:min=10",
+    )
+    .unwrap();
+    let detector = PrimerDetector::from_grammar(grammar).unwrap();
+
+    let source = TestData::tenx_3p_v3_grammar("tenx-search-fixed-source");
+    let mut seq = TestData::cat(&[b"NN", &TestData::synthesized_tenx_read(&source)]);
+    seq[2 + 5] = b'A';
+    let qual = TestData::qual(seq.len());
+
+    let hit = detector.detect_first(&seq, &qual).unwrap().unwrap();
+    assert_eq!(hit.primer_start, 2);
+    assert_eq!(
+        hit.get_cell(&seq, &qual).unwrap().seq.as_slice(),
+        TestData::tenx_cell()
     );
 }
 
@@ -438,7 +462,9 @@ fn test_reverse_complement_detection_for_tenx_like_read() {
 #[test]
 fn test_detect_all_three_tenx_monomers_with_damaged_junctions() {
     let grammar = TestData::tenx_3p_v3_grammar("tenx-three");
-    let detector = PrimerDetector::from_grammar(grammar.clone()).unwrap();
+    let detector = PrimerDetector::from_grammar(grammar.clone())
+        .unwrap()
+        .with_read_wide_primer_search(true);
 
     let one = TestData::synthesized_tenx_read(&grammar);
     let two = TestData::synthesized_tenx_read(&grammar);

@@ -1,5 +1,6 @@
 use super::{BamFeatureEvidence, SequencePart};
 use crate::index::{Chain, SegmentId, VdjIndex};
+use onehot_dna::OneHotSequence;
 
 /// Compact germline-aware sequence summary for one connected receptor fragment.
 ///
@@ -44,6 +45,28 @@ impl ReceptorSequenceEvidence {
             .iter()
             .find_map(|(x, n)| (*x == id).then_some(*n))
             .unwrap_or(0)
+    }
+
+    /// Packed mapping view of all observed nucleotide states.
+    ///
+    /// Unlike `consensus()`, this deliberately does not collapse competing
+    /// observations. A position with A and G evidence becomes the IUPAC mask R
+    /// (A|G), while a position with no observed base becomes a zero mask and is
+    /// ignored by overlap scoring. The count/quality evidence remains the
+    /// authoritative assembly state; this is only its cheap mapping view.
+    pub fn mapping_sequence(&self) -> OneHotSequence {
+        let n = self.len();
+        let mut masks = Vec::with_capacity(n);
+        for pos in 0..n {
+            let mut mask = 0u8;
+            for base in 0..4 {
+                if self.base_counts[base].get(pos).copied().unwrap_or(0) != 0 {
+                    mask |= 1u8 << base;
+                }
+            }
+            masks.push(mask);
+        }
+        OneHotSequence::from_masks(&masks)
     }
 
     /// Resolve a consensus only on demand.  Counts win first, maximum base
@@ -203,8 +226,12 @@ impl ReceptorSequenceEvidence {
             return false;
         }
 
-        let a = self.consensus(index);
-        let b = other.consensus(index);
+        // Map against every nucleotide state actually supported by the compact
+        // evidence instead of repeatedly materializing a lossy byte consensus.
+        // OneHot compatibility is a nibble AND and the overlap scorer consumes
+        // 32 positions at a time.
+        let a = self.mapping_sequence();
+        let b = other.mapping_sequence();
         if a.is_empty() || b.is_empty() {
             return false;
         }
@@ -226,14 +253,133 @@ impl ReceptorSequenceEvidence {
 
         let offset = candidates
             .into_iter()
-            .find(|off| overlap_is_compatible(&a, &b, *off, min_overlap))
-            .or_else(|| best_offset(&a, &b, min_overlap).map(|x| x.0));
-        let Some(offset) = offset else {
-            return false;
-        };
+            .find(|off| overlap_is_compatible_packed(&a, &b, *off, min_overlap))
+            .or_else(|| best_offset_packed(&a, &b, min_overlap).map(|x| x.0));
+        if let Some(offset) = offset {
+            self.merge_at(other, offset);
+            return true;
+        }
 
-        self.merge_at(other, offset);
-        true
+        // The cheap mapper above is deliberately ungapped.  A single indel in
+        // an otherwise convincing receptor overlap therefore shifts the rest
+        // of the read and can incorrectly seed a second summary.  Only after
+        // that fast path fails, try an indel-aware overlap alignment.  This is
+        // Needleman-Wunsch with free terminal gaps (semi-global / overlap
+        // alignment): internal gaps are penalised, while unrelated read ends
+        // are not.
+        //
+        // Keep this rescue conservative: it is only allowed for summaries
+        // already linked by a germline segment, and the aligned evidence must
+        // still be >=90% identical over a substantial overlap.  The merge is
+        // performed through the alignment itself, so an insertion/deletion
+        // does not shift downstream evidence into the wrong collector bins.
+        if self.shares_segment(other) {
+            let ac = self.consensus(index);
+            let bc = other.consensus(index);
+            if let Some(aln) = needleman_wunsch_overlap(&ac, &bc, min_overlap) {
+                self.merge_aligned(other, &aln.columns);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn merge_aligned(&mut self, other: &Self, columns: &[(Option<usize>, Option<usize>)]) {
+        // Build a new coordinate system from the gapped alignment.  Columns
+        // containing only `self` or only `other` become real collector
+        // positions; terminal unaligned sequence is included by the overlap
+        // aligner as one-sided columns.
+        let n = columns.len();
+        let mut counts: [Vec<u16>; 4] = std::array::from_fn(|_| vec![0; n]);
+        let mut quals: [Vec<u8>; 4] = std::array::from_fn(|_| vec![0; n]);
+        let mut self_to_new = vec![None; self.len()];
+        let mut other_to_new = vec![None; other.len()];
+
+        for (dst, &(ai, bi)) in columns.iter().enumerate() {
+            if let Some(i) = ai {
+                self_to_new[i] = Some(dst);
+                for base in 0..4 {
+                    counts[base][dst] = counts[base][dst]
+                        .saturating_add(self.base_counts[base].get(i).copied().unwrap_or(0));
+                    quals[base][dst] = quals[base][dst]
+                        .max(self.base_max_qual[base].get(i).copied().unwrap_or(0));
+                }
+            }
+            if let Some(i) = bi {
+                other_to_new[i] = Some(dst);
+                for base in 0..4 {
+                    counts[base][dst] = counts[base][dst]
+                        .saturating_add(other.base_counts[base].get(i).copied().unwrap_or(0));
+                    quals[base][dst] = quals[base][dst]
+                        .max(other.base_max_qual[base].get(i).copied().unwrap_or(0));
+                }
+            }
+        }
+
+        self.base_counts = counts;
+        self.base_max_qual = quals;
+
+        for anchor in &mut self.germline_anchors {
+            if anchor.summary_start >= 0 {
+                let old = anchor.summary_start as usize;
+                if let Some(Some(new)) = self_to_new.get(old) {
+                    anchor.summary_start = *new as isize;
+                }
+            } else {
+                // Preserve the coordinate relation for anchors starting before
+                // the observed summary.  The alignment cannot insert columns
+                // before self position zero without representing them as
+                // one-sided terminal columns, so shift by self(0)'s new start.
+                let shift = self_to_new.first().and_then(|x| *x).unwrap_or(0) as isize;
+                anchor.summary_start += shift;
+            }
+        }
+        for anchor in &other.germline_anchors {
+            let mapped = if anchor.summary_start >= 0 {
+                other_to_new
+                    .get(anchor.summary_start as usize)
+                    .and_then(|x| *x)
+                    .map(|x| x as isize)
+            } else {
+                let shift = other_to_new.first().and_then(|x| *x).unwrap_or(0) as isize;
+                Some(anchor.summary_start + shift)
+            };
+            if let Some(summary_start) = mapped {
+                let shifted = GermlineAnchor {
+                    segment_id: anchor.segment_id,
+                    summary_start,
+                };
+                if !self.germline_anchors.contains(&shifted) {
+                    self.germline_anchors.push(shifted);
+                }
+            }
+        }
+        for &(id, n) in &other.segment_support {
+            add_segment_support(&mut self.segment_support, id, n);
+        }
+        self.support_features = self.support_features.saturating_add(other.support_features);
+    }
+
+    fn trace_split_dump(&self, label: &str, index: &VdjIndex) {
+        let seq = self.consensus(index);
+        let segments = self.segment_support.iter().map(|(id, n)| {
+            index.segment(*id).map(|s| format!("{}:{n}", s.name))
+                .unwrap_or_else(|| format!("#{id:?}:{n}"))
+        }).collect::<Vec<_>>().join(",");
+        eprintln!(
+            "[sc-vdj split-trace] {label}: support={} len={} segments=[{}] consensus={}",
+            self.support_features, self.len(), segments, String::from_utf8_lossy(&seq),
+        );
+        // The collector is already represented by the ambiguity-aware consensus
+        // above.  Keep split tracing human-readable: the raw A/C/G/T position
+        // vectors are useful internally, but obscure the actual sequence being
+        // accepted or rejected.
+        let anchors = self.germline_anchors.iter().map(|a| {
+            index.segment(a.segment_id).map(|s| format!("{}@{}", s.name, a.summary_start))
+                .unwrap_or_else(|| format!("#{:?}@{}", a.segment_id, a.summary_start))
+        }).collect::<Vec<_>>().join(",");
+        eprintln!("[sc-vdj split-trace]   anchors: [{anchors}]");
     }
 
     fn merge_at(&mut self, other: &Self, offset: isize) {
@@ -328,6 +474,21 @@ pub fn summarize_chain_work(work: ChainSummaryWork<'_>) -> Vec<ReceptorSequenceE
 /// The expensive raw-read assembly has already happened against an empty,
 /// batch-local summary set.  Persistent state is therefore probed only once
 /// per compact incoming summary rather than once per BAM sequence part.
+fn trace_new_summary_split(
+    context: &str,
+    incoming: &ReceptorSequenceEvidence,
+    existing: &[ReceptorSequenceEvidence],
+    index: &VdjIndex,
+) {
+    if std::env::var_os("SC_VDJ_TRACE_SUMMARY_SPLITS").is_none() { return; }
+    eprintln!("\n[sc-vdj split-trace] NEW SUMMARY: {context}; incoming was rejected by {} existing model(s)", existing.len());
+    incoming.trace_split_dump("INCOMING", index);
+    for (i, model) in existing.iter().enumerate() {
+        model.trace_split_dump(&format!("REJECTING MODEL #{i}"), index);
+    }
+    eprintln!("[sc-vdj split-trace] END NEW SUMMARY\n");
+}
+
 pub(crate) fn merge_summary_batch(
     summaries: &mut Vec<ReceptorSequenceEvidence>,
     batch_summaries: Vec<ReceptorSequenceEvidence>,
@@ -368,6 +529,7 @@ pub(crate) fn merge_summary_batch(
         let target = match target {
             Some(i) => i,
             None => {
+                trace_new_summary_split("merge_summary_batch", &incoming, summaries, index);
                 summaries.push(incoming);
                 summaries.len() - 1
             }
@@ -467,6 +629,7 @@ pub(crate) fn consume_chain_features(
             let target = match target {
                 Some(i) => i,
                 None => {
+                    trace_new_summary_split("consume_chain_features", &incoming, summaries, index);
                     summaries.push(incoming);
                     summaries.len() - 1
                 }
@@ -538,6 +701,194 @@ fn base_index(b: u8) -> Option<usize> {
 
 fn base_from_index(i: usize) -> u8 {
     [b'A', b'C', b'G', b'T'][i.min(3)]
+}
+
+#[derive(Debug)]
+struct OverlapAlignment {
+    columns: Vec<(Option<usize>, Option<usize>)>,
+}
+
+/// Indel-aware overlap alignment used only as a rescue after the packed,
+/// ungapped fast path failed.  This is Needleman-Wunsch with free terminal
+/// gaps: choose the best endpoint on the last row/column, then traceback to an
+/// edge.  We require >=90% identity among aligned A/C/G/T pairs and at least
+/// `max(min_overlap, 24)` informative aligned bases.
+fn needleman_wunsch_overlap(
+    a: &[u8],
+    b: &[u8],
+    min_overlap: usize,
+) -> Option<OverlapAlignment> {
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let n = a.len();
+    let m = b.len();
+    let width = m + 1;
+    let mut score = vec![0i32; (n + 1) * width];
+    let mut trace = vec![0u8; (n + 1) * width]; // 1 diag, 2 up, 3 left
+
+    // Free leading terminal gaps: first row/column stay zero.
+    for i in 1..=n {
+        for j in 1..=m {
+            let x = a[i - 1].to_ascii_uppercase();
+            let y = b[j - 1].to_ascii_uppercase();
+            let pair = if x == y && matches!(x, b'A' | b'C' | b'G' | b'T') {
+                3
+            } else {
+                -3
+            };
+            let diag = score[(i - 1) * width + (j - 1)] + pair;
+            let up = score[(i - 1) * width + j] - 4;
+            let left = score[i * width + (j - 1)] - 4;
+            let (best, dir) = if diag >= up && diag >= left {
+                (diag, 1)
+            } else if up >= left {
+                (up, 2)
+            } else {
+                (left, 3)
+            };
+            score[i * width + j] = best;
+            trace[i * width + j] = dir;
+        }
+    }
+
+    // Free trailing terminal gaps: end on whichever last-row/last-column cell
+    // has the best score.
+    let mut end = (n, m);
+    let mut best = i32::MIN;
+    for j in 1..=m {
+        let s = score[n * width + j];
+        if s > best {
+            best = s;
+            end = (n, j);
+        }
+    }
+    for i in 1..=n {
+        let s = score[i * width + m];
+        if s > best {
+            best = s;
+            end = (i, m);
+        }
+    }
+
+    let (mut i, mut j) = end;
+    let mut core = Vec::<(Option<usize>, Option<usize>)>::new();
+    let mut informative = 0usize;
+    let mut matches = 0usize;
+    let mut indel_bases = 0usize;
+    while i > 0 && j > 0 {
+        match trace[i * width + j] {
+            1 => {
+                let ai = i - 1;
+                let bj = j - 1;
+                let x = a[ai].to_ascii_uppercase();
+                let y = b[bj].to_ascii_uppercase();
+                if matches!(x, b'A' | b'C' | b'G' | b'T')
+                    && matches!(y, b'A' | b'C' | b'G' | b'T')
+                {
+                    informative += 1;
+                    if x == y {
+                        matches += 1;
+                    }
+                }
+                core.push((Some(ai), Some(bj)));
+                i -= 1;
+                j -= 1;
+            }
+            2 => {
+                core.push((Some(i - 1), None));
+                indel_bases += 1;
+                i -= 1;
+            }
+            3 => {
+                core.push((None, Some(j - 1)));
+                indel_bases += 1;
+                j -= 1;
+            }
+            _ => break,
+        }
+    }
+    let start_i = i;
+    let start_j = j;
+    core.reverse();
+
+    let required = min_overlap.max(24);
+    let compared = informative + indel_bases;
+    if compared < required || matches * 100 < compared * 90 {
+        return None;
+    }
+
+    let mut columns = Vec::with_capacity(n + m);
+    // At most one side has an unaligned leading terminal prefix at traceback
+    // termination.  Preserve it as one-sided evidence.
+    for ai in 0..start_i {
+        columns.push((Some(ai), None));
+    }
+    for bj in 0..start_j {
+        columns.push((None, Some(bj)));
+    }
+    columns.extend(core);
+    for ai in end.0..n {
+        columns.push((Some(ai), None));
+    }
+    for bj in end.1..m {
+        columns.push((None, Some(bj)));
+    }
+
+    Some(OverlapAlignment { columns })
+}
+
+fn overlap_is_compatible_packed(
+    a: &OneHotSequence,
+    b: &OneHotSequence,
+    off: isize,
+    min_overlap: usize,
+) -> bool {
+    let a0 = off.max(0) as usize;
+    let b0 = (-off).max(0) as usize;
+    if a0 >= a.len() || b0 >= b.len() {
+        return false;
+    }
+    let ov = (a.len() - a0).min(b.len() - b0);
+    if ov < min_overlap {
+        return false;
+    }
+    let Some((informative, compatible)) = a.compatibility_counts(a0, b, b0, ov) else {
+        return false;
+    };
+    informative >= min_overlap && compatible * 100 >= informative * 90
+}
+
+fn best_offset_packed(
+    a: &OneHotSequence,
+    b: &OneHotSequence,
+    min_overlap: usize,
+) -> Option<(isize, usize)> {
+    if a.len() < min_overlap || b.len() < min_overlap {
+        return None;
+    }
+    let mut best = None;
+    let lo = -(b.len() as isize) + min_overlap as isize;
+    let hi = a.len() as isize - min_overlap as isize;
+    for off in lo..=hi {
+        let a0 = off.max(0) as usize;
+        let b0 = (-off).max(0) as usize;
+        let ov = (a.len() - a0).min(b.len() - b0);
+        if ov < min_overlap {
+            continue;
+        }
+        let Some((informative, compatible)) = a.compatibility_counts(a0, b, b0, ov) else {
+            continue;
+        };
+        if informative < min_overlap || compatible * 100 < informative * 90 {
+            continue;
+        }
+        let cand = (off, compatible);
+        if best.is_none_or(|x: (isize, usize)| cand.1 > x.1) {
+            best = Some(cand);
+        }
+    }
+    best
 }
 
 fn overlap_is_compatible(a: &[u8], b: &[u8], off: isize, min_overlap: usize) -> bool {

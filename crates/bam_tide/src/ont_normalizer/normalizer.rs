@@ -191,7 +191,11 @@ impl OntNormalizer {
             read_tags: cli.read_tags,
             min_transcript_len: cli.min_transcript_len,
             max_reads: cli.max_reads,
-            primer: cli.primer.detector().map_err(anyhow::Error::msg)?,
+            primer: cli
+                .primer
+                .detector()
+                .map_err(anyhow::Error::msg)?
+                .with_read_wide_primer_search(true),
             additional_features,
             additional_feature_min_hits: cli.feature_tags.min_hits,
             threads: cli.threads,

@@ -188,6 +188,7 @@ dependencies = [
  "hts-sys",
  "int-to-str",
  "mapping_info",
+ "onehot_dna",
  "rand 0.8.7",
  "rayon",
  "read-tag-table",
@@ -442,6 +443,7 @@ dependencies = [
  "linfa",
  "linfa-reduction",
  "ndarray 0.15.6",
+ "onehot_dna",
  "plotters",
  "rayon",
  "reference_curator",
@@ -1600,6 +1602,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "onehot_dna"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "openssl-probe"
@@ -2153,6 +2158,7 @@ dependencies = [
  "int-to-str",
  "lumrik-status",
  "mapping_info",
+ "onehot_dna",
  "rayon",
  "rust-htslib",
  "sc_primer",

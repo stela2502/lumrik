@@ -4,6 +4,7 @@ use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use int_to_str::IntToStr;
+use onehot_dna::OneHotSequence;
 use mapping_info::MappingInfo;
 use sc_primer::{Chemistry, Grammar, PrimerDetector};
 use std::fs::File;
@@ -295,6 +296,31 @@ where
     Ok(())
 }
 
+
+fn trim_r2_primer_readthrough(
+    r1_seq: &[u8], r2_seq: &mut Vec<u8>, r2_qual: &mut Vec<u8>, primer_match: &sc_primer::PrimerMatch,
+) -> bool {
+    use sc_primer::Orientation;
+    if primer_match.orientation != Orientation::Forward || primer_match.primer_start >= primer_match.insert_start || primer_match.insert_start > r1_seq.len() { return false; }
+    let r1_primer = &r1_seq[primer_match.primer_start..primer_match.insert_start];
+    if r1_primer.len() < 2 || r2_seq.len() < 2 { return false; }
+    let expected_seq = PrimerDetector::reverse_complement(r1_primer);
+    let expected = OneHotSequence::from_iupac_bytes(&expected_seq);
+    let observed = OneHotSequence::from_iupac_bytes(r2_seq);
+    let lookup = expected.mask_at(0).unwrap();
+    let external: Vec<_> = (1..expected.len()).map(|i| expected.mask_at(i).unwrap()).collect();
+    let mut hit = observed.find_with_external_after(lookup, &external);
+    if hit.is_none() {
+        let max_proof = expected.len().min(r2_seq.len());
+        for proof in (2..=max_proof).rev() {
+            let start = r2_seq.len() - proof;
+            if observed.find_next_with_external_after(lookup, &external[..proof - 1], start) == Some(start) { hit = Some(start); break; }
+        }
+    }
+    let Some(start) = hit else { return false; };
+    r2_seq.truncate(start); r2_qual.truncate(start); true
+}
+
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
     if cli.iterations == 0 {
@@ -445,6 +471,30 @@ fn main() -> Result<(), String> {
 
     if cli.r2.is_some() {
         bench(
+            "3b. detect + current R2 primer read-through trimming",
+            &reads,
+            cli.iterations,
+            |r| {
+                let Some(m) = detector
+                    .detect_first(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?
+                else {
+                    return Ok(false);
+                };
+                let mut r2_seq = r.r2_seq.clone();
+                let mut r2_qual = r.r2_qual.clone();
+                let trimmed = trim_r2_primer_readthrough(
+                    &r.r1_seq,
+                    &mut r2_seq,
+                    &mut r2_qual,
+                    &m,
+                );
+                std::hint::black_box((trimmed, r2_seq.len()));
+                Ok(true)
+            },
+        )?;
+
+        bench(
             "4. detect + slices + clone + molecule_identity",
             &reads,
             cli.iterations,
@@ -456,10 +506,13 @@ fn main() -> Result<(), String> {
                     return Ok(false);
                 };
                 if detector.grammar_for_match(&m).is_unbarcoded() {
-                    let id = detector
+                    let Some(id) = detector
                         .grammar_for_match(&m)
-                        .molecule_identity(None, None, &r.r1_seq, &r.r2_seq)
-                        .map_err(|e| e.to_string())?;
+                        .molecule_identity_if_exact(None, None, &r.r1_seq, &r.r2_seq)
+                        .map_err(|e| e.to_string())?
+                    else {
+                        return Ok(false);
+                    };
                     std::hint::black_box(id);
                     return Ok(true);
                 }
@@ -470,10 +523,13 @@ fn main() -> Result<(), String> {
                     .get_umi(&r.r1_seq, &r.r1_qual)
                     .map_err(|e| e.to_string())?;
                 let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
-                let id = detector
+                let Some(id) = detector
                     .grammar_for_match(&m)
-                    .molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq)
-                    .map_err(|e| e.to_string())?;
+                    .molecule_identity_if_exact(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq)
+                    .map_err(|e| e.to_string())?
+                else {
+                    return Ok(false);
+                };
                 std::hint::black_box(id);
                 Ok(true)
             },
@@ -491,10 +547,13 @@ fn main() -> Result<(), String> {
                     return Ok(false);
                 };
                 if detector.grammar_for_match(&m).is_unbarcoded() {
-                    let id = detector
+                    let Some(id) = detector
                         .grammar_for_match(&m)
-                        .molecule_identity(None, None, &r.r1_seq, &r.r2_seq)
-                        .map_err(|e| e.to_string())?;
+                        .molecule_identity_if_exact(None, None, &r.r1_seq, &r.r2_seq)
+                        .map_err(|e| e.to_string())?
+                    else {
+                        return Ok(false);
+                    };
                     std::hint::black_box(id);
                     return Ok(true);
                 }
@@ -505,10 +564,13 @@ fn main() -> Result<(), String> {
                     .get_umi(&r.r1_seq, &r.r1_qual)
                     .map_err(|e| e.to_string())?;
                 let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
-                let identity = detector
+                let Some(identity) = detector
                     .grammar_for_match(&m)
-                    .molecule_identity(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq)
-                    .map_err(|e| e.to_string())?;
+                    .molecule_identity_if_exact(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq)
+                    .map_err(|e| e.to_string())?
+                else {
+                    return Ok(false);
+                };
                 let cell_id = IntToStr::new(&normalized_cell).into_u64();
                 let umi_id = IntToStr::new(&umi.seq).into_u64();
                 std::hint::black_box((identity, cell_id, umi_id));
@@ -574,10 +636,13 @@ fn main() -> Result<(), String> {
                 };
                 if detector.grammar_for_match(&m).is_unbarcoded() {
                     if cli.r2.is_some() {
-                        let identity = detector
+                        let Some(identity) = detector
                             .grammar_for_match(&m)
-                            .molecule_identity(None, None, &r.r1_seq, &r.r2_seq)
-                            .map_err(|e| e.to_string())?;
+                            .molecule_identity_if_exact(None, None, &r.r1_seq, &r.r2_seq)
+                            .map_err(|e| e.to_string())?
+                        else {
+                            continue;
+                        };
                         std::hint::black_box(identity);
                     }
                 } else {
@@ -589,15 +654,18 @@ fn main() -> Result<(), String> {
                         .map_err(|e| e.to_string())?;
                     let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
                     if cli.r2.is_some() {
-                        let identity = detector
+                        let Some(identity) = detector
                             .grammar_for_match(&m)
-                            .molecule_identity(
+                            .molecule_identity_if_exact(
                                 Some(&normalized_cell),
                                 Some(&umi.seq),
                                 &r.r1_seq,
                                 &r.r2_seq,
                             )
-                            .map_err(|e| e.to_string())?;
+                            .map_err(|e| e.to_string())?
+                        else {
+                            continue;
+                        };
                         let cell_id = IntToStr::new(&normalized_cell).into_u64();
                         let umi_id = IntToStr::new(&umi.seq).into_u64();
                         std::hint::black_box((identity, cell_id, umi_id));
@@ -625,6 +693,102 @@ fn main() -> Result<(), String> {
             total,
             cli.iterations,
         );
+    }
+
+
+    if cli.r2.is_some() {
+        let mut best = Duration::MAX;
+        let mut total = Duration::ZERO;
+        let mut called = 0usize;
+        let mut trimmed = 0usize;
+        let mut feature_hits = 0usize;
+        for iteration in 0..cli.iterations {
+            let mut stats = MappingInfo::new(None, 0.0, reads.len());
+            let start = Instant::now();
+            let mut this_called = 0usize;
+            let mut this_trimmed = 0usize;
+            let mut this_feature_hits = 0usize;
+            for r in &reads {
+                let Some(m) = detector
+                    .detect_first(&r.r1_seq, &r.r1_qual)
+                    .map_err(|e| e.to_string())?
+                else {
+                    continue;
+                };
+
+                if detector.grammar_for_match(&m).is_unbarcoded() {
+                    let Some(identity) = detector
+                        .grammar_for_match(&m)
+                        .molecule_identity_if_exact(None, None, &r.r1_seq, &r.r2_seq)
+                        .map_err(|e| e.to_string())?
+                    else {
+                        continue;
+                    };
+                    std::hint::black_box(identity);
+                } else {
+                    let cell = m
+                        .get_cell(&r.r1_seq, &r.r1_qual)
+                        .map_err(|e| e.to_string())?;
+                    let umi = m
+                        .get_umi(&r.r1_seq, &r.r1_qual)
+                        .map_err(|e| e.to_string())?;
+                    let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
+                    let Some(identity) = detector
+                        .grammar_for_match(&m)
+                        .molecule_identity_if_exact(
+                            Some(&normalized_cell),
+                            Some(&umi.seq),
+                            &r.r1_seq,
+                            &r.r2_seq,
+                        )
+                        .map_err(|e| e.to_string())?
+                    else {
+                        continue;
+                    };
+                    let cell_id = IntToStr::new(&normalized_cell).into_u64();
+                    let umi_id = IntToStr::new(&umi.seq).into_u64();
+                    std::hint::black_box((identity, cell_id, umi_id));
+                }
+
+                // Match IlluminaNormalizer ordering: feature-tag reads leave before
+                // genomic R2 cleanup, while genomic candidates pay the read-through scan.
+                if feature_mapper.map_feature_id(&r.r2_seq, &mut stats).is_some() {
+                    this_feature_hits += 1;
+                    this_called += 1;
+                    continue;
+                }
+
+                let mut r2_seq = r.r2_seq.clone();
+                let mut r2_qual = r.r2_qual.clone();
+                if trim_r2_primer_readthrough(&r.r1_seq, &mut r2_seq, &mut r2_qual, &m) {
+                    this_trimmed += 1;
+                }
+                std::hint::black_box((r2_seq.len(), r2_qual.len()));
+                this_called += 1;
+            }
+            let elapsed = start.elapsed();
+            best = best.min(elapsed);
+            total += elapsed;
+            if iteration == 0 {
+                called = this_called;
+                trimmed = this_trimmed;
+                feature_hits = this_feature_hits;
+            }
+            if called != this_called || trimmed != this_trimmed || feature_hits != this_feature_hits {
+                return Err("non-deterministic counts in stage 6c".to_string());
+            }
+        }
+        report(
+            "6c. production-shaped identity + FastTagMapper(R2) + R2 read-through",
+            reads.len(),
+            called,
+            best,
+            total,
+            cli.iterations,
+        );
+        eprintln!("  feature hits: {feature_hits}; R2 primer read-through trims: {trimmed}");
+    } else {
+        eprintln!("6c skipped: provide --r2 for production-shaped R2 processing");
     }
 
     if cli.io_stress {

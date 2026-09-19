@@ -464,6 +464,32 @@ impl VdjRunner {
         path: P,
         resolver: &R,
         allowed_cells: Option<&HashSet<u64>>,
+        progress: F,
+    ) -> Result<usize>
+    where
+        P: AsRef<Path>,
+        R: BamIdentityResolver,
+        F: FnMut(BamIngestProgress, &CellEvidenceVdj, &VdjIndex),
+    {
+        self.read_bam_with_progress_for_cells_limited(
+            path,
+            resolver,
+            allowed_cells,
+            None,
+            progress,
+        )
+    }
+
+    /// As `read_bam_with_progress_for_cells`, but optionally stop the initial
+    /// evidence pass after `max_bam_records`. The limit is a soft record cap:
+    /// once reached, records belonging to the current physical query are kept
+    /// together and ingestion stops before the next query.
+    pub fn read_bam_with_progress_for_cells_limited<P, R, F>(
+        &mut self,
+        path: P,
+        resolver: &R,
+        allowed_cells: Option<&HashSet<u64>>,
+        max_bam_records: Option<usize>,
         mut progress: F,
     ) -> Result<usize>
     where
@@ -505,12 +531,29 @@ impl VdjRunner {
 
         for rec in reader.records() {
             let rec = rec?;
+            let cell = resolver.cell(&rec);
+            let query_key = cell.as_ref().map(|cell| {
+                (
+                    IntToStr::new(cell.as_bytes()).into_u64(),
+                    rec.qname().to_vec(),
+                )
+            });
+
+            // Keep all records from one physical query together. This can exceed
+            // the requested cap by a handful of records, but never splits paired
+            // or supplementary evidence across the artificial boundary.
+            if max_bam_records.is_some_and(|limit| bam_records >= limit)
+                && query_key.as_ref() != last_query.as_ref()
+            {
+                break;
+            }
+
             bam_records = bam_records.saturating_add(1);
-            let Some(cell) = resolver.cell(&rec) else {
+            let Some(cell) = cell else {
                 continue;
             };
-            let cell_id = IntToStr::new(cell.as_bytes()).into_u64();
-            let query_key = (cell_id, rec.qname().to_vec());
+            let (cell_id, query_name) = query_key.expect("resolved BAM cell has query key");
+            let query_key = (cell_id, query_name);
 
             if last_query.as_ref() != Some(&query_key) {
                 if batch.len() >= EVIDENCE_BATCH_SIZE {
@@ -715,6 +758,7 @@ impl VdjRunner {
         path: P,
         resolver: &R,
         calls: &mut [(u64, Vec<Recombination>)],
+        max_bam_records: Option<usize>,
         progress: F,
     ) -> Result<RecombinationEvidenceRescanReport>
     where
@@ -728,6 +772,7 @@ impl VdjRunner {
             &self.index,
             calls,
             self.threads,
+            max_bam_records,
             progress,
         )
     }
