@@ -205,6 +205,19 @@ impl IlluminaPartial {
         let mut emitted_r2 = r2.clone();
         emitted_r2.id = NgsNormalizerSupport::normalized_molecule_id(&r2.id, 0);
 
+        if trim_r2_primer_readthrough(r1, &mut emitted_r2, &primer_match) {
+            self.stats.report("r2_primer_readthrough");
+
+            if emitted_r2.seq.len() < config.min_insert_len {
+                self.stats.report("r2_primer_readthrough_too_short");
+                bail!(
+                    "R2 primer read-through left only {} bp (< {} bp)",
+                    emitted_r2.seq.len(),
+                    config.min_insert_len
+                );
+            }
+        }
+
         let paired_r1_record = match primer_match.get_insert(&r1.seq, &r1.qual) {
             Ok(insert) if usable_insert(&insert.seq, 30, 0.5) => {
                 self.stats.report("paired_r1_insert_found");
@@ -239,6 +252,90 @@ impl IlluminaPartial {
 
         Ok(())
     }
+}
+
+/// Remove R1-primer read-through from the 3' end of a raw R2 read.
+///
+/// R2 is deliberately kept in its original sequencing orientation.  Instead,
+/// the observed R1 primer structure is reverse-complemented into the order in
+/// which R2 encounters it after sequencing through the biological insert.
+///
+/// Trimming is only accepted once the match reaches through the complete UMI.
+/// This makes the molecule-specific UMI the minimum evidence for read-through;
+/// any primer sequence between the insert and UMI must match as well.  Bases
+/// beyond the UMI are checked too when R2 contains them.
+fn trim_r2_primer_readthrough(
+    r1: &FastqRecord,
+    r2: &mut FastqRecord,
+    primer_match: &sc_primer::PrimerMatch,
+) -> bool {
+    use sc_primer::Orientation;
+
+    // Nelrune's ordinary paired-end path expects the primer structure on the
+    // forward R1.  Do not guess paired-end geometry for a reverse-complement
+    // primer hit: leaving R2 untouched is safer than changing strandedness.
+    if primer_match.orientation != Orientation::Forward {
+        return false;
+    }
+
+    if primer_match.primer_start >= primer_match.insert_start
+        || primer_match.insert_start > r1.seq.len()
+    {
+        return false;
+    }
+
+    let Some(umi_segment) = primer_match
+        .segments
+        .iter()
+        .find(|segment| segment.name == "UMI")
+    else {
+        return false;
+    };
+
+    let Some(umi_start) = umi_segment.ranges.iter().map(|range| range.start).min() else {
+        return false;
+    };
+
+    if umi_start < primer_match.primer_start {
+        return false;
+    }
+
+    // In R2-facing orientation the primer-adjacent bases come first.  Matching
+    // through the UMI therefore means matching from insert_start backwards to
+    // the beginning of the UMI on R1.
+    let minimum_match_len = primer_match.insert_start - umi_start;
+    if minimum_match_len == 0 {
+        return false;
+    }
+
+    let r1_primer = &r1.seq[primer_match.primer_start..primer_match.insert_start];
+    let expected_r2 = PrimerDetector::reverse_complement(r1_primer);
+    if minimum_match_len > expected_r2.len() || r2.seq.len() < minimum_match_len {
+        return false;
+    }
+
+    let minimum_anchor = &expected_r2[..minimum_match_len];
+
+    for start in 0..=r2.seq.len() - minimum_match_len {
+        if &r2.seq[start..start + minimum_match_len] != minimum_anchor {
+            continue;
+        }
+
+        // Once the UMI has matched, require every additional R1-primer base
+        // present in R2 to agree too.  R2 may extend beyond primer_start into
+        // sequence not described by the grammar; those extra bases are ignored
+        // because the UMI threshold has already established read-through.
+        let comparable = (r2.seq.len() - start).min(expected_r2.len());
+        if r2.seq[start..start + comparable] != expected_r2[..comparable] {
+            continue;
+        }
+
+        r2.seq.truncate(start);
+        r2.qual.truncate(start);
+        return true;
+    }
+
+    false
 }
 
 fn usable_insert(seq: &[u8], min_len: usize, max_single_base_fraction: f64) -> bool {

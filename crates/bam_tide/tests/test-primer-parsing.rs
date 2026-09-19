@@ -39,6 +39,11 @@ fn fastq(id: &str, seq: &[u8]) -> FastqRecord {
     FastqRecord::new(id, seq, &vec![b'I'; seq.len()])
 }
 
+
+fn reverse_complement(seq: &[u8]) -> Vec<u8> {
+    PrimerDetector::reverse_complement(seq)
+}
+
 #[test]
 fn illumina_normalize_pair_splits_cell_umi_and_insert() -> Result<()> {
     let config = test_config();
@@ -310,6 +315,107 @@ fn bd_rhapsody_normalizer_uses_corrected_cell_barcode() -> Result<()> {
     assert_eq!(
         partial.candidates[0].dedup_key, partial.candidates[1].dedup_key,
         "different observed errors in one corrected BD cell must not split molecule identity",
+    );
+
+    Ok(())
+}
+
+
+#[test]
+fn illumina_normalize_pair_trims_r2_readthrough_at_r1_primer_boundary() -> Result<()> {
+    let config = test_config();
+
+    // Build one physical top-strand molecule first.  R1 reads left-to-right;
+    // raw R2 is derived from the opposite end and is NEVER re-oriented by the
+    // normalizer.
+    let cell = b"ACGTTGCA";
+    let umi = b"CCTAGG";
+    let biological = b"GATTACAGTCGATCGTACGATGCTAGCTACGTA";
+
+    let mut molecule = Vec::new();
+    molecule.extend_from_slice(cell);
+    molecule.extend_from_slice(umi);
+    molecule.extend_from_slice(biological);
+
+    let r1 = fastq("read1", &molecule);
+
+    // Make R2 long enough to traverse the complete biological insert, the
+    // complete UMI, and four CELL bases.  In raw R2 orientation this is:
+    // RC(biological) + RC(UMI) + RC(last four CELL bases).
+    let r2_len = biological.len() + umi.len() + 4;
+    let r2_seq = reverse_complement(&molecule[molecule.len() - r2_len..]);
+    let r2 = fastq("read1", &r2_seq);
+
+    let expected_biological_r2 = reverse_complement(biological);
+    assert!(r2.seq.starts_with(&expected_biological_r2));
+    assert_ne!(r2.seq, expected_biological_r2);
+
+    let mut partial = IlluminaPartial::new();
+    let feature_mapper = fast_tag_mapper::FastTagMapper::new();
+    partial.normalize_pair(&r1, &r2, &config, &feature_mapper)?;
+
+    assert_eq!(partial.candidates.len(), 1);
+    let candidate = &partial.candidates[0];
+
+    assert_eq!(
+        candidate.fastq_record.seq, expected_biological_r2,
+        "R2 must be trimmed at the start of R1-primer read-through without being flipped"
+    );
+    assert_eq!(
+        candidate.fastq_record.qual.len(),
+        expected_biological_r2.len(),
+        "R2 qualities must be trimmed with the sequence"
+    );
+    assert_eq!(candidate.read_tag.cell_seq, cell);
+    assert_eq!(candidate.read_tag.umi_seq, umi);
+    assert_eq!(
+        partial
+            .stats
+            .reads_log
+            .get("r2_primer_readthrough")
+            .copied()
+            .unwrap_or(0),
+        1
+    );
+
+    Ok(())
+}
+
+#[test]
+fn illumina_normalize_pair_does_not_trim_biological_umi_lookalike() -> Result<()> {
+    let config = test_config();
+
+    let cell = b"ACGTTGCA";
+    let umi = b"CCTAGG";
+    let mut r1_seq = Vec::new();
+    r1_seq.extend_from_slice(cell);
+    r1_seq.extend_from_slice(umi);
+    r1_seq.extend_from_slice(b"GATTACAGATTACAGATTACAGATTACAGATTACA");
+    let r1 = fastq("read1", &r1_seq);
+
+    // Contains RC(UMI) internally, but the following sequence does not agree
+    // with the remaining R1 primer structure.  This is biological sequence,
+    // not paired-end read-through, and must survive byte-for-byte.
+    let rc_umi = reverse_complement(umi);
+    let mut r2_seq = b"TGCATGCATGCATGCATGCATGCATGCATGCA".to_vec();
+    r2_seq.extend_from_slice(&rc_umi);
+    r2_seq.extend_from_slice(b"GGGGGGGGGG");
+    let r2 = fastq("read1", &r2_seq);
+
+    let mut partial = IlluminaPartial::new();
+    let feature_mapper = fast_tag_mapper::FastTagMapper::new();
+    partial.normalize_pair(&r1, &r2, &config, &feature_mapper)?;
+
+    assert_eq!(partial.candidates.len(), 1);
+    assert_eq!(partial.candidates[0].fastq_record.seq, r2_seq);
+    assert_eq!(
+        partial
+            .stats
+            .reads_log
+            .get("r2_primer_readthrough")
+            .copied()
+            .unwrap_or(0),
+        0
     );
 
     Ok(())
