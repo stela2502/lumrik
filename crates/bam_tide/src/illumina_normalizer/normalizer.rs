@@ -256,14 +256,14 @@ impl IlluminaPartial {
 
 /// Remove R1-primer read-through from the 3' end of a raw R2 read.
 ///
-/// R2 is deliberately kept in its original sequencing orientation.  Instead,
-/// the observed R1 primer structure is reverse-complemented into the order in
-/// which R2 encounters it after sequencing through the biological insert.
+/// Both the expected R1-derived read-through sequence and the complete raw R2
+/// are encoded once with IntToStr.  The hot scan then compares packed 4-base
+/// u8 values only; no per-position strings, reverse complements, or slices are
+/// allocated.
 ///
-/// Trimming is only accepted once the match reaches through the complete UMI.
-/// This makes the molecule-specific UMI the minimum evidence for read-through;
-/// any primer sequence between the insert and UMI must match as well.  Bases
-/// beyond the UMI are checked too when R2 contains them.
+/// A four-base match is deliberately sufficient only when exactly four R2
+/// bases remain.  For longer read-through we require a 12-base exact match.
+/// R2 itself is never reverse-complemented, preserving sequencing orientation.
 fn trim_r2_primer_readthrough(
     r1: &FastqRecord,
     r2: &mut FastqRecord,
@@ -271,62 +271,81 @@ fn trim_r2_primer_readthrough(
 ) -> bool {
     use sc_primer::Orientation;
 
-    // Nelrune's ordinary paired-end path expects the primer structure on the
-    // forward R1.  Do not guess paired-end geometry for a reverse-complement
-    // primer hit: leaving R2 untouched is safer than changing strandedness.
-    if primer_match.orientation != Orientation::Forward {
-        return false;
-    }
-
-    if primer_match.primer_start >= primer_match.insert_start
+    if primer_match.orientation != Orientation::Forward
+        || primer_match.primer_start >= primer_match.insert_start
         || primer_match.insert_start > r1.seq.len()
     {
         return false;
     }
 
-    let Some(umi_segment) = primer_match
-        .segments
-        .iter()
-        .find(|segment| segment.name == "UMI")
-    else {
-        return false;
-    };
-
-    let Some(umi_start) = umi_segment.ranges.iter().map(|range| range.start).min() else {
-        return false;
-    };
-
-    if umi_start < primer_match.primer_start {
-        return false;
-    }
-
-    // In R2-facing orientation the primer-adjacent bases come first.  Matching
-    // through the UMI therefore means matching from insert_start backwards to
-    // the beginning of the UMI on R1.
-    let minimum_match_len = primer_match.insert_start - umi_start;
-    if minimum_match_len == 0 {
-        return false;
-    }
-
     let r1_primer = &r1.seq[primer_match.primer_start..primer_match.insert_start];
-    let expected_r2 = PrimerDetector::reverse_complement(r1_primer);
-    if minimum_match_len > expected_r2.len() || r2.seq.len() < minimum_match_len {
+    if r1_primer.len() < 4 || r2.seq.len() < 4 {
         return false;
     }
 
-    let minimum_anchor = &expected_r2[..minimum_match_len];
+    // Prepare the R1 structure for raw-R2 orientation; never flip R2.
+    let expected_seq = PrimerDetector::reverse_complement(r1_primer);
+    let Ok(expected) = IntToStr::try_new(&expected_seq) else {
+        return false;
+    };
+    let Ok(encoded_r2) = IntToStr::try_new(&r2.seq) else {
+        return false;
+    };
 
-    for start in 0..=r2.seq.len() - minimum_match_len {
-        if &r2.seq[start..start + minimum_match_len] != minimum_anchor {
+    // Four consecutive packed primer clips are cheap to prepare.  The first
+    // three provide the required 12-bp proof; the fourth is retained so this
+    // path can cheaply extend confirmation without changing representation.
+    let primer_clips = [
+        expected.packed_u8_at(0),
+        expected.packed_u8_at(4),
+        expected.packed_u8_at(8),
+        expected.packed_u8_at(12),
+    ];
+    let Some(first_clip) = primer_clips[0] else {
+        return false;
+    };
+
+    for start in 0..=r2.seq.len() - 4 {
+        if encoded_r2.packed_u8_at(start) != Some(first_clip) {
             continue;
         }
 
-        // Once the UMI has matched, require every additional R1-primer base
-        // present in R2 to agree too.  R2 may extend beyond primer_start into
-        // sequence not described by the grammar; those extra bases are ignored
-        // because the UMI threshold has already established read-through.
-        let comparable = (r2.seq.len() - start).min(expected_r2.len());
-        if r2.seq[start..start + comparable] != expected_r2[..comparable] {
+        let remaining = r2.seq.len() - start;
+
+        // If only four bases would be removed, a false positive costs almost
+        // no evidence and the user explicitly prefers trimming it.
+        if remaining == 4 {
+            r2.seq.truncate(start);
+            r2.qual.truncate(start);
+            return true;
+        }
+
+        // Any longer trim needs 12 bp of exact molecule-specific agreement.
+        if remaining < 12 || expected_seq.len() < 12 {
+            continue;
+        }
+
+        let Some(second_clip) = primer_clips[1] else {
+            continue;
+        };
+        let Some(third_clip) = primer_clips[2] else {
+            continue;
+        };
+
+        if encoded_r2.packed_u8_at(start + 4) != Some(second_clip)
+            || encoded_r2.packed_u8_at(start + 8) != Some(third_clip)
+        {
+            continue;
+        }
+
+        // IntToStr intentionally maps N to A.  For this trimming decision we
+        // require literal A/C/G/T evidence, so reject a packed hit containing
+        // ambiguous bases before calling it exact.
+        if !r2.seq[start..start + 12]
+            .iter()
+            .chain(expected_seq[..12].iter())
+            .all(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
+        {
             continue;
         }
 

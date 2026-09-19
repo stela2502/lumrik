@@ -7,7 +7,7 @@ use sc_primer::Orientation;
 //use scdata::cell_data::GeneUmiHash;
 use scdata::{MatrixValueType, Scdata};
 
-pub const CHUNK_SIZE: usize = 100_000;
+pub const CHUNK_SIZE: usize = 500_000;
 
 #[derive(Debug, Clone)]
 pub struct NormalizedMolecule {

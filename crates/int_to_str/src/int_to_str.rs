@@ -248,6 +248,27 @@ impl IntToStr {
         self.u8_encoded.first().copied().unwrap_or(0)
     }
 
+    /// Pack four bases starting at an arbitrary base offset.
+    ///
+    /// This reads directly from the existing 2-bit representation, so callers
+    /// can scan a packed sequence without allocating 4-base DNA slices or
+    /// re-encoding them. Returns `None` when fewer than four bases remain.
+    #[inline]
+    pub fn packed_u8_at(&self, base_offset: usize) -> Option<u8> {
+        if base_offset.checked_add(4)? > self.size {
+            return None;
+        }
+
+        let mut packed = 0u8;
+        for target_pos in 0..4 {
+            let source_pos = base_offset + target_pos;
+            let source_byte = self.u8_encoded[source_pos / 4];
+            let base = (source_byte >> ((source_pos % 4) * 2)) & 0b11;
+            packed |= base << (target_pos * 2);
+        }
+        Some(packed)
+    }
+
     /// Return the maximally informative packed byte for the final four bases.
     ///
     /// `u8_encoded.last()` is only maximally informative when the sequence
@@ -594,6 +615,17 @@ mod tests {
     #[test]
     fn test_uxx_roundtrip_aaaaaacaagaataaa() {
         roundtrip_test("AAAAAACAAGAATAAA");
+    }
+
+    #[test]
+    fn packed_u8_at_reads_unaligned_four_base_windows() {
+        let encoded = IntToStr::new(b"AACGTTGCA");
+
+        assert_eq!(encoded.packed_u8_at(0), Some(IntToStr::new(b"AACG").first_u8()));
+        assert_eq!(encoded.packed_u8_at(1), Some(IntToStr::new(b"ACGT").first_u8()));
+        assert_eq!(encoded.packed_u8_at(4), Some(IntToStr::new(b"TTGC").first_u8()));
+        assert_eq!(encoded.packed_u8_at(5), Some(IntToStr::new(b"TGCA").first_u8()));
+        assert_eq!(encoded.packed_u8_at(6), None);
     }
 
     #[test]

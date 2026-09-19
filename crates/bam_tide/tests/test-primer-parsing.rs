@@ -339,10 +339,10 @@ fn illumina_normalize_pair_trims_r2_readthrough_at_r1_primer_boundary() -> Resul
 
     let r1 = fastq("read1", &molecule);
 
-    // Make R2 long enough to traverse the complete biological insert, the
-    // complete UMI, and four CELL bases.  In raw R2 orientation this is:
-    // RC(biological) + RC(UMI) + RC(last four CELL bases).
-    let r2_len = biological.len() + umi.len() + 4;
+    // Make R2 long enough to traverse the complete biological insert and
+    // twelve bases of the R1-side structure.  Longer trims require an exact
+    // 12-bp packed match.
+    let r2_len = biological.len() + 12;
     let r2_seq = reverse_complement(&molecule[molecule.len() - r2_len..]);
     let r2 = fastq("read1", &r2_seq);
 
@@ -418,5 +418,52 @@ fn illumina_normalize_pair_does_not_trim_biological_umi_lookalike() -> Result<()
         0
     );
 
+    Ok(())
+}
+
+
+#[test]
+fn illumina_normalize_pair_trims_four_base_terminal_readthrough() -> Result<()> {
+    let config = test_config();
+    let cell = b"ACGTTGCA";
+    let umi = b"CCTAGG";
+    let biological = b"GATTACAGTCGATCGTACGATGCTAGCTACGTA";
+
+    let mut molecule = Vec::new();
+    molecule.extend_from_slice(cell);
+    molecule.extend_from_slice(umi);
+    molecule.extend_from_slice(biological);
+    let r1 = fastq("read1", &molecule);
+
+    let r2_len = biological.len() + 4;
+    let r2_seq = reverse_complement(&molecule[molecule.len() - r2_len..]);
+    let mut partial = IlluminaPartial::new();
+    let feature_mapper = fast_tag_mapper::FastTagMapper::new();
+    partial.normalize_pair(&r1, &fastq("read1", &r2_seq), &config, &feature_mapper)?;
+
+    assert_eq!(partial.candidates[0].fastq_record.seq, reverse_complement(biological));
+    Ok(())
+}
+
+#[test]
+fn illumina_normalize_pair_does_not_trim_only_eight_base_readthrough() -> Result<()> {
+    let config = test_config();
+    let cell = b"ACGTTGCA";
+    let umi = b"CCTAGG";
+    let biological = b"GATTACAGTCGATCGTACGATGCTAGCTACGTA";
+
+    let mut molecule = Vec::new();
+    molecule.extend_from_slice(cell);
+    molecule.extend_from_slice(umi);
+    molecule.extend_from_slice(biological);
+    let r1 = fastq("read1", &molecule);
+
+    let r2_len = biological.len() + 8;
+    let r2_seq = reverse_complement(&molecule[molecule.len() - r2_len..]);
+    let mut partial = IlluminaPartial::new();
+    let feature_mapper = fast_tag_mapper::FastTagMapper::new();
+    partial.normalize_pair(&r1, &fastq("read1", &r2_seq), &config, &feature_mapper)?;
+
+    assert_eq!(partial.candidates[0].fastq_record.seq, r2_seq);
     Ok(())
 }
