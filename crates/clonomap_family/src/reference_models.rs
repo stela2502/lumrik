@@ -41,6 +41,49 @@ impl ReferenceModels {
     }
 
     pub fn resolve_receptor(&mut self, receptor: &mut Receptor, hard_identity: f64) -> bool {
+        self.resolve_receptor_for_sample(receptor, hard_identity, None)
+    }
+
+    /// Register a repertoire-level mutation-distance outlier as a hypothetical
+    /// reference model. Unlike `resolve_receptor_for_sample`, the decision that
+    /// this receptor deserves a model has already been made by ClonoMap's global
+    /// background pass, so there is no second identity threshold here. Sequence
+    /// extraction/sanity checks remain exactly the same and persistent identity
+    /// is still owned by reference_curator.
+    pub fn hypothesize_receptor_for_sample(&mut self, receptor: &mut Receptor, sample: Option<&str>) -> bool {
+        if !matches!(receptor.chain.as_str(), "IGH" | "IGK" | "IGL") { return false; }
+        let original_v = receptor.v.clone();
+        let Some(candidate_v) = candidate_v_fragment(receptor, self.technical_detector.as_ref()) else { return false; };
+
+        if let Some(entry) = self.entries.iter_mut().find(|entry| {
+            entry.chain == receptor.chain && entry.original_v == original_v &&
+            self.curator.candidate(&entry.id).is_some_and(|candidate| {
+                let model = candidate.resolved.as_ref().map(|r| r.sequence.as_slice()).unwrap_or(&candidate.sequence);
+                align_fragment(&String::from_utf8_lossy(model), &candidate_v).is_some_and(|m| m.identity >= 0.75)
+            })
+        }) {
+            entry.observations += 1;
+            entry.evidence_reads += receptor.evidence_reads;
+            receptor.v = entry.id.clone();
+            return true;
+        }
+
+        let observation = Observation {
+            source: "clonomap_family:global_mutation_outlier".into(),
+            sample: sample.map(str::to_string),
+            run: None,
+            kind: format!("hypothetical_v:{}:{}", receptor.chain, original_v),
+            support: receptor.evidence_reads as u64,
+        };
+        let Ok(id) = self.curator.observe(candidate_v.as_bytes(), observation) else { return false; };
+        self.entries.push(ReferenceModelEntry {
+            id: id.clone(), chain: receptor.chain.clone(), original_v, observations: 1, evidence_reads: receptor.evidence_reads,
+        });
+        receptor.v = id;
+        true
+    }
+
+    pub fn resolve_receptor_for_sample(&mut self, receptor: &mut Receptor, hard_identity: f64, sample: Option<&str>) -> bool {
         if receptor.evidence_reads < 2 { return false; }
         if !matches!(receptor.chain.as_str(), "IGH" | "IGK" | "IGL") { return false; }
         let original_v = receptor.v.clone();
@@ -67,7 +110,7 @@ impl ReferenceModels {
 
         let observation = Observation {
             source: "clonomap_family".into(),
-            sample: None,
+            sample: sample.map(str::to_string),
             run: None,
             kind: format!("reconstructed_v:{}:{}", receptor.chain, original_v),
             support: receptor.evidence_reads as u64,

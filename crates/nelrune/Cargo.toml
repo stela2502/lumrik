@@ -20,6 +20,7 @@ sc-mapper = { path = "../sc-mapper" }
 sc_primer = { path = "../sc_primer" }
 scdata = { path="../scdata" }
 rust-htslib = { workspace = true }
+reference_curator = { path = "../reference_curator" }
 
 [dev-dependencies]
 flate2 = "1"

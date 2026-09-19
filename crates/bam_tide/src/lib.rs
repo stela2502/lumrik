@@ -7,6 +7,7 @@ pub mod index;
 pub mod results;
 
 // Data structures / IO
+pub mod alignment_evidence;
 pub mod bed_data;
 pub mod data_iter;
 pub mod fastq;

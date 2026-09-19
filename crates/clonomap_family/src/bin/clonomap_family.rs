@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 #[command(author, version, about = "Validate ClonoMap receptor families from a Lumrik VDJ output directory without plotting")]
 struct Args {
     /// Lumrik/nelrune-vdj output directory containing airr_rearrangements.tsv and vdj_calls.tsv
-    #[arg(long)]
-    vdj_out: PathBuf,
+    #[arg(long, num_args = 1..)]
+    vdj_out: Vec<PathBuf>,
     /// Output directory for family and rejection reports
     #[arg(long)]
     out: PathBuf,
@@ -50,6 +50,7 @@ struct Args {
 #[derive(Clone)]
 struct CallRow {
     cell: String,
+    source: String,
     receptor: Receptor,
     productive: bool,
 }
@@ -71,15 +72,35 @@ fn main() -> Result<()> {
         ..FamilyConfig::default()
     };
 
-    let mut rows = read_vdj_output(&args.vdj_out)?;
+    let sources = input_sources(&args.vdj_out)?;
+    let mut rows = Vec::new();
+    for (source, dir) in &sources {
+        let mut input = read_vdj_output(dir, source)?;
+        println!("Loaded {} receptor calls from {} ({})", input.len(), source, dir.display());
+        rows.append(&mut input);
+    }
     // ClonoMap discovers reference-incompatible fragments; reference_curator
     // owns their persistent identity, resolution state and external evidence.
-    let mut novel_v = ReferenceModels::open(args.reference_curator.as_deref(), &args.chemistry)
+    let curator_store = args.reference_curator.clone().unwrap_or_else(|| args.out.join("reference_curator.bin"));
+    let mut novel_v = ReferenceModels::open(Some(&curator_store), &args.chemistry)
         .map_err(anyhow::Error::msg)
         .context("opening reference curator")?;
-    let mut novel_receptors = 0usize;
+
+    // Learn the ordinary distance-to-supplied-germline background from the full
+    // repertoire, before any family-size or CDR3 grouping can bias it. HC and LC
+    // have separate backgrounds. Receptors beyond mean + 2 SD receive a
+    // hypothetical V model through reference_curator, then the normal ClonoMap
+    // family machinery starts from scratch with those augmented assignments.
+    let refinement = refine_global_reference_outliers(&mut rows, &mut novel_v);
+    println!("\nGlobal reference refinement (max distance from supplied germline)");
+    print_refinement_line("HC", &refinement.hc);
+    print_refinement_line("LC", &refinement.lc);
+
+    let mut novel_receptors = refinement.hc.hypothesized + refinement.lc.hypothesized;
     for row in &mut rows {
-        if row.productive && novel_v.resolve_receptor(&mut row.receptor, cfg.hard_alignment_identity) { novel_receptors += 1; }
+        if row.productive && !row.receptor.v.starts_with("RC-")
+            && novel_v.resolve_receptor_for_sample(&mut row.receptor, cfg.hard_alignment_identity, Some(&row.source))
+        { novel_receptors += 1; }
     }
     let mut by_cell: BTreeMap<String, Vec<CallRow>> = BTreeMap::new();
     for row in rows { by_cell.entry(row.cell.clone()).or_default().push(row); }
@@ -143,11 +164,10 @@ fn main() -> Result<()> {
         .filter_map(|chemistry| PrimerDetector::from_chemistry(chemistry).ok())
         .collect();
     write_cell_report(&args.out.join("cells.tsv"), &families, &cell_id_detectors)?;
+    write_overlap_reports(&args.out, &families)?;
     write_reference_candidate_report(&args.out.join("reference_candidates.tsv"), &novel_v)?;
-    if let Some(store) = &args.reference_curator {
-        novel_v.save(store).map_err(anyhow::Error::msg)
-            .with_context(|| format!("saving reference curator {}", store.display()))?;
-    }
+    novel_v.save(&curator_store).map_err(anyhow::Error::msg)
+        .with_context(|| format!("saving reference curator {}", curator_store.display()))?;
     write_unassigned(&args.out.join("hc_unassigned.tsv"), &unassigned)?;
     if args.plots { write_family_plots(&args.out.join("plots"), &families, args.min_family_size, args.max_pearson_p, args.radial_layout)?; }
 
@@ -212,6 +232,65 @@ struct HclcAnalysis {
 
 fn mutation_distance(m: &MutationMeasurement) -> usize {
     m.substitutions + m.indels.iter().map(|x| x.len).sum::<usize>()
+}
+
+#[derive(Clone, Copy, Default)]
+struct RefinementStats {
+    n: usize,
+    mean: Option<f64>,
+    sd: Option<f64>,
+    threshold: Option<f64>,
+    outliers: usize,
+    hypothesized: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+struct GlobalRefinement { hc: RefinementStats, lc: RefinementStats }
+
+fn distance_stats(values: &[usize]) -> RefinementStats {
+    if values.is_empty() { return RefinementStats::default(); }
+    let n = values.len();
+    let mean = values.iter().map(|&x| x as f64).sum::<f64>() / n as f64;
+    let variance = values.iter().map(|&x| { let d = x as f64 - mean; d * d }).sum::<f64>() / n as f64;
+    let sd = variance.sqrt();
+    RefinementStats { n, mean: Some(mean), sd: Some(sd), threshold: Some(mean + 2.0 * sd), ..Default::default() }
+}
+
+fn supplied_germline_distance(row: &CallRow) -> Option<usize> {
+    if !row.productive || !receptor_complete(&row.receptor) { return None; }
+    align_fragment(&row.receptor.naive, &row.receptor.observed).map(|m| mutation_distance(&m))
+}
+
+fn refine_global_reference_outliers(rows: &mut [CallRow], models: &mut ReferenceModels) -> GlobalRefinement {
+    let hc_values: Vec<usize> = rows.iter().filter(|r| r.receptor.chain == "IGH").filter_map(supplied_germline_distance).collect();
+    let lc_values: Vec<usize> = rows.iter().filter(|r| matches!(r.receptor.chain.as_str(), "IGK" | "IGL")).filter_map(supplied_germline_distance).collect();
+    let mut result = GlobalRefinement { hc: distance_stats(&hc_values), lc: distance_stats(&lc_values) };
+
+    for row in rows {
+        let stats = match row.receptor.chain.as_str() {
+            "IGH" => &mut result.hc,
+            "IGK" | "IGL" => &mut result.lc,
+            _ => continue,
+        };
+        let Some(threshold) = stats.threshold else { continue; };
+        let Some(distance) = supplied_germline_distance(row) else { continue; };
+        if distance as f64 <= threshold { continue; }
+        stats.outliers += 1;
+        if models.hypothesize_receptor_for_sample(&mut row.receptor, Some(&row.source)) {
+            stats.hypothesized += 1;
+        }
+    }
+    result
+}
+
+fn print_refinement_line(label: &str, stats: &RefinementStats) {
+    match (stats.mean, stats.sd, stats.threshold) {
+        (Some(mean), Some(sd), Some(threshold)) => println!(
+            "  {label}: n={} mean={mean:.2} SD={sd:.2} threshold={threshold:.2} outliers={} hypothetical models assigned={}",
+            stats.n, stats.outliers, stats.hypothesized
+        ),
+        _ => println!("  {label}: no evaluable receptors"),
+    }
 }
 
 fn pearson(x: &[f64], y: &[f64]) -> PearsonStat {
@@ -363,13 +442,13 @@ fn plot_signal_suffix(a: &FamilyPlotAnalysis, family_size: usize, min_size: usiz
 
 fn write_family_plots(out: &Path, families: &[Family], min_size: usize, max_p: f64, radial_layout: bool) -> Result<()> {
     create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
-    for family in families.iter().filter(|f| family_is_selected(f, min_size, max_p)) {
-        write_one_family_plot(out, family, min_size, max_p, radial_layout)?;
+    for (plot_index, family) in families.iter().filter(|f| family_is_selected(f, min_size, max_p)).enumerate() {
+        write_one_family_plot(out, family, plot_index + 1, min_size, max_p, radial_layout)?;
     }
     Ok(())
 }
 
-fn write_one_family_plot(out: &Path, family: &Family, min_size: usize, max_p: f64, radial_layout: bool) -> Result<()> {
+fn write_one_family_plot(out: &Path, family: &Family, plot_index: usize, min_size: usize, max_p: f64, radial_layout: bool) -> Result<()> {
     // Plotting consumes the frozen Family.  It deliberately uses the mutation
     // measurements already accepted by HC/LC family logic; it never realigns a
     // receptor or changes membership.  Until span-aware positional mutation
@@ -452,10 +531,10 @@ fn write_one_family_plot(out: &Path, family: &Family, min_size: usize, max_p: f6
     lc_order.dedup();
     if lc_cat.iter().any(|x| x == "unpaired") { lc_order.push("unpaired".to_string()); }
 
-    let analysis = family_plot_analysis(family);
-    let mut dirname = family.name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' }).collect::<String>();
-    dirname.push_str(&plot_signal_suffix(&analysis, family.members.len(), min_size, max_p));
-    let dir = out.join(dirname);
+    // Keep filesystem names deliberately short. Family/LC identities and the
+    // selection statistics belong in the plot title and tabular reports; putting
+    // them into a directory component can exceed Linux NAME_MAX (typically 255).
+    let dir = out.join(format!("family_{plot_index:04}"));
     create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let title = format!("{} | {} cells | {} LC clones", family.name, family.members.len(), family.light_clones.len());
     let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
@@ -513,7 +592,41 @@ fn reassign_cells(families: &mut [Family], rejected: Vec<(String, CellReceptor)>
     unassigned
 }
 
-fn read_vdj_output(dir: &Path) -> Result<Vec<CallRow>> {
+const CELL_SCOPE_SEPARATOR: char = '\u{1f}';
+
+fn scoped_cell_id(source: &str, cell: &str) -> String {
+    format!("{source}{CELL_SCOPE_SEPARATOR}{cell}")
+}
+
+fn split_scoped_cell_id(cell: &str) -> (&str, &str) {
+    cell.split_once(CELL_SCOPE_SEPARATOR).unwrap_or(("input", cell))
+}
+
+fn source_label(dir: &Path) -> String {
+    let name = dir.file_name().and_then(|x| x.to_str()).unwrap_or("input");
+    if name == "vdj_out" {
+        dir.parent().and_then(Path::parent).and_then(Path::file_name).and_then(|x| x.to_str())
+            .or_else(|| dir.parent().and_then(Path::file_name).and_then(|x| x.to_str()))
+            .unwrap_or("input").to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+fn input_sources(paths: &[PathBuf]) -> Result<Vec<(String, PathBuf)>> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let source = source_label(path);
+        if !seen.insert(source.clone()) {
+            bail!("multiple --vdj-out inputs resolve to source label {source:?}; use distinct sample directories");
+        }
+        out.push((source, path.clone()));
+    }
+    Ok(out)
+}
+
+fn read_vdj_output(dir: &Path, source: &str) -> Result<Vec<CallRow>> {
     let airr_path = dir.join("airr_rearrangements.tsv");
     let calls_path = dir.join("vdj_calls.tsv");
     if !airr_path.is_file() { bail!("missing {}", airr_path.display()); }
@@ -562,7 +675,8 @@ fn read_vdj_output(dir: &Path) -> Result<Vec<CallRow>> {
             continue;
         };
         out.push(CallRow {
-            cell: cell.to_string(),
+            cell: scoped_cell_id(source, cell),
+            source: source.to_string(),
             productive: productive_value(fields[productive_i]),
             receptor: Receptor {
                 id: id.to_string(),
@@ -777,7 +891,7 @@ fn color_for(encoded: &str, cell: &str) -> String {
 
 fn write_cell_report(path: &Path, families: &[Family], cell_id_detectors: &[PrimerDetector]) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
-    writeln!(w, "cell\tbd_cell_id\tfamily\tlc_clone\thc_mutation_count\tlc_mutation_count\ttotal_mutation_count\thc_distance\tlc_distance\ttotal_distance\tfamily_pearson_abundance_hc_n\tfamily_pearson_abundance_hc_r\tfamily_pearson_abundance_hc_p\tfamily_pearson_abundance_lc_n\tfamily_pearson_abundance_lc_r\tfamily_pearson_abundance_lc_p\tfamily_pearson_abundance_paired_n\tfamily_pearson_abundance_paired_r\tfamily_pearson_abundance_paired_p\tfamily_pearson_hc_lc_n\tfamily_pearson_hc_lc_r\tfamily_pearson_hc_lc_p\thclc_pearson_abundance_hc_n\thclc_pearson_abundance_hc_r\thclc_pearson_abundance_hc_p\thclc_pearson_abundance_lc_n\thclc_pearson_abundance_lc_r\thclc_pearson_abundance_lc_p\thclc_pearson_abundance_paired_n\thclc_pearson_abundance_paired_r\thclc_pearson_abundance_paired_p\thclc_pearson_hc_lc_n\thclc_pearson_hc_lc_r\thclc_pearson_hc_lc_p\tmst_rooted_isotype_svg_hex\tmst_rooted_light_chain_svg_hex\tmst_rooted_hc_depth_svg_hex\tmst_rooted_lc_depth_svg_hex\tmst_rooted_paired_depth_svg_hex")?;
+    writeln!(w, "source\tcell\tbd_cell_id\tfamily\tlc_clone\thc_mutation_count\tlc_mutation_count\ttotal_mutation_count\thc_distance\tlc_distance\ttotal_distance\tfamily_pearson_abundance_hc_n\tfamily_pearson_abundance_hc_r\tfamily_pearson_abundance_hc_p\tfamily_pearson_abundance_lc_n\tfamily_pearson_abundance_lc_r\tfamily_pearson_abundance_lc_p\tfamily_pearson_abundance_paired_n\tfamily_pearson_abundance_paired_r\tfamily_pearson_abundance_paired_p\tfamily_pearson_hc_lc_n\tfamily_pearson_hc_lc_r\tfamily_pearson_hc_lc_p\thclc_pearson_abundance_hc_n\thclc_pearson_abundance_hc_r\thclc_pearson_abundance_hc_p\thclc_pearson_abundance_lc_n\thclc_pearson_abundance_lc_r\thclc_pearson_abundance_lc_p\thclc_pearson_abundance_paired_n\thclc_pearson_abundance_paired_r\thclc_pearson_abundance_paired_p\thclc_pearson_hc_lc_n\thclc_pearson_hc_lc_r\thclc_pearson_hc_lc_p\tmst_rooted_isotype_svg_hex\tmst_rooted_light_chain_svg_hex\tmst_rooted_hc_depth_svg_hex\tmst_rooted_lc_depth_svg_hex\tmst_rooted_paired_depth_svg_hex")?;
     for family in families {
         let a = family_plot_analysis(family);
         let hc_by_cell: HashMap<&str, &AlignedCell> = family.members.iter().map(|m| (m.cell.cell_id.as_str(), m)).collect();
@@ -789,9 +903,10 @@ fn write_cell_report(path: &Path, families: &[Family], cell_id_detectors: &[Prim
                 emitted.insert(lm.cell.clone());
                 let hc_count = hm.hc_mutations.mutation_events(); let lc_count = lm.mutations.mutation_events();
                 let hc_dist = mutation_distance(&hm.hc_mutations); let lc_dist = mutation_distance(&lm.mutations);
-                let bd_cell_id = bd_cell_id_for_seq(&lm.cell, cell_id_detectors);
-                writeln!(w, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    lm.cell, bd_cell_id, family.name, lc.name, hc_count, lc_count, hc_count + lc_count, hc_dist, lc_dist, hc_dist + lc_dist,
+                let (source, cell) = split_scoped_cell_id(&lm.cell);
+                let bd_cell_id = bd_cell_id_for_seq(cell, cell_id_detectors);
+                writeln!(w, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    source, cell, bd_cell_id, family.name, lc.name, hc_count, lc_count, hc_count + lc_count, hc_dist, lc_dist, hc_dist + lc_dist,
                     a.abundance_hc.n, fmt_stat(a.abundance_hc.r), fmt_stat(a.abundance_hc.p), a.abundance_lc.n, fmt_stat(a.abundance_lc.r), fmt_stat(a.abundance_lc.p), a.abundance_paired.n, fmt_stat(a.abundance_paired.r), fmt_stat(a.abundance_paired.p), a.hc_lc.n, fmt_stat(a.hc_lc.r), fmt_stat(a.hc_lc.p),
                     hs.abundance_hc.n, fmt_stat(hs.abundance_hc.r), fmt_stat(hs.abundance_hc.p), hs.abundance_lc.n, fmt_stat(hs.abundance_lc.r), fmt_stat(hs.abundance_lc.p), hs.abundance_paired.n, fmt_stat(hs.abundance_paired.r), fmt_stat(hs.abundance_paired.p), hs.hc_lc.n, fmt_stat(hs.hc_lc.r), fmt_stat(hs.hc_lc.p),
                     color_for(&a.isotype_hex, &lm.cell), color_for(&a.light_chain_hex, &lm.cell), color_for(&a.hc_depth_hex, &lm.cell), color_for(&a.lc_depth_hex, &lm.cell), color_for(&a.paired_depth_hex, &lm.cell))?;
@@ -800,9 +915,10 @@ fn write_cell_report(path: &Path, families: &[Family], cell_id_detectors: &[Prim
         for hm in &family.members {
             if emitted.contains(&hm.cell.cell_id) { continue; }
             let hc_count = hm.hc_mutations.mutation_events(); let hc_dist = mutation_distance(&hm.hc_mutations);
-            let bd_cell_id = bd_cell_id_for_seq(&hm.cell.cell_id, cell_id_detectors);
-            writeln!(w, "{}\t{}\t{}\tunpaired\t{}\tNA\t{}\t{}\tNA\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t{}\t{}\t{}\t{}\t{}",
-                hm.cell.cell_id, bd_cell_id, family.name, hc_count, hc_count, hc_dist, hc_dist,
+            let (source, cell) = split_scoped_cell_id(&hm.cell.cell_id);
+            let bd_cell_id = bd_cell_id_for_seq(cell, cell_id_detectors);
+            writeln!(w, "{}\t{}\t{}\t{}\tunpaired\t{}\tNA\t{}\t{}\tNA\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t{}\t{}\t{}\t{}\t{}",
+                source, cell, bd_cell_id, family.name, hc_count, hc_count, hc_dist, hc_dist,
                 a.abundance_hc.n, fmt_stat(a.abundance_hc.r), fmt_stat(a.abundance_hc.p), a.abundance_lc.n, fmt_stat(a.abundance_lc.r), fmt_stat(a.abundance_lc.p), a.abundance_paired.n, fmt_stat(a.abundance_paired.r), fmt_stat(a.abundance_paired.p), a.hc_lc.n, fmt_stat(a.hc_lc.r), fmt_stat(a.hc_lc.p),
                 color_for(&a.isotype_hex, &hm.cell.cell_id), color_for(&a.light_chain_hex, &hm.cell.cell_id), color_for(&a.hc_depth_hex, &hm.cell.cell_id), color_for(&a.lc_depth_hex, &hm.cell.cell_id), color_for(&a.paired_depth_hex, &hm.cell.cell_id))?;
         }
@@ -810,6 +926,69 @@ fn write_cell_report(path: &Path, families: &[Family], cell_id_detectors: &[Prim
     Ok(())
 }
 
+
+fn mutation_signature(m: &MutationMeasurement) -> String {
+    let substitutions = m.substitution_positions.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
+    let indels = m.indels.iter().map(|x| format!("{}{}:{}", if x.inserted { "+" } else { "-" }, x.naive_pos, x.len)).collect::<Vec<_>>().join(",");
+    format!("S[{substitutions}]I[{indels}]")
+}
+
+fn source_counts<'a>(cells: impl Iterator<Item = &'a str>) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for cell in cells {
+        let (source, _) = split_scoped_cell_id(cell);
+        *counts.entry(source.to_string()).or_default() += 1;
+    }
+    counts
+}
+
+fn counts_text(counts: &BTreeMap<String, usize>) -> String {
+    counts.iter().map(|(source, n)| format!("{source}={n}")).collect::<Vec<_>>().join(";")
+}
+
+fn write_overlap_reports(out: &Path, families: &[Family]) -> Result<()> {
+    let mut events: Vec<(String, String, String, String, BTreeMap<String, usize>)> = Vec::new();
+    for family in families {
+        let hc_counts = source_counts(family.members.iter().map(|m| m.cell.cell_id.as_str()));
+        if hc_counts.len() > 1 {
+            events.push(("HC".into(), family.name.clone(), "NA".into(), "NA".into(), hc_counts));
+        }
+        let hc_by_cell: HashMap<&str, &AlignedCell> = family.members.iter().map(|m| (m.cell.cell_id.as_str(), m)).collect();
+        for lc in &family.light_clones {
+            let lc_counts = source_counts(lc.members.iter().map(|m| m.cell.as_str()));
+            if lc_counts.len() > 1 {
+                events.push(("HC_LC".into(), family.name.clone(), lc.name.clone(), "NA".into(), lc_counts));
+            }
+            let mut signatures: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+            for lm in &lc.members {
+                let Some(hm) = hc_by_cell.get(lm.cell.as_str()) else { continue };
+                let signature = format!("HC:{}|LC:{}", mutation_signature(&hm.hc_mutations), mutation_signature(&lm.mutations));
+                signatures.entry(signature).or_default().push(lm.cell.as_str());
+            }
+            for (signature, cells) in signatures {
+                let counts = source_counts(cells.into_iter());
+                if counts.len() > 1 {
+                    events.push(("HC_LC_MUTATION_SET".into(), family.name.clone(), lc.name.clone(), signature, counts));
+                }
+            }
+        }
+    }
+    if events.is_empty() { return Ok(()); }
+
+    let mut tsv = BufWriter::new(File::create(out.join("overlap_events.tsv"))?);
+    writeln!(tsv, "event_type\tfamily\tlc_clone\tmutation_set\tsources\tsource_counts\ttotal_cells")?;
+    for (kind, family, lc, mutations, counts) in &events {
+        writeln!(tsv, "{}\t{}\t{}\t{}\t{}\t{}\t{}", kind, family, lc, mutations, counts.keys().cloned().collect::<Vec<_>>().join(";"), counts_text(counts), counts.values().sum::<usize>())?;
+    }
+
+    let mut md = BufWriter::new(File::create(out.join("overlap_events.md"))?);
+    writeln!(md, "# Cross-source ClonoMap overlaps\n")?;
+    writeln!(md, "Joint family construction found **{}** cross-source overlap events. These are derived summaries; `cells.tsv` remains the cell-level authoritative output.\n", events.len())?;
+    for (kind, family, lc, mutations, counts) in &events {
+        writeln!(md, "- **{}** — `{}`{}: {} cells ({}){}", kind, family, if lc == "NA" { String::new() } else { format!(" / `{lc}`") }, counts.values().sum::<usize>(), counts_text(counts), if mutations == "NA" { String::new() } else { format!("; mutation set `{mutations}`") })?;
+    }
+    Ok(())
+}
 
 fn bd_cell_id_for_seq(cell: &str, detectors: &[PrimerDetector]) -> String {
     detectors.iter()
@@ -821,7 +1000,7 @@ fn fmt_stat(x: Option<f64>) -> String { x.map_or("NA".into(), |v| format!("{v:.6
 
 fn write_unassigned(path:&Path,rows:&[UnassignedCell])->Result<()> {
     let mut w=BufWriter::new(File::create(path)?);
-    writeln!(w,"cell\treceptor_id\tfrom_family")?;
-    for r in rows { writeln!(w,"{}\t{}\t{}",r.cell.cell_id,r.cell.hc.id,r.from_family)?; }
+    writeln!(w,"source\tcell\treceptor_id\tfrom_family")?;
+    for r in rows { let (source, cell) = split_scoped_cell_id(&r.cell.cell_id); writeln!(w,"{}\t{}\t{}\t{}",source,cell,r.cell.hc.id,r.from_family)?; }
     Ok(())
 }

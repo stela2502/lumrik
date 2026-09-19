@@ -1452,6 +1452,7 @@ dependencies = [
  "lumrik-status",
  "mapping_info",
  "rayon",
+ "reference_curator",
  "rust-htslib",
  "sc-mapper",
  "sc_primer",

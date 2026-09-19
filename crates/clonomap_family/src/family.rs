@@ -6,6 +6,7 @@
 //! result; it does not decide family membership or recompute mutation depths.
 
 use crate::ReferenceModels;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
 pub struct Receptor {
@@ -68,6 +69,8 @@ pub struct IndelEvent {
 #[derive(Debug, Clone)]
 pub struct MutationMeasurement {
     pub substitutions: usize,
+    /// Reference coordinates of substitutions within the mutually observed span.
+    pub substitution_positions: Vec<usize>,
     pub indels: Vec<IndelEvent>,
     pub informative_pairs: usize,
     pub matching_pairs: usize,
@@ -76,6 +79,24 @@ pub struct MutationMeasurement {
 
 impl MutationMeasurement {
     pub fn mutation_events(&self) -> usize { self.substitutions + self.indels.len() }
+}
+
+#[derive(Debug, Clone)]
+pub struct SharedHcMutationReport {
+    pub family: String,
+    pub cells: usize,
+    pub lc_clusters: usize,
+    pub lc_clusters_evaluable: usize,
+    pub hc_mutation_min: Option<usize>,
+    pub hc_mutation_mean: Option<f64>,
+    pub hc_mutation_max: Option<usize>,
+    /// HC substitution positions observed in every cell of every evaluable LC cluster.
+    /// This deliberately ignores indels for the first empirical landscape.
+    pub shared_substitution_positions: Vec<usize>,
+}
+
+impl SharedHcMutationReport {
+    pub fn shared_substitutions(&self) -> usize { self.shared_substitution_positions.len() }
 }
 
 #[derive(Debug, Clone)]
@@ -283,6 +304,57 @@ impl Family {
         rows
     }
 
+    /// Summarize HC substitutions that survive across independent LC clusters.
+    ///
+    /// For each LC cluster we first intersect the HC substitution positions of
+    /// all cells represented by that cluster. We then intersect those cluster
+    /// consensus sets. Consequently a reported shared position is present in
+    /// every contributing cell, while even a 1-cell LC cluster remains valid
+    /// evidence. Families need at least two evaluable LC clusters to report a
+    /// shared set; one cluster alone cannot demonstrate cross-LC invariance.
+    pub fn shared_hc_mutation_report(&self) -> SharedHcMutationReport {
+        let hc_by_cell: std::collections::HashMap<&str, &MutationMeasurement> = self.members.iter()
+            .map(|m| (m.cell.cell_id.as_str(), &m.hc_mutations))
+            .collect();
+
+        let mut cluster_consensus = Vec::<BTreeSet<usize>>::new();
+        for lc in &self.light_clones {
+            let mut member_sets = lc.members.iter().filter_map(|member| {
+                hc_by_cell.get(member.cell.as_str()).map(|m| {
+                    m.substitution_positions.iter().copied().collect::<BTreeSet<_>>()
+                })
+            });
+            let Some(mut consensus) = member_sets.next() else { continue; };
+            for positions in member_sets {
+                consensus = consensus.intersection(&positions).copied().collect();
+            }
+            cluster_consensus.push(consensus);
+        }
+
+        let shared_substitution_positions = if cluster_consensus.len() >= 2 {
+            let mut shared = cluster_consensus[0].clone();
+            for positions in &cluster_consensus[1..] {
+                shared = shared.intersection(positions).copied().collect();
+            }
+            shared.into_iter().collect()
+        } else {
+            Vec::new()
+        };
+
+        let depths: Vec<usize> = self.members.iter().map(|m| m.hc_mutations.mutation_events()).collect();
+        let hc_mutation_mean = (!depths.is_empty()).then(|| depths.iter().sum::<usize>() as f64 / depths.len() as f64);
+        SharedHcMutationReport {
+            family: self.name.clone(),
+            cells: self.members.len(),
+            lc_clusters: self.light_clones.len(),
+            lc_clusters_evaluable: cluster_consensus.len(),
+            hc_mutation_min: depths.iter().copied().min(),
+            hc_mutation_mean,
+            hc_mutation_max: depths.iter().copied().max(),
+            shared_substitution_positions,
+        }
+    }
+
     pub fn mutation_report(&self) -> FamilyMutationReport {
         FamilyMutationReport {
             family: self.name.clone(),
@@ -425,7 +497,7 @@ fn best_light_clone(
 
 fn measure_receptor(receptor: &Receptor, novel_v: &ReferenceModels) -> MutationMeasurement {
     align_fragment(&novel_v.effective_naive(receptor), &receptor.observed).unwrap_or(MutationMeasurement {
-        substitutions: 0, indels: Vec::new(), informative_pairs: 0, matching_pairs: 0, identity: 0.0,
+        substitutions: 0, substitution_positions: Vec::new(), indels: Vec::new(), informative_pairs: 0, matching_pairs: 0, identity: 0.0,
     })
 }
 
@@ -589,10 +661,10 @@ pub fn align_fragment(reference: &str, observed: &str) -> Option<MutationMeasure
     let a=reference.as_bytes(); let b=observed.as_bytes();
     let path=fragment_path(a,b)?;
 
-    let mut informative=0; let mut matches=0; let mut substitutions=0; let mut indels=Vec::new(); let mut k=0;
-    while k<path.len(){match path[k]{(Some(ai),Some(bj))=>{let x=a[ai].to_ascii_uppercase();let y=b[bj].to_ascii_uppercase();if x!=b'N'&&y!=b'N'{informative+=1;if x==y{matches+=1}else{substitutions+=1}}k+=1},(Some(ai),None)=>{let start=ai;let mut n=0;while k<path.len()&&matches!(path[k],(Some(_),None)){n+=1;k+=1}indels.push(IndelEvent{naive_pos:start,inserted:false,len:n})},(None,Some(_))=>{let pos=path[..k].iter().rev().find_map(|x|x.0).map_or(0,|x|x+1);let mut n=0;while k<path.len()&&matches!(path[k],(None,Some(_))){n+=1;k+=1}indels.push(IndelEvent{naive_pos:pos,inserted:true,len:n})},(None,None)=>unreachable!()}}
+    let mut informative=0; let mut matches=0; let mut substitutions=0; let mut substitution_positions=Vec::new(); let mut indels=Vec::new(); let mut k=0;
+    while k<path.len(){match path[k]{(Some(ai),Some(bj))=>{let x=a[ai].to_ascii_uppercase();let y=b[bj].to_ascii_uppercase();if x!=b'N'&&y!=b'N'{informative+=1;if x==y{matches+=1}else{substitutions+=1;substitution_positions.push(ai)}}k+=1},(Some(ai),None)=>{let start=ai;let mut n=0;while k<path.len()&&matches!(path[k],(Some(_),None)){n+=1;k+=1}indels.push(IndelEvent{naive_pos:start,inserted:false,len:n})},(None,Some(_))=>{let pos=path[..k].iter().rev().find_map(|x|x.0).map_or(0,|x|x+1);let mut n=0;while k<path.len()&&matches!(path[k],(None,Some(_))){n+=1;k+=1}indels.push(IndelEvent{naive_pos:pos,inserted:true,len:n})},(None,None)=>unreachable!()}}
     if informative==0{return None} let identity=matches as f64/informative as f64;
-    Some(MutationMeasurement{substitutions,indels,informative_pairs:informative,matching_pairs:matches,identity})
+    Some(MutationMeasurement{substitutions,substitution_positions,indels,informative_pairs:informative,matching_pairs:matches,identity})
 }
 
 #[cfg(test)]
