@@ -69,8 +69,8 @@ fn main() -> Result<()> {
         let mut calls = 0usize;
         let mut checksum = 0u64;
 
-        for seq in &reads {
-            if let Some(feature_id) = mapper.map_feature_id(seq, &mut info) {
+        for read in &reads {
+            if let Some(feature_id) = mapper.map_feature_id_with_qual(&read.seq, &read.qual, &mut info) {
                 calls += 1;
                 // Keep the returned value observable so the optimizer cannot
                 // discard the mapping work.
@@ -108,18 +108,21 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn report_mapped_reads(mapper: &fast_tag_mapper::FastTagMapper, reads: &[Vec<u8>], limit: usize) {
+#[derive(Debug)]
+struct BenchRead { seq: Vec<u8>, qual: Vec<u8> }
+
+fn report_mapped_reads(mapper: &fast_tag_mapper::FastTagMapper, reads: &[BenchRead], limit: usize) {
     eprintln!("diagnostic: first {limit} mapped reads (untimed)");
 
     let mut info = MappingInfo::new(None, 0.0, 0);
     let mut shown = 0usize;
 
-    for (read_index, seq) in reads.iter().enumerate() {
+    for (read_index, read) in reads.iter().enumerate() {
         let MapStatus::Hit {
             feature_id,
             feature_index,
             hits,
-        } = mapper.map_status(seq, &mut info)
+        } = mapper.map_status_with_qual(&read.seq, &read.qual, &mut info)
         else {
             continue;
         };
@@ -141,7 +144,7 @@ fn report_mapped_reads(mapper: &fast_tag_mapper::FastTagMapper, reads: &[Vec<u8>
             feature_name,
             feature_type,
             hits,
-            String::from_utf8_lossy(seq),
+            String::from_utf8_lossy(&read.seq),
         );
 
         shown += 1;
@@ -161,7 +164,7 @@ fn report_summary(timings: &[Duration], reads: usize, calls: usize) {
     let best = timings.iter().copied().min().unwrap();
     let mean_secs = timings.iter().map(Duration::as_secs_f64).sum::<f64>() / timings.len() as f64;
 
-    eprintln!("FastTagMapper::map_feature_id");
+    eprintln!("FastTagMapper::map_feature_id_with_qual");
     eprintln!(
         "  calls: {calls}/{reads} ({:.2}%)",
         calls as f64 * 100.0 / reads as f64
@@ -180,7 +183,7 @@ fn report_summary(timings: &[Duration], reads: usize, calls: usize) {
     );
 }
 
-fn load_fastq_sequences(path: &Path, max_reads: usize) -> Result<Vec<Vec<u8>>> {
+fn load_fastq_sequences(path: &Path, max_reads: usize) -> Result<Vec<BenchRead>> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader: Box<dyn BufRead> = if path.extension().is_some_and(|ext| ext == "gz") {
         Box::new(BufReader::new(MultiGzDecoder::new(file)))
@@ -208,7 +211,8 @@ fn load_fastq_sequences(path: &Path, max_reads: usize) -> Result<Vec<Vec<u8>>> {
             "FASTQ sequence/quality length mismatch"
         );
 
-        reads.push(seq);
+        let qual = qual.as_bytes().iter().map(|q| q.saturating_sub(33)).collect();
+        reads.push(BenchRead { seq, qual });
     }
 
     Ok(reads)
