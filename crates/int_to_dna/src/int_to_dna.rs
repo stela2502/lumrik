@@ -12,7 +12,7 @@ pub const G: Base = 2;
 pub const T: Base = 3;
 
 #[derive(Default, Debug, PartialEq, Clone)]
-pub struct IntToStr {
+pub struct IntToDna {
     pub u8_encoded: Vec<u8>, // the 2bit encoded array (4 times compressed)
     pub lost: usize,         // how many times have I lost 4bp?
     pub size: usize,         // how long was the original sequence
@@ -57,7 +57,7 @@ impl ToLeBytes for u128 {
     }
 }
 
-impl fmt::Display for IntToStr {
+impl fmt::Display for IntToDna {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Helper: format u64 or usize into grouped binary string
         fn to_bin_grouped<T: Into<u64>>(num: T, bits: usize) -> String {
@@ -79,7 +79,7 @@ impl fmt::Display for IntToStr {
 
         let dna_str = self.to_string(self.size);
 
-        writeln!(f, "IntToStr {{")?;
+        writeln!(f, "IntToDna {{")?;
         writeln!(f, "  stored human readable: \"{}\",", dna_str)?;
         writeln!(
             f,
@@ -98,7 +98,7 @@ impl fmt::Display for IntToStr {
 // Implement the Index trait for MyClass
 use std::ops::Index;
 
-impl Index<usize> for IntToStr {
+impl Index<usize> for IntToDna {
     type Output = u8;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -106,7 +106,7 @@ impl Index<usize> for IntToStr {
     }
 }
 
-impl PartialEq<Vec<u8>> for IntToStr {
+impl PartialEq<Vec<u8>> for IntToDna {
     fn eq(&self, other: &Vec<u8>) -> bool {
         &self.u8_encoded == other
     }
@@ -114,7 +114,7 @@ impl PartialEq<Vec<u8>> for IntToStr {
 
 /// This iterates over the bytes of the u8_encoded and therfore returns a u16, u64 pair at every 4 bp.
 /// If you wnat more you need to create slices of this object first.
-impl Iterator for IntToStr {
+impl Iterator for IntToDna {
     type Item = (u16, u64);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -134,7 +134,7 @@ impl Iterator for IntToStr {
 
 /// Here I have my accessorie functions that more or less any of the classes would have use of.
 /// I possibly learn a better way to have them...
-impl IntToStr {
+impl IntToDna {
     pub fn new<T: AsRef<[u8]>>(input: T) -> Self {
         let seq = input.as_ref();
         // 4 of the array u8 fit into one result u8
@@ -274,7 +274,7 @@ impl IntToStr {
     /// evidence matches `external`. Returns the anchor's exact base position.
     ///
     /// The scan advances one base at a time, so all four packed reading frames
-    /// are covered without constructing shifted `IntToStr` objects. Empty
+    /// are covered without constructing shifted `IntToDna` objects. Empty
     /// external evidence is allowed and reduces this to an anchor search.
     #[inline]
     pub fn find_with_external_after(&self, lookup_id: u8, external: &[u8]) -> Option<usize> {
@@ -361,10 +361,10 @@ impl IntToStr {
 
     /// Convert this already 2-bit-packed sequence directly to `OneHot<N>`.
     ///
-    /// This avoids `IntToStr -> DNA bytes -> OneHot`. The sequence must have
-    /// exactly `N` meaningful bases. Note that `IntToStr` historically maps
+    /// This avoids `IntToDna -> DNA bytes -> OneHot`. The sequence must have
+    /// exactly `N` meaningful bases. Note that `IntToDna` historically maps
     /// `N` to `A` during 2-bit encoding; callers that need unknown bases to
-    /// remain mismatches must reject them before constructing `IntToStr`.
+    /// remain mismatches must reject them before constructing `IntToDna`.
     /// Expand this 2-bit sequence directly into a read-sized OneHotSequence.
     /// No intermediate A/C/G/T byte string is allocated.
     #[inline]
@@ -467,7 +467,7 @@ impl IntToStr {
             }
         }
 
-        IntToStr {
+        IntToDna {
             u8_encoded: buf,
             lost: 0,
             kmer_size: 16,
@@ -576,7 +576,7 @@ impl IntToStr {
 
 #[cfg(test)]
 mod tests {
-    use crate::IntToStr;
+    use crate::IntToDna;
 
     fn format_bytes_binary(bytes: &[u8]) -> String {
         bytes
@@ -593,7 +593,7 @@ mod tests {
             input.to_string()
         };
         println!("==> Testing input: {used_str}");
-        let encoder = IntToStr::new(used_str.as_bytes());
+        let encoder = IntToDna::new(used_str.as_bytes());
         let original = encoder.u8_encoded.clone();
         println!("Original encoded: {:?}", original);
 
@@ -610,10 +610,10 @@ mod tests {
 
         //panic!("Will die anyhow");
         // Decode
-        let decoded16 = IntToStr::from_u16(val16);
-        let decoded32 = IntToStr::from_u32(val32);
-        let decoded64 = IntToStr::from_u64(val64);
-        let decoded128 = IntToStr::from_u128(val128);
+        let decoded16 = IntToDna::from_u16(val16);
+        let decoded32 = IntToDna::from_u32(val32);
+        let decoded64 = IntToDna::from_u64(val64);
+        let decoded128 = IntToDna::from_u128(val128);
 
         println!(
             "Decoded u16:   {}",
@@ -649,7 +649,7 @@ mod tests {
     }
     #[test]
     fn test_encoding() {
-        let encoder = IntToStr::new(b"ACGTTC");
+        let encoder = IntToDna::new(b"ACGTTC");
         assert_eq!(
             encoder.into_u16(),
             0b011111100100,
@@ -666,8 +666,8 @@ mod tests {
     fn test_from_uint() {
         // the from_uint function is the 'mother' of all fromn16 to from_u128.
         // So testing one should also test all others.
-        let encoder = IntToStr::from_u16(0b1111100100_u16);
-        let exp = IntToStr::new(b"ACGTT");
+        let encoder = IntToDna::from_u16(0b1111100100_u16);
+        let exp = IntToDna::new(b"ACGTT");
         assert_eq!(encoder.u8_encoded, exp.u8_encoded);
     }
 
@@ -683,19 +683,19 @@ mod tests {
 
     #[test]
     fn packed_u8_at_reads_unaligned_four_base_windows() {
-        let encoded = IntToStr::new(b"AACGTTGCA");
+        let encoded = IntToDna::new(b"AACGTTGCA");
 
-        assert_eq!(encoded.packed_u8_at(0), Some(IntToStr::new(b"AACG").first_u8()));
-        assert_eq!(encoded.packed_u8_at(1), Some(IntToStr::new(b"ACGT").first_u8()));
-        assert_eq!(encoded.packed_u8_at(4), Some(IntToStr::new(b"TTGC").first_u8()));
-        assert_eq!(encoded.packed_u8_at(5), Some(IntToStr::new(b"TGCA").first_u8()));
+        assert_eq!(encoded.packed_u8_at(0), Some(IntToDna::new(b"AACG").first_u8()));
+        assert_eq!(encoded.packed_u8_at(1), Some(IntToDna::new(b"ACGT").first_u8()));
+        assert_eq!(encoded.packed_u8_at(4), Some(IntToDna::new(b"TTGC").first_u8()));
+        assert_eq!(encoded.packed_u8_at(5), Some(IntToDna::new(b"TGCA").first_u8()));
         assert_eq!(encoded.packed_u8_at(6), None);
     }
 
     #[test]
     fn packed_external_search_covers_all_frames_and_returns_anchor_position() {
-        let encoded = IntToStr::new(b"TTACGTTGCAGGAACC");
-        let pattern = IntToStr::new(b"ACGTTGCAGGAA");
+        let encoded = IntToDna::new(b"TTACGTTGCAGGAACC");
+        let pattern = IntToDna::new(b"ACGTTGCAGGAA");
         let external = [pattern.packed_u8_at(0).unwrap(), pattern.packed_u8_at(4).unwrap()];
         let lookup = pattern.packed_u8_at(8).unwrap();
 
@@ -708,10 +708,10 @@ mod tests {
 
     #[test]
     fn packed_external_search_accepts_only_the_evidence_supplied() {
-        let encoded = IntToStr::new(b"GGGGACGTCCCCACGT");
-        let lookup = IntToStr::new(b"ACGT").first_u8();
-        let gggg = IntToStr::new(b"GGGG").first_u8();
-        let cccc = IntToStr::new(b"CCCC").first_u8();
+        let encoded = IntToDna::new(b"GGGGACGTCCCCACGT");
+        let lookup = IntToDna::new(b"ACGT").first_u8();
+        let gggg = IntToDna::new(b"GGGG").first_u8();
+        let cccc = IntToDna::new(b"CCCC").first_u8();
 
         assert_eq!(encoded.find_with_external_before(lookup, &[]), Some(4));
         assert_eq!(encoded.find_with_external_before(lookup, &[gggg]), Some(4));
@@ -721,8 +721,8 @@ mod tests {
 
     #[test]
     fn last_informative_u8_uses_last_four_real_bases() {
-        let encoded = IntToStr::new(b"GTCAGCTAC");
-        let expected = IntToStr::new(b"CTAC");
+        let encoded = IntToDna::new(b"GTCAGCTAC");
+        let expected = IntToDna::new(b"CTAC");
 
         assert_eq!(encoded.last_informative_u8(), expected.first_u8());
         assert_ne!(
@@ -733,8 +733,8 @@ mod tests {
 
     #[test]
     fn first_and_last_u8_can_be_identical_without_padding_artifacts() {
-        let encoded = IntToStr::new(b"AGCTAGCT");
-        let agct = IntToStr::new(b"AGCT").first_u8();
+        let encoded = IntToDna::new(b"AGCTAGCT");
+        let agct = IntToDna::new(b"AGCT").first_u8();
 
         assert_eq!(encoded.first_u8(), agct);
         assert_eq!(encoded.last_informative_u8(), agct);
@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn as_one_hot_matches_direct_encoding_without_string_roundtrip() {
         let seq = b"GTCAGCTAC";
-        let encoded = IntToStr::new(seq);
+        let encoded = IntToDna::new(seq);
         let direct = onehot_dna::OneHot::<9>::from_bytes(seq).unwrap();
 
         assert_eq!(encoded.as_one_hot::<9>().unwrap(), direct);
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn as_one_hot_rejects_wrong_const_length() {
-        let encoded = IntToStr::new(b"GTCAGCTAC");
+        let encoded = IntToDna::new(b"GTCAGCTAC");
         assert!(matches!(
             encoded.as_one_hot::<8>(),
             Err(onehot_dna::OneHotError::WrongLength {

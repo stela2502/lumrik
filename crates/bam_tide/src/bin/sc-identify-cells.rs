@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use flate2::read::MultiGzDecoder;
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use sc_primer::{PrimerCli, PrimerDetector, PrimerMatch};
 use scdata::cell_data::GeneUmiHash;
 
@@ -237,7 +237,7 @@ fn process_record(
         return Ok(None);
     };
 
-    let umi_id = IntToStr::new(umi_seq).into_u64();
+    let umi_id = IntToDna::new(umi_seq).into_u64();
 
     Ok(Some((cell_id, GeneUmiHash(insert_id, umi_id))))
 }

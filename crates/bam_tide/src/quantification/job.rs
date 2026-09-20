@@ -7,7 +7,7 @@ use crate::core::ref_block::record_to_blocks;
 use gtf_splice_index::types::RefBlock;
 use gtf_splice_index::{SplicedRead, Strand};
 
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 
 use mapping_info::MappingInfo;
 use snp_index::{AlignedRead, Genome, RefineOptions, SnpIndex};
@@ -330,7 +330,7 @@ impl<'a> JobBuilder<'a> {
             return None;
         }
 
-        let tool = IntToStr::new(seq.as_bytes());
+        let tool = IntToDna::new(seq.as_bytes());
         Some(tool.into_u64())
     }
 

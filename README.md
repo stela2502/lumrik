@@ -102,7 +102,7 @@ Lumrik is a workspace, not a single monolithic implementation. The crate READMEs
 | [`read-tag-table`](crates/read-tag-table/README.md) | External read/cell/UMI tag tables |
 | [`mapping_info`](crates/mapping_info/README.md) | Shared counters, timings and reports |
 | [`onehot_dna`](crates/onehot_dna/README.md) | Compact fixed-length DNA matching |
-| [`int_to_str`](crates/int_to_str/README.md) | Compact sequence/integer identifier conversion |
+| [`int_to_dna`](crates/int_to_dna/README.md) | Compact sequence/integer identifier conversion |
 | [`lumrik-status`](crates/lumrik-status/README.md) | Live run-status HTTP server/dashboard |
 
 ### Main capabilities

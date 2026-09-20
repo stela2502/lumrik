@@ -952,7 +952,7 @@ fn bd_v2_384_detect_all_does_not_repeat_search_window_hits() {
 
 #[test]
 fn molecule_identity_preserves_barcoded_hard_umi_rule() {
-    use int_to_str::IntToStr;
+    use int_to_dna::IntToDna;
 
     let grammar = Grammar::parse("identity", "CELL:4+UMI:4").unwrap();
     let cell = b"ACGT";
@@ -963,10 +963,10 @@ fn molecule_identity_preserves_barcoded_hard_umi_rule() {
         .molecule_identity(Some(cell), Some(umi), b"IGNORED_R1", r2)
         .unwrap();
 
-    let old_cell = IntToStr::new(cell).into_u64();
+    let old_cell = IntToDna::new(cell).into_u64();
     let mut old_hard = umi.to_vec();
     old_hard.extend_from_slice(&r2[..28]);
-    let old_hard = IntToStr::new(&old_hard).into_u64();
+    let old_hard = IntToDna::new(&old_hard).into_u64();
 
     assert_eq!(identity.cell_id, old_cell);
     assert_eq!(identity.molecule_id, old_hard);

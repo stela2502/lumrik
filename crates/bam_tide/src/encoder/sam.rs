@@ -12,7 +12,7 @@ use crate::index::{GeneFeatureIndex, TranscriptFeatureIndex};
 use gtf_splice_index::{
     GeneId, MatchClass, RefBlock, SpliceIndex, Strand, Transcript, TranscriptId,
 };
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use scdata::cell_data::GeneUmiHash;
@@ -179,7 +179,7 @@ impl SamEncoder {
     /// Generate all synthetic reads for one `(cell, gene)` pair.
     ///
     /// UMI identity is stored as `u64` in truth matrices. The SAM record receives
-    /// the nucleotide-string encoding produced by `int_to_str`.
+    /// the nucleotide-string encoding produced by `int_to_dna`.
     fn generate_cell_gene_reads<R: Rng>(
         &mut self,
         cell: &str,
@@ -202,7 +202,7 @@ impl SamEncoder {
         let n_spliced = n_total.saturating_sub(n_antisense + n_intronic);
 
         let clean = cell.split_once('-').map_or(cell, |(barcode, _)| barcode);
-        let cell_id = IntToStr::new(clean.as_bytes()).into_u64();
+        let cell_id = IntToDna::new(clean.as_bytes()).into_u64();
 
         let feature_id = transcript.gene_id as u64;
 
@@ -685,7 +685,7 @@ impl SamEncoder {
     */
 
     fn umi_to_string(umi: u64) -> String {
-        IntToStr::from_u64(umi).to_string(12)
+        IntToDna::from_u64(umi).to_string(12)
     }
 
     fn complement_base(base: u8) -> u8 {

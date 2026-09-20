@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
@@ -90,7 +90,7 @@ impl TagCall {
 /// - scan a read and count votes per tag
 /// - return the unique best tag, no match, or multimatch
 ///
-/// K-mer encoding uses `int_to_str::IntToStr`.
+/// K-mer encoding uses `int_to_dna::IntToDna`.
 #[derive(Debug, Clone)]
 pub struct FastTagMapper {
     name: String,
@@ -408,7 +408,7 @@ fn encode_kmer(kmer: &[u8]) -> Option<u64> {
         return None;
     }
 
-    Some(IntToStr::new(kmer.to_ascii_uppercase()).into_u64())
+    Some(IntToDna::new(kmer.to_ascii_uppercase()).into_u64())
 }
 
 pub const BD_HUMAN_SAMPLE_TAGS: [&[u8]; 12] = [

@@ -8,7 +8,7 @@ use crate::model::{
 
 use crate::single_cell_systems::*;
 
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
 use crate::ReadTagRecord;
 
@@ -225,7 +225,7 @@ impl PrimerDetector {
             return Ok(source_umi.to_vec());
         }
 
-        let source_id = IntToStr::new(source_umi).into_u64();
+        let source_id = IntToDna::new(source_umi).into_u64();
 
         let target_index = if let Some(index) = self.umi_translation.get(&source_id) {
             *index
@@ -235,7 +235,7 @@ impl PrimerDetector {
             index
         };
 
-        Ok(IntToStr::from_u64(target_index as u64)
+        Ok(IntToDna::from_u64(target_index as u64)
             .to_string(self.grammar.umi_len())
             .into_bytes())
     }
@@ -256,8 +256,8 @@ impl PrimerDetector {
             writeln!(
                 out,
                 "{}\t{}\t{}",
-                IntToStr::from_u64(*old_cell).to_string(self.grammar.cell_len()),
-                IntToStr::from_u64(*new_cell).to_string(self.grammar.umi_len()),
+                IntToDna::from_u64(*old_cell).to_string(self.grammar.cell_len()),
+                IntToDna::from_u64(*new_cell).to_string(self.grammar.umi_len()),
                 count,
             )?;
         }
@@ -278,7 +278,7 @@ impl PrimerDetector {
         }
 
         // Otherwise translate source seq -> source id -> target allocation index.
-        let source_id = IntToStr::new(source_cell).into_u64();
+        let source_id = IntToDna::new(source_cell).into_u64();
 
         let target_index =
             if let Some((target_index, count)) = self.primer_translation.get_mut(&source_id) {
@@ -304,7 +304,7 @@ impl PrimerDetector {
             });
         }
 
-        Ok(IntToStr::from_u64(target_index)
+        Ok(IntToDna::from_u64(target_index)
             .to_string(self.grammar.cell_len())
             .into_bytes())
     }

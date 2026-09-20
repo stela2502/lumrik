@@ -1,13 +1,13 @@
 [package]
-name = "int-to-str"
+name = "int-to-dna"
 version.workspace = true
 edition = "2021"
 
-description = "Fast integer to string conversion utilities optimized for high-throughput data processing."
+description = "Fast compact DNA sequence/integer conversion utilities optimized for high-throughput bioinformatics."
 license = "MIT"
-repository = "https://github.com/stela2502/int_to_str"
-homepage = "https://github.com/stela2502/int_to_str"
-documentation = "https://docs.rs/int-to-str"
+repository = "https://github.com/stela2502/int_to_dna"
+homepage = "https://github.com/stela2502/int_to_dna"
+documentation = "https://docs.rs/int-to-dna"
 readme = "README.md"
 
 keywords = ["integer", "conversion", "performance", "bioinformatics"]

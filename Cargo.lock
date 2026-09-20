@@ -186,7 +186,7 @@ dependencies = [
  "flate2",
  "gtf_splice_index",
  "hts-sys",
- "int-to-str",
+ "int-to-dna",
  "mapping_info",
  "onehot_dna",
  "rand 0.8.7",
@@ -668,8 +668,9 @@ dependencies = [
  "anyhow",
  "clap",
  "flate2",
- "int-to-str",
+ "int-to-dna",
  "mapping_info",
+ "onehot_dna",
  "scdata",
 ]
 
@@ -1086,12 +1087,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "int-to-str"
+name = "int-to-dna"
 version = "0.6.0"
 dependencies = [
  "clap",
  "onehot_dna",
 ]
+
+[[package]]
+name = "int-to-prot"
+version = "0.6.0"
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -2105,7 +2110,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
- "int-to-str",
+ "int-to-dna",
  "mapping_info",
  "plotters",
  "rayon",
@@ -2138,7 +2143,7 @@ dependencies = [
  "clap",
  "flate2",
  "gtf_splice_index",
- "int-to-str",
+ "int-to-dna",
  "mapping_info",
  "read-tag-table",
  "rust-htslib",
@@ -2155,7 +2160,7 @@ dependencies = [
  "fast_tag_mapper",
  "flate2",
  "gtf_splice_index",
- "int-to-str",
+ "int-to-dna",
  "lumrik-status",
  "mapping_info",
  "onehot_dna",
@@ -2175,7 +2180,7 @@ dependencies = [
  "clap",
  "fast_tag_mapper",
  "flate2",
- "int-to-str",
+ "int-to-dna",
  "mapping_info",
  "onehot_dna",
  "predicates",
@@ -2189,7 +2194,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "flate2",
- "int-to-str",
+ "int-to-dna",
  "mapping_info",
  "rayon",
  "regex",

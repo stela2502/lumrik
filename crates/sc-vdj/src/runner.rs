@@ -10,7 +10,7 @@ use crate::recombination::{
     RecombinationEvidenceRescanProgress, RecombinationEvidenceRescanReport,
 };
 use anyhow::{Context, Result};
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use rayon::prelude::*;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
@@ -534,7 +534,7 @@ impl VdjRunner {
             let cell = resolver.cell(&rec);
             let query_key = cell.as_ref().map(|cell| {
                 (
-                    IntToStr::new(cell.as_bytes()).into_u64(),
+                    IntToDna::new(cell.as_bytes()).into_u64(),
                     rec.qname().to_vec(),
                 )
             });

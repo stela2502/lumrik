@@ -12,7 +12,7 @@ use crate::{CellHash, FeatureIndex, MatrixValueType};
 /// Sparse single-cell count store.
 ///
 /// Cells are partitioned into 256 buckets by the first packed 4-base byte
-/// produced by `IntToStr`. Each bucket stores `CellData` keyed by the full cell id.
+/// produced by `IntToDna`. Each bucket stores `CellData` keyed by the full cell id.
 pub struct Scdata {
     /// Shared 256-bucket cell store.
     pub(crate) data: CellHash<CellData>,

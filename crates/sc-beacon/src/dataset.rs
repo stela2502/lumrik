@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use scdata::{FeatureIndex, Scdata};
 
 #[derive(Debug, Clone, Copy)]
@@ -102,7 +102,7 @@ impl<'a> GuideDataset<'a> {
     }
 
     pub fn barcode(&self, cell_id: u64) -> String {
-        IntToStr::from_u64(cell_id).to_string(self.cell_barcode_len)
+        IntToDna::from_u64(cell_id).to_string(self.cell_barcode_len)
     }
 
     pub fn cell_total(&self, cell_id: u64) -> u32 {

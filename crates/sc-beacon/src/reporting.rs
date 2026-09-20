@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use scdata::FeatureIndex;
 
 use crate::background::AmbientModel;
@@ -154,7 +154,7 @@ impl GuideCalls {
         for call in &self.flat {
             let feature_id = call.feature_id;
 
-            let barcode = IntToStr::from_u64(call.cell_id).to_string(cell_len);
+            let barcode = IntToDna::from_u64(call.cell_id).to_string(cell_len);
 
             writeln!(
                 writer,

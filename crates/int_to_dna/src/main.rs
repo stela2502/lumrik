@@ -1,5 +1,5 @@
 use clap::Parser;
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -17,12 +17,12 @@ fn main() {
     let cli = Cli::parse();
 
     if let Ok(num) = cli.input.parse::<u128>() {
-        let tool = IntToStr::from_u128(num);
+        let tool = IntToDna::from_u128(num);
         println!("Integer input: {num}");
         println!("→ Sequence: {}", tool.to_string(64));
     } else {
         println!("Sequence input: {}", cli.input);
-        let tool = IntToStr::new(&cli.input);
+        let tool = IntToDna::new(&cli.input);
         println!("→ Sequence: {}", tool.into_u128());
     }
 }

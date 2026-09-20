@@ -22,7 +22,7 @@ rayon = "1.10.0"
 regex = "1.11.1"
 
 mapping_info = { path = "../mapping_info" }
-int-to-str = { path = "../int_to_str" }
+int-to-dna = { path = "../int_to_dna" }
 
 [features]
 default = []

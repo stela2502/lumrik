@@ -7,7 +7,7 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 use mapping_info::MappingInfo;
 
 use crate::cell_data::GeneUmiHash;
@@ -47,7 +47,7 @@ impl Scdata {
         for cell in self.values() {
             let mut row = Vec::with_capacity(cols.len());
 
-            row.push(IntToStr::u8_array_to_str(&cell.name.to_le_bytes()));
+            row.push(IntToDna::u8_array_to_str(&cell.name.to_le_bytes()));
 
             for fid in &self.feature_ids_with_data {
                 if let Some(value) = cell.total_reads.get(fid) {
@@ -152,7 +152,7 @@ impl Scdata {
                 .get(cell_id)
                 .ok_or_else(|| format!("Export cell {cell_id} missing from Scdata"))?;
 
-            let cell_name = IntToStr::from_u64(cell.name).to_string(cell_barcode_len);
+            let cell_name = IntToDna::from_u64(cell.name).to_string(cell_barcode_len);
 
             writeln!(writer_b, "{cell_name}").map_err(|e| format!("Barcode write failed: {e}"))?;
 
@@ -219,7 +219,7 @@ impl Scdata {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("Reading barcodes failed: {e}"))?
                 .into_iter()
-                .map(|barcode| IntToStr::new(&barcode).into_u64())
+                .map(|barcode| IntToDna::new(&barcode).into_u64())
                 .collect()
         };
 

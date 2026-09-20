@@ -3,7 +3,7 @@ use std::io::Write;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use scdata::read_mtx_cell_ids;
 use tempfile::tempdir;
 
@@ -16,8 +16,8 @@ fn reads_cell_ids_from_plain_mex_barcodes() {
 
     let cells = read_mtx_cell_ids(&mex).unwrap();
     assert_eq!(cells.len(), 2);
-    assert!(cells.contains(&IntToStr::new(b"ACGT").into_u64()));
-    assert!(cells.contains(&IntToStr::new(b"TGCA").into_u64()));
+    assert!(cells.contains(&IntToDna::new(b"ACGT").into_u64()));
+    assert!(cells.contains(&IntToDna::new(b"TGCA").into_u64()));
 }
 
 #[test]
@@ -34,8 +34,8 @@ fn reads_cell_ids_from_nelrune_analysis_exonic_directory() {
 
     let cells = read_mtx_cell_ids(tmp.path()).unwrap();
     assert_eq!(cells.len(), 2);
-    assert!(cells.contains(&IntToStr::new(b"AACCGGTT").into_u64()));
-    assert!(cells.contains(&IntToStr::new(b"TTGGCCAA").into_u64()));
+    assert!(cells.contains(&IntToDna::new(b"AACCGGTT").into_u64()));
+    assert!(cells.contains(&IntToDna::new(b"TTGGCCAA").into_u64()));
 }
 
 #[test]

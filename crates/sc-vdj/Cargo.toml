@@ -17,7 +17,7 @@ rayon = "1"
 rust-htslib = { path = "../rust-htslib" }
 scdata = { path = "../scdata" }
 sc_primer = { path = "../sc_primer" }
-int-to-str = { path = "../int_to_str" }
+int-to-dna = { path = "../int_to_dna" }
 onehot_dna = { path = "../onehot_dna" }
 
 [dev-dependencies]

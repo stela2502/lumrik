@@ -68,22 +68,22 @@ Per-cell storage:
 
 `scdata` stores cell identifiers internally as `u64` values.
 
-If you want exported `barcodes.tsv.gz` entries to appear as DNA barcode strings, these `u64` values must encode the barcode sequence in the 2-bit format used by `int_to_str`.
+If you want exported `barcodes.tsv.gz` entries to appear as DNA barcode strings, these `u64` values must encode the barcode sequence in the 2-bit format used by `int_to_dna`.
 
-During accumulation, `scdata` treats cell IDs simply as numeric identifiers. During export, those numeric values are rendered back to DNA strings using `int_to_str`.
+During accumulation, `scdata` treats cell IDs simply as numeric identifiers. During export, those numeric values are rendered back to DNA strings using `int_to_dna`.
 
 #### Encoding DNA barcodes for use with `scdata`
 
 ```toml
 [dependencies]
-int-to-str = "0.1"
+int-to-dna = "0.1"
 ```
 
 ```rust
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 
 let barcode = "ATGACTCTCAGCATGG";
-let cell_id: u64 = IntToStr::new(barcode.as_bytes()).into_u64();
+let cell_id: u64 = IntToDna::new(barcode.as_bytes()).into_u64();
 ```
 
 You can then use `cell_id` as the cell identifier in `Scdata`:

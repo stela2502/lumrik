@@ -826,7 +826,7 @@ mod tests {
 
     #[test]
     fn two_bit_expansion_matches_strict_onehot() {
-        // IntToStr byte layout: low two bits are the first base.
+        // IntToDna byte layout: low two bits are the first base.
         let encoded = [0b11_10_01_00u8]; // A C G T
         let packed = OneHotSequence::from_2bit_bytes(&encoded, 4);
         assert_eq!(packed.to_dna_string(), "ACGT");

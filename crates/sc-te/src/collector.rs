@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 use mapping_info::MappingInfo;
 use read_tag_table::ReadTagRecord;
 use rust_htslib::bam::HeaderView;
@@ -125,8 +125,8 @@ impl TeCollector {
     ) -> Result<bool> {
         let tag = ReadTagRecord::from_qname(&cluster.read_id)
             .with_context(|| format!("failed to decode cell/UMI from {}", cluster.read_id))?;
-        let cell_id = IntToStr::new(&tag.cell_seq).into_u64();
-        let umi_id = IntToStr::new(&tag.umi_seq).into_u64();
+        let cell_id = IntToDna::new(&tag.cell_seq).into_u64();
+        let umi_id = IntToDna::new(&tag.umi_seq).into_u64();
         let mut candidates = HashSet::new();
         for mapped in cluster.records {
             candidates.extend(index.record_overlaps(&mapped.record, header)?);

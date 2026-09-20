@@ -11,4 +11,5 @@ flate2 = "1"
 
 mapping_info = { path = "../mapping_info" }
 scdata = { path = "../scdata" }
-int-to-str = { path = "../int_to_str" }
+int-to-dna = { path = "../int_to_dna" }
+onehot_dna = { path = "../onehot_dna" }

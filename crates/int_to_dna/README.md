@@ -1,4 +1,4 @@
-# int_to_str
+# int_to_dna
 
 > **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
 
@@ -16,10 +16,10 @@ Use the exported conversion types/functions directly; this crate is a library-on
 
 ## Detailed documentation
 
-[![Rust](https://github.com/stela2502/int_to_str/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/int_to_str/actions/workflows/rust.yml)
-[![Rust](https://github.com/stela2502/int_to_str/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/int_to_str/actions/workflows/rust.yml)
+[![Rust](https://github.com/stela2502/int_to_dna/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/int_to_dna/actions/workflows/rust.yml)
+[![Rust](https://github.com/stela2502/int_to_dna/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/int_to_dna/actions/workflows/rust.yml)
 
-# int_to_str (v0.2.0)
+# int_to_dna (v0.2.0)
 
 A lightweight Rust library for encoding DNA sequences into compact 2-bit representations.
 
@@ -35,7 +35,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-int_to_str = { git = "https://github.com/stela2502/int_to_str.git", version = "0.2.0" }
+int_to_dna = { git = "https://github.com/stela2502/int_to_dna.git", version = "0.2.0" }
 ```
 
 ---
@@ -45,9 +45,9 @@ int_to_str = { git = "https://github.com/stela2502/int_to_str.git", version = "0
 Encode a DNA sequence into the internal 2-bit representation:
 
 ```rust
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 
-let tool = IntToStr::new(
+let tool = IntToDna::new(
     b"ATGACTCTCAGCATGGAAGGACAGCAGAGACCAAGAGATCCTCCCACAGGGACACTACCTCTGGGCCTGGGATAC"
 );
 ```
@@ -65,13 +65,13 @@ You can:
 The crate includes a small CLI tool:
 
 ```bash
-int_to_str <sequence or integer>
+int_to_dna <sequence or integer>
 ```
 
 ### Integer → DNA
 
 ```bash
-int_to_str 12343
+int_to_dna 12343
 Integer input: 12343
 → Sequence: TCTAAATAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
@@ -79,7 +79,7 @@ Integer input: 12343
 ### DNA → Integer
 
 ```bash
-int_to_str TCTAAAT
+int_to_dna TCTAAAT
 Sequence input: TCTAAAT
 → Sequence: 12343
 ```
@@ -91,13 +91,13 @@ The binary does not track sequence length for you, so trailing `A`s (00) may app
 
 # Optional Feature: Alignment (v0.2.0)
 
-Version **0.2.0** introduces an optional `alignment` feature that adds sequence comparison utilities directly on top of the `IntToStr` representation.
+Version **0.2.0** introduces an optional `alignment` feature that adds sequence comparison utilities directly on top of the `IntToDna` representation.
 
 ## Enable the feature
 
 ```toml
 [dependencies]
-int_to_str = { git = "https://github.com/stela2502/int_to_str.git", version = "0.2.0", features = ["alignment"] }
+int_to_dna = { git = "https://github.com/stela2502/int_to_dna.git", version = "0.2.0", features = ["alignment"] }
 ```
 
 or:
@@ -149,10 +149,10 @@ Provides global alignment and a normalized distance metric suitable for:
 ## Example
 
 ```rust
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 
-let a = IntToStr::new(b"AAGCAGTGGTATCAACGC");
-let b = IntToStr::new(b"TGGTATCAACGCAGAGTAA");
+let a = IntToDna::new(b"AAGCAGTGGTATCAACGC");
+let b = IntToDna::new(b"TGGTATCAACGCAGAGTAA");
 
 // Exact overlap detection
 if let Some(hit) = a.best_exact_overlap(&b, 10, 0.0) {

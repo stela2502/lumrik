@@ -19,7 +19,7 @@ plotters = {
 
 mapping_info = { path = "../mapping_info" }
 scdata = { path = "../scdata" }
-int-to-str = { path = "../int_to_str" }
+int-to-dna = { path = "../int_to_dna" }
 
 [dev-dependencies]
 tempfile = "3"

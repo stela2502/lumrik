@@ -11,7 +11,7 @@ bam_tide = { path = "../bam_tide" }
 clap = { workspace = true }
 gtf_splice_index = { path = "../gtf_splice_index" }
 anyhow = "1"
-int-to-str = { path = "../int_to_str" }
+int-to-dna = { path = "../int_to_dna" }
 mapping_info = { path = "../mapping_info" }
 read-tag-table = { path = "../read-tag-table" }
 rust-htslib = { path = "../rust-htslib" }

@@ -6,8 +6,9 @@
 //! reference genome.  This keeps the old very cheap rejection path while no
 //! longer treating a pile of seed votes as an alignment.
 
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use mapping_info::MappingInfo;
+use onehot_dna::OneHotSequence;
 use std::{fs::File, io::{BufRead, BufReader}, path::Path};
 
 use crate::{FeatureEntry, MapStatus};
@@ -106,6 +107,8 @@ pub struct FastTagMapper {
     bins: [Vec<SeedEntry>; BIN_COUNT],
     features: Vec<FeatureEntry>,
     genome: OneHotGenome,
+    packed_features: Vec<OneHotSequence>,
+    packed_reverse_features: Vec<OneHotSequence>,
     min_hits: u32,
 }
 
@@ -113,7 +116,7 @@ impl Default for FastTagMapper { fn default() -> Self { Self::new() } }
 
 impl FastTagMapper {
     pub fn new() -> Self {
-        Self { bins: std::array::from_fn(|_| Vec::new()), features: Vec::new(), genome: OneHotGenome::default(), min_hits: 4 }
+        Self { bins: std::array::from_fn(|_| Vec::new()), features: Vec::new(), genome: OneHotGenome::default(), packed_features: Vec::new(), packed_reverse_features: Vec::new(), min_hits: 4 }
     }
 
     pub fn with_min_hits(mut self, min_hits: u32) -> Self { self.min_hits = min_hits; self }
@@ -165,6 +168,8 @@ impl FastTagMapper {
         assert!(feature_index <= u32::MAX as usize, "too many fast-mapper features");
         self.features.push(feature);
         self.genome.push(seq);
+        self.packed_features.push(OneHotSequence::from_bytes(seq));
+        self.packed_reverse_features.push(OneHotSequence::from_bytes(&reverse_complement(seq)));
         if seq.len() < SEED_BASES { return feature_index; }
 
         self.index_orientation(seq, feature_index, false);
@@ -202,8 +207,28 @@ impl FastTagMapper {
 
     fn map_status_impl(&self, seq: &[u8], qual: Option<&[u8]>, mapping: &mut MappingInfo) -> MapStatus {
         mapping.start_ticker();
-        let verified = self.best_candidates(seq, qual);
-        let status = self.resolve_verified(&verified);
+
+        // Hot path: a query fragment is only a locator.  Its index bucket
+        // already contains every possible (feature, reference position,
+        // strand) placement for that exact fragment.  Try those placements
+        // immediately against the complete feature and return on the first
+        // clean full-overlap match.  Only advance to the next query fragment
+        // when this bucket contains no usable placement.
+        let (direct_hit, saw_position) = self.first_direct_full_overlap(seq);
+        let status = if let Some(hit) = direct_hit {
+            hit
+        } else if !saw_position {
+            // No exact fragment had any indexed position, therefore the old
+            // exact-seed candidate path cannot possibly discover a candidate
+            // either.  Do not scan the read a second time.
+            MapStatus::NoHit
+        } else {
+            // At least one indexed position existed, but no complete exact
+            // overlap survived.  Keep the existing quality-aware path as the
+            // rescue for sequencing errors / imperfect feature observations.
+            let verified = self.best_candidates(seq, qual);
+            self.resolve_verified(&verified)
+        };
         match &status {
             MapStatus::Hit { .. } => mapping.report("bd_fast_mapper_hit"),
             MapStatus::NoHit => mapping.report("bd_fast_mapper_no_hit"),
@@ -237,8 +262,71 @@ impl FastTagMapper {
         })
     }
 
-    fn best_candidates(&self, seq: &[u8], qual: Option<&[u8]>) -> Vec<VerifiedCandidate> {
-        if let Some(q) = qual { if q.len() != seq.len() { return Vec::new(); } }
+    /// Direct locator -> full-overlap hot path.
+    ///
+    /// For each query 16-mer, the index bucket is already the complete array
+    /// of possible reference positions for that fragment.  We therefore try
+    /// those positions immediately.  A clean full-feature overlap is decisive
+    /// and returns at once; there is no vote collection on the common path.
+    ///
+    /// The bool reports whether *any* indexed position was seen.  If false,
+    /// the caller can return NoHit without running the exact-seed scan again.
+    fn first_direct_full_overlap(&self, seq: &[u8]) -> (Option<MapStatus>, bool) {
+        let mut packed_query: Option<OneHotSequence> = None;
+        let mut saw_position = false;
+
+        for (query_pos, seed) in Rolling16::new(seq) {
+            // The exact seed is only a locator for the full-feature check.
+            // Probing every overlapping 16-mer is unnecessary and makes the
+            // overwhelmingly common no-hit read pay ~135 index lookups for a
+            // 150-bp read.  Probe 16-mers every 8 bases instead: 0, 8, 16, ...
+            // This keeps 8-bp overlap between adjacent locator windows while
+            // reducing index probes by roughly 8x.
+            if query_pos % 8 != 0 { continue; }
+
+            let (bin_index, prefix_key, confirm) = split_seed(seed);
+            for entry in &self.bins[bin_index] {
+                if entry.prefix_key != prefix_key || entry.confirm != confirm { continue; }
+                saw_position = true;
+
+                let feature_index = entry.feature_index as usize;
+                let reference_len = self.genome.spans[feature_index].len as usize;
+                if reference_len <= SEED_BASES { continue; }
+
+                let query_start = query_pos as isize - entry.ref_pos as isize;
+                let Ok(query_start) = usize::try_from(query_start) else { continue; };
+                let Some(query_end) = query_start.checked_add(reference_len) else { continue; };
+                if query_end > seq.len() { continue; }
+
+                // Packing is lazy: the overwhelmingly common no-index-hit read
+                // never allocates a OneHotSequence at all.
+                if packed_query.is_none() {
+                    packed_query = OneHotSequence::try_from_bytes(seq).ok();
+                }
+                let Some(query) = packed_query.as_ref() else { return (None, saw_position); };
+                let reference = if entry.reverse {
+                    &self.packed_reverse_features[feature_index]
+                } else {
+                    &self.packed_features[feature_index]
+                };
+                let Some((informative, compatible)) =
+                    query.compatibility_counts(query_start, reference, 0, reference_len)
+                else { continue; };
+
+                if informative == reference_len && compatible == reference_len {
+                    return (Some(MapStatus::Hit {
+                        feature_id: self.features[feature_index].id,
+                        feature_index,
+                        hits: 1,
+                    }), true);
+                }
+            }
+        }
+
+        (None, saw_position)
+    }
+
+    fn discover_candidates(&self, seq: &[u8]) -> Vec<Candidate> {
         let mut candidates: Vec<Candidate> = Vec::new();
         for (query_pos, seed) in Rolling16::new(seq) {
             let (bin_index, prefix_key, confirm) = split_seed(seed);
@@ -252,6 +340,15 @@ impl FastTagMapper {
                 }
             }
         }
+        candidates
+    }
+
+    fn best_candidates(&self, seq: &[u8], qual: Option<&[u8]>) -> Vec<VerifiedCandidate> {
+        self.verify_candidates(seq, qual, self.discover_candidates(seq))
+    }
+
+    fn verify_candidates(&self, seq: &[u8], qual: Option<&[u8]>, mut candidates: Vec<Candidate>) -> Vec<VerifiedCandidate> {
+        if let Some(q) = qual { if q.len() != seq.len() { return Vec::new(); } }
         candidates.retain(|c| c.hits >= self.min_hits);
         candidates.sort_unstable_by(|a,b| b.hits.cmp(&a.hits));
         candidates.truncate(MAX_CANDIDATES);
@@ -301,6 +398,17 @@ fn one_hot(base: u8) -> u8 { match base { b'A'|b'a'=>1, b'C'|b'c'=>2, b'G'|b'g'=
 fn complement_one_hot(base: u8) -> u8 { match base { b'A'|b'a'=>8, b'C'|b'c'=>4, b'G'|b'g'=>2, b'T'|b't'=>1, _=>0 } }
 fn reverse_complement(seq: &[u8]) -> Vec<u8> { seq.iter().rev().map(|&b| match b { b'A'|b'a'=>b'T', b'C'|b'c'=>b'G', b'G'|b'g'=>b'C', b'T'|b't'=>b'A', _=>b'N' }).collect() }
 
+#[inline(always)]
+fn encode_exact_16_at(seq: &[u8], start: usize) -> Option<u32> {
+    let window = seq.get(start..start.checked_add(SEED_BASES)?)?;
+    let mut word = 0u32;
+    for &base in window {
+        if matches!(base, b'N' | b'n') { return None; }
+        word = (word << 2) | u32::from(IntToDna::encode_binary(base).ok()?);
+    }
+    Some(word)
+}
+
 fn split_seed(seed: u32) -> (usize, u8, u16) { let first_8=(seed>>16) as u16; ((first_8>>8) as usize, first_8 as u8, seed as u16) }
 
 struct Rolling16<'a> { seq: &'a [u8], pos: usize, word: u32, valid_bases: usize }
@@ -310,7 +418,7 @@ impl Iterator for Rolling16<'_> {
     fn next(&mut self)->Option<Self::Item>{
         while self.pos < self.seq.len() {
             let base=self.seq[self.pos]; self.pos+=1;
-            let bits=match base { b'N'|b'n'=>None, _=>IntToStr::encode_binary(base).ok().map(u32::from) };
+            let bits=match base { b'N'|b'n'=>None, _=>IntToDna::encode_binary(base).ok().map(u32::from) };
             match bits { Some(bits)=>{ self.word=(self.word<<2)|bits; self.valid_bases+=1; if self.valid_bases>=SEED_BASES{return Some((self.pos-SEED_BASES,self.word));} }, None=>{self.word=0;self.valid_bases=0;} }
         }
         None
@@ -319,7 +427,7 @@ impl Iterator for Rolling16<'_> {
 
 pub(crate) fn encode_8mer(seq:&[u8])->Option<u16>{
     if seq.len()!=8{return None;} let mut word=0u16;
-    for &base in seq { if matches!(base,b'N'|b'n'){return None;} word=(word<<2)|u16::from(IntToStr::encode_binary(base).ok()?); }
+    for &base in seq { if matches!(base,b'N'|b'n'){return None;} word=(word<<2)|u16::from(IntToDna::encode_binary(base).ok()?); }
     Some(word)
 }
 

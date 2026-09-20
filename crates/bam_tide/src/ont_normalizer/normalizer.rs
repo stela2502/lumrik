@@ -9,7 +9,7 @@ use read_tag_table::ReadTagTable;
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 
 use anyhow::{Context, Result};
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use mapping_info::MappingInfo;
 use rayon::prelude::*;
 use rust_htslib::bam::{Read, Reader};
@@ -110,8 +110,8 @@ impl OntNormalizerConfig {
                 insert_record = insert_record.revcomp();
             }
 
-            let cell_id = IntToStr::new(&cell.seq).into_u64();
-            let umi_id = IntToStr::new(&umi.seq).into_u64();
+            let cell_id = IntToDna::new(&cell.seq).into_u64();
+            let umi_id = IntToDna::new(&umi.seq).into_u64();
 
             if let Some(id) = feature_tag_mapper.map_feature_id(&insert_record.seq, &mut out.stats)
             {

@@ -2,7 +2,7 @@ use crate::anchor::AnchorSearch;
 use crate::error::{PrimerError, PrimerResult};
 use crate::single_cell_systems::*;
 
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 
 const MOLECULE_KEY_BASES: usize = 32;
 const UNBARCODED_BASES_PER_MATE: usize = MOLECULE_KEY_BASES / 2;
@@ -250,11 +250,11 @@ impl Grammar {
             )));
         }
 
-        Ok(IntToStr::new(seq).into_u64())
+        Ok(IntToDna::new(seq).into_u64())
     }
 
     pub fn umi_from_u64(&self, id: u64) -> Vec<u8> {
-        IntToStr::from_u64(id).to_string(self.umi_len).into_bytes()
+        IntToDna::from_u64(id).to_string(self.umi_len).into_bytes()
     }
 
     pub fn anchor_search(&self) -> Option<&AnchorSearch> {

@@ -3,7 +3,7 @@ use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
 use mapping_info::MappingInfo;
 use sc_primer::{Chemistry, Grammar, PrimerDetector};
@@ -536,7 +536,7 @@ fn main() -> Result<(), String> {
         )?;
 
         bench(
-            "5. current identity path + duplicate IntToStr cell/UMI encoding",
+            "5. current identity path + duplicate IntToDna cell/UMI encoding",
             &reads,
             cli.iterations,
             |r| {
@@ -571,8 +571,8 @@ fn main() -> Result<(), String> {
                 else {
                     return Ok(false);
                 };
-                let cell_id = IntToStr::new(&normalized_cell).into_u64();
-                let umi_id = IntToStr::new(&umi.seq).into_u64();
+                let cell_id = IntToDna::new(&normalized_cell).into_u64();
+                let umi_id = IntToDna::new(&umi.seq).into_u64();
                 std::hint::black_box((identity, cell_id, umi_id));
                 Ok(true)
             },
@@ -666,8 +666,8 @@ fn main() -> Result<(), String> {
                         else {
                             continue;
                         };
-                        let cell_id = IntToStr::new(&normalized_cell).into_u64();
-                        let umi_id = IntToStr::new(&umi.seq).into_u64();
+                        let cell_id = IntToDna::new(&normalized_cell).into_u64();
+                        let umi_id = IntToDna::new(&umi.seq).into_u64();
                         std::hint::black_box((identity, cell_id, umi_id));
                     }
                 }
@@ -745,8 +745,8 @@ fn main() -> Result<(), String> {
                     else {
                         continue;
                     };
-                    let cell_id = IntToStr::new(&normalized_cell).into_u64();
-                    let umi_id = IntToStr::new(&umi.seq).into_u64();
+                    let cell_id = IntToDna::new(&normalized_cell).into_u64();
+                    let umi_id = IntToDna::new(&umi.seq).into_u64();
                     std::hint::black_box((identity, cell_id, umi_id));
                 }
 

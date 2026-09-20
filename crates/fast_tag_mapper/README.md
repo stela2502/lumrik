@@ -80,10 +80,10 @@ scdata = { git = "https://github.com/stela2502/scdata" }
 Internally, `fast_tag_mapper` uses:
 
 ```toml
-stela_int_to_str = { git = "https://github.com/stela2502/int_to_str" }
+stela_int_to_dna = { git = "https://github.com/stela2502/int_to_dna" }
 ```
 
-The crate depends on `stela_int_to_str` because the original `int_to_str` package name was not available on crates.io.
+The crate depends on `stela_int_to_dna` because the original `int_to_dna` package name was not available on crates.io.
 
 ## Built-in BD sample tags
 

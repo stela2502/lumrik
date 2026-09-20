@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 /// Sparse cell-indexed storage split into 256 buckets.
 ///
-/// Cell ids are expected to come from `IntToStr::into_u64()`. That encoding
+/// Cell ids are expected to come from `IntToDna::into_u64()`. That encoding
 /// stores the first packed 4-base byte (`u8_encoded[0]`) in the least
 /// significant byte of the `u64`, so those first four barcode bases select the
 /// bucket regardless of whether the full cell barcode is 16, 27, or 32 bases.
@@ -26,7 +26,7 @@ impl<T> CellHash<T> {
         }
     }
 
-    /// Bucket selected by the first four bases encoded by `IntToStr`.
+    /// Bucket selected by the first four bases encoded by `IntToDna`.
     #[inline]
     pub fn bucket_index(cell_id: u64) -> usize {
         cell_id as u8 as usize

@@ -6,7 +6,7 @@ use crate::index::{reverse_complement, Chain, SegmentId, SegmentKind, VdjIndex};
 use crate::runner::BamIdentityResolver;
 use anyhow::{Context, Result};
 use fast_tag_mapper::{FastLocusMapper, FeatureEntry, MapStatus};
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
 use rayon::prelude::*;
 use rust_htslib::bam::{self, Read};
@@ -560,7 +560,7 @@ where
         let Some(cell) = resolver.cell(&record) else {
             continue;
         };
-        let cell_id = IntToStr::new(cell.as_bytes()).into_u64();
+        let cell_id = IntToDna::new(cell.as_bytes()).into_u64();
         if !wanted_cells.contains(&cell_id) {
             continue;
         }

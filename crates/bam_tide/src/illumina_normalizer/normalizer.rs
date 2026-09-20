@@ -5,7 +5,7 @@ use crate::{AdditionalFeatureSource, FeatureTagCounts};
 use read_tag_table::{ReadTagRecord, ReadTagTable};
 
 use anyhow::{Context, Result, bail};
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
 use mapping_info::MappingInfo;
 use rayon::prelude::*;
@@ -161,7 +161,7 @@ impl IlluminaPartial {
 
             let synthetic_cell = b"C";
             let synthetic_cell_qual = b"I";
-            let synthetic_umi = IntToStr::from_u64(identity.molecule_id)
+            let synthetic_umi = IntToDna::from_u64(identity.molecule_id)
                 .to_string(32)
                 .into_bytes();
             let synthetic_umi_qual = vec![b'I'; synthetic_umi.len()];
@@ -190,8 +190,8 @@ impl IlluminaPartial {
         let umi = umi.expect("barcoded grammar must have UMI");
 
         let cell_seq = normalized_cell_seq.expect("barcoded grammar must have CELL");
-        let cell_id = IntToStr::new(&cell_seq).into_u64();
-        let umi_id = IntToStr::new(&umi.seq).into_u64();
+        let cell_id = IntToDna::new(&cell_seq).into_u64();
+        let umi_id = IntToDna::new(&umi.seq).into_u64();
 
         if let Some(id) = feature_tag_mapper.map_feature_id(&r2.seq, &mut self.stats) {
             if self.feature_tag_table.try_insert(

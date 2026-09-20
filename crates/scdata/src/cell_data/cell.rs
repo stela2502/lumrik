@@ -4,7 +4,7 @@ use crate::ambient_rna_detect::AmbientRnaDetect;
 use crate::cell_data::GeneUmiHash;
 
 use core::fmt;
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 
 /// Struct describing multimapping reads.
 #[derive(Clone, Debug, Default)]
@@ -190,7 +190,7 @@ impl CellData {
     pub fn to_str_for_feature_ids(&self, feature_ids: &[u64], _length: usize) -> String {
         let mut data = Vec::<String>::with_capacity(feature_ids.len() + 4);
 
-        data.push(IntToStr::u8_array_to_str(&self.name.to_le_bytes()).to_string());
+        data.push(IntToDna::u8_array_to_str(&self.name.to_le_bytes()).to_string());
 
         let mut total = 0.0f32;
         let mut max = 0.0f32;

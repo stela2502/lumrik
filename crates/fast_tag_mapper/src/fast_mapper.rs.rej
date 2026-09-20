@@ -1,0 +1,18 @@
+--- crates/fast_tag_mapper/src/fast_mapper.rs
++++ crates/fast_tag_mapper/src/fast_mapper.rs
+@@ -275,11 +275,10 @@
+         let mut packed_query: Option<OneHotSequence> = None;
+         let mut saw_position = false;
+ 
+-        for (query_pos, seed) in Rolling16::new(seq) {
+-            // Three non-overlapping 16-bp locator windows: 0..16, 16..32, 32..48.
+-            if query_pos >= 48 { break; }
+-            if query_pos % 16 != 0 { continue; }
+-
++        // The hot locator path does not need a rolling 1-bp iterator at all.
++        // Encode exactly the three 16-bp windows we promised to inspect.
++        for query_pos in [0usize, 16, 32] {
++            let Some(seed) = encode_exact_16_at(seq, query_pos) else { continue; };
+             let (bin_index, prefix_key, confirm) = split_seed(seed);
+             for entry in &self.bins[bin_index] {
+                 if entry.prefix_key != prefix_key || entry.confirm != confirm { continue; }

@@ -44,14 +44,14 @@ fn map_feature_id_returns_only_scdata_id_if_min_hits_surpassed() {
 }
 
 #[test]
-fn too_high_min_hits_rejects_otherwise_correct_hit() {
+fn full_overlap_accepts_correct_hit_despite_high_min_hits() {
     let mapper = FastTagMapper::mouse_samples().with_min_hits(10_000);
 
     let mut read = BD_PREFIX.to_vec();
     read.extend_from_slice(MOUSE_SAMPLE_TAGS[6]);
 
     let mut mi = info();
-    assert_eq!(mapper.map_feature_id(&read, &mut mi), None);
+    assert_eq!(mapper.map_feature_id(&read, &mut mi), Some(7));
 }
 
 #[test]
@@ -68,10 +68,26 @@ fn real_mouse_sample_read_from_conversation_maps_to_sampletag07_feature_id() {
             feature_id, hits, ..
         } => {
             assert_eq!(feature_id, 7);
-            assert!(hits >= 4);
+            assert!(hits >= 1);
         }
         other => panic!("expected hit, got {other:?}"),
     }
+}
+
+#[test]
+fn one_seed_without_good_full_overlap_is_still_rejected() {
+    let mut mapper = FastTagMapper::new().with_min_hits(10_000);
+    mapper.add_feature(
+        b"ACGTACGTACGTACGTTTTTTTTTTTTTTTTT",
+        FeatureEntry::new(77, "locator-only", "Antibody Capture"),
+    );
+
+    // The first 16 bases provide an exact locator, but the remainder is not
+    // a clean full-feature overlap.  The fast path must therefore decline it,
+    // and the deliberately impossible fallback threshold keeps it rejected.
+    let read = b"GGGGACGTACGTACGTACGTCCCCCCCCCCCCCCCCGGGG";
+    let mut mi = info();
+    assert_eq!(mapper.map_feature_id(read, &mut mi), None);
 }
 
 #[test]

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use bam_tide::fastq::FastqRecord;
 use clap::Parser;
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 use read_tag_table::ReadTagRecord;
 use rust_htslib::bam::{self, HeaderView, Read, record::Aux};
 use sc_mapper::{MapperKind, StreamingMapper, StreamingMapperCli};
@@ -226,8 +226,8 @@ fn process_read_group(
     let Some((cell, umi)) = group_tags(group, cell_tag, umi_tag) else {
         return Ok(0);
     };
-    let cell_id = IntToStr::new(cell.as_bytes()).into_u64();
-    let umi_id = IntToStr::new(umi.as_bytes()).into_u64();
+    let cell_id = IntToDna::new(cell.as_bytes()).into_u64();
+    let umi_id = IntToDna::new(umi.as_bytes()).into_u64();
 
     let mapped: Vec<_> = group
         .iter()

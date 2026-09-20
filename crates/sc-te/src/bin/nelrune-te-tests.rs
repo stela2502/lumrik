@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use int_to_str::int_to_str::IntToStr;
+use int_to_dna::int_to_dna::IntToDna;
 use mapping_info::MappingInfo;
 use rust_htslib::bam::{self, Read, record::Aux};
 use sc_te::TeIndex;
@@ -153,8 +153,8 @@ fn main() -> Result<()> {
         let cell = cell_raw
             .split_once('-')
             .map_or(cell_raw.as_str(), |(barcode, _)| barcode);
-        let cell_id = IntToStr::new(cell.as_bytes()).into_u64();
-        let umi_id = IntToStr::new(umi.as_bytes()).into_u64();
+        let cell_id = IntToDna::new(cell.as_bytes()).into_u64();
+        let umi_id = IntToDna::new(umi.as_bytes()).into_u64();
         cells.insert(cell_id);
         cell_umi.insert((cell_id, umi_id));
 

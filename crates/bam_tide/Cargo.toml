@@ -33,7 +33,7 @@ read-tag-table = { path = "../read-tag-table" }
 sc_primer = { path = "../sc_primer" }
 scdata = { path = "../scdata" }
 snp-index = { path = "../snp-index" }
-int-to-str = { path = "../int_to_str" }
+int-to-dna = { path = "../int_to_dna" }
 sc-beacon = { path = "../sc-beacon" }
 
 [features]

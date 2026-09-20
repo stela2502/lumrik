@@ -1,6 +1,6 @@
 //alignement.rs
 
-use crate::IntToStr;
+use crate::IntToDna;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AlignmentConfig {
@@ -44,7 +44,7 @@ pub struct ExactOverlap {
     pub other_start: usize,
 }
 
-impl IntToStr {
+impl IntToDna {
     #[inline]
     pub fn len_bases(&self) -> usize {
         self.size
@@ -344,11 +344,11 @@ impl IntToStr {
 
 #[cfg(test)]
 mod tests {
-    use crate::IntToStr;
+    use crate::IntToDna;
 
     #[test]
     fn test_base_access_roundtrip_is_sane() {
-        let seq = IntToStr::new(b"ACGTTCAG");
+        let seq = IntToDna::new(b"ACGTTCAG");
         let recovered: String = (0..seq.len_bases())
             .map(|i| seq.dna_char_at(i).unwrap())
             .collect();
@@ -358,8 +358,8 @@ mod tests {
 
     #[test]
     fn test_needleman_wunsch_prefers_single_gap_for_internal_insertion() {
-        let a = IntToStr::new(b"ACGTACGT");
-        let b = IntToStr::new(b"ACGTTACGT");
+        let a = IntToDna::new(b"ACGTACGT");
+        let b = IntToDna::new(b"ACGTTACGT");
 
         let aln = a.needleman_wunsch(&b);
 
@@ -373,8 +373,8 @@ mod tests {
 
     #[test]
     fn test_needleman_wunsch_detects_two_distributed_mismatches_without_gaps() {
-        let a = IntToStr::new(b"ACGTCGTAAC");
-        let b = IntToStr::new(b"ACGTTGTAAT");
+        let a = IntToDna::new(b"ACGTCGTAAC");
+        let b = IntToDna::new(b"ACGTTGTAAT");
 
         let aln = a.needleman_wunsch(&b);
 
@@ -388,8 +388,8 @@ mod tests {
 
     #[test]
     fn test_best_exact_overlap_finds_realistic_shifted_primer_overlap() {
-        let a = IntToStr::new(b"AAGCAGTGGTATCAACGC");
-        let b = IntToStr::new(b"TGGTATCAACGCAGAGTAA");
+        let a = IntToDna::new(b"AAGCAGTGGTATCAACGC");
+        let b = IntToDna::new(b"TGGTATCAACGCAGAGTAA");
 
         let hit = a.best_exact_overlap(&b, 10, 0.0).unwrap();
 
@@ -402,8 +402,8 @@ mod tests {
 
     #[test]
     fn test_best_exact_overlap_rejects_short_spurious_matches() {
-        let a = IntToStr::new(b"AAGCAGTGGTATCAACGC");
-        let b = IntToStr::new(b"TTTTTGGTAAAAACCCC");
+        let a = IntToDna::new(b"AAGCAGTGGTATCAACGC");
+        let b = IntToDna::new(b"TTTTTGGTAAAAACCCC");
 
         let hit = a.best_exact_overlap(&b, 10, 0.0);
         assert!(hit.is_none());
@@ -411,8 +411,8 @@ mod tests {
 
     #[test]
     fn test_best_exact_overlap_respects_mismatch_fraction_cutoff() {
-        let a = IntToStr::new(b"AAGCAGTGGTATCAACGC");
-        let b = IntToStr::new(b"TGGTATCAATGCAGAGTAA");
+        let a = IntToDna::new(b"AAGCAGTGGTATCAACGC");
+        let b = IntToDna::new(b"TGGTATCAATGCAGAGTAA");
 
         let strict = a.best_exact_overlap(&b, 12, 0.0);
         assert!(strict.is_none());
@@ -425,8 +425,8 @@ mod tests {
 
     #[test]
     fn test_exact_overlap_with_negative_offset_is_detected() {
-        let a = IntToStr::new(b"TGGTATCAACGCAGAGTAA");
-        let b = IntToStr::new(b"AAGCAGTGGTATCAACGC");
+        let a = IntToDna::new(b"TGGTATCAACGCAGAGTAA");
+        let b = IntToDna::new(b"AAGCAGTGGTATCAACGC");
 
         let hit = a.best_exact_overlap(&b, 10, 0.0).unwrap();
 
@@ -439,8 +439,8 @@ mod tests {
 
     #[test]
     fn test_needleman_wunsch_is_symmetric_for_distance() {
-        let a = IntToStr::new(b"TACATGCAACTCAGCAGC");
-        let b = IntToStr::new(b"TACATGCAACTCAACAGC");
+        let a = IntToDna::new(b"TACATGCAACTCAGCAGC");
+        let b = IntToDna::new(b"TACATGCAACTCAACAGC");
 
         let d1 = a.needleman_wunsch_distance(&b);
         let d2 = b.needleman_wunsch_distance(&a);

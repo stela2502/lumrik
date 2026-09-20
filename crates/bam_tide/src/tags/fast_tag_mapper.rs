@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
@@ -484,7 +484,7 @@ fn encode_kmer(kmer: &[u8]) -> Option<u64> {
         return None;
     }
 
-    Some(IntToStr::new(kmer.to_ascii_uppercase()).into_u64())
+    Some(IntToDna::new(kmer.to_ascii_uppercase()).into_u64())
 }
 
 pub const BD_HUMAN_SAMPLE_TAGS: [&[u8]; 12] = [

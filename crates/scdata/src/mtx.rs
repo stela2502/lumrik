@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use flate2::read::MultiGzDecoder;
-use int_to_str::IntToStr;
+use int_to_dna::IntToDna;
 use mapping_info::MappingInfo;
 
 use crate::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
@@ -285,7 +285,7 @@ fn read_mtx_barcodes(dir: &Path) -> Result<Vec<(String, u64)>> {
             .map(|(seq, _)| seq)
             .unwrap_or(&barcode);
 
-        let id = IntToStr::new(sequence.as_bytes()).into_u64();
+        let id = IntToDna::new(sequence.as_bytes()).into_u64();
         out.push((barcode, id));
     }
 
