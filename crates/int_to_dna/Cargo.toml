@@ -18,6 +18,7 @@ authors = ["Stefan Lang"]
 [dependencies]
 clap = { workspace = true }
 onehot_dna = { path = "../onehot_dna" }
+int-to-prot = { path = "../int_to_prot" }
 
 
 [features]

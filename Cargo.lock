@@ -865,6 +865,8 @@ dependencies = [
  "bincode",
  "clap",
  "flate2",
+ "int-to-dna",
+ "int-to-prot",
  "serde",
  "zstd",
 ]
@@ -895,6 +897,10 @@ name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
+
+[[package]]
+name = "hmm"
+version = "0.6.0"
 
 [[package]]
 name = "hts-sys"
@@ -1091,6 +1097,7 @@ name = "int-to-dna"
 version = "0.6.0"
 dependencies = [
  "clap",
+ "int-to-prot",
  "onehot_dna",
 ]
 

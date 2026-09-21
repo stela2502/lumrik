@@ -1,6 +1,7 @@
 use onehot_dna::{OneHot, OneHotError, OneHotSequence};
 use std::collections::BTreeMap;
 use std::fmt;
+use int_to_prot::IntToProt;
 //use crate::errors::SeqError;
 //use crate::traits::BinaryMatcher;
 
@@ -150,6 +151,26 @@ impl IntToDna {
             kmer_size: 16, //deprecated
             checker: BTreeMap::<u8, usize>::new(),
             mask: 0, // useless
+            current_position: 0,
+            step_size: 1,
+        }
+    }
+
+    /// Construct directly from this crate's native packed 2-bit bytes.
+    ///
+    /// Base 0 occupies the least-significant two bits of byte 0. The final
+    /// byte may contain unused high pairs when `size` is not divisible by 4.
+    /// This is primarily useful for binary genome-format adapters that have
+    /// already converted their alphabet/layout into IntToDna representation.
+    pub fn from_packed_2bit(u8_encoded: Vec<u8>, size: usize) -> Self {
+        assert_eq!(u8_encoded.len(), size.div_ceil(4), "packed byte count does not match sequence size");
+        Self {
+            u8_encoded,
+            lost: 0,
+            size,
+            kmer_size: 16,
+            checker: BTreeMap::<u8, usize>::new(),
+            mask: 0,
             current_position: 0,
             step_size: 1,
         }
@@ -510,6 +531,26 @@ impl IntToDna {
         ))
     }
 
+    /// Translate this DNA sequence with the standard genetic code in frame 0.
+    pub fn translate(&self) -> IntToProt {
+        self.translate_frame(0)
+    }
+
+    /// Translate this DNA sequence with the standard genetic code in frame 0, 1 or 2.
+    /// Trailing bases that do not form a complete codon are ignored.
+    pub fn translate_frame(&self, frame: usize) -> IntToProt {
+        assert!(frame < 3, "translation frame must be 0, 1 or 2");
+        let dna = self.to_string(self.size);
+        let bytes = dna.as_bytes();
+        let mut protein = Vec::with_capacity(bytes.len().saturating_sub(frame) / 3);
+        let mut pos = frame;
+        while pos + 3 <= bytes.len() {
+            protein.push(translate_codon(&bytes[pos..pos + 3]));
+            pos += 3;
+        }
+        IntToProt::new(protein)
+    }
+
     /// get a new IntToSeq objects from start..end of the DNA sequence.
     pub fn slice(&self, start: Option<usize>, end: Option<usize>) -> Self {
         let start: usize = start.unwrap_or(0);
@@ -759,5 +800,50 @@ mod tests {
                 observed: 9
             })
         ));
+    }
+}
+
+#[inline]
+fn translate_codon(codon: &[u8]) -> u8 {
+    match codon {
+        b"TTT" | b"TTC" => b'F',
+        b"TTA" | b"TTG" | b"CTT" | b"CTC" | b"CTA" | b"CTG" => b'L',
+        b"ATT" | b"ATC" | b"ATA" => b'I',
+        b"ATG" => b'M',
+        b"GTT" | b"GTC" | b"GTA" | b"GTG" => b'V',
+        b"TCT" | b"TCC" | b"TCA" | b"TCG" | b"AGT" | b"AGC" => b'S',
+        b"CCT" | b"CCC" | b"CCA" | b"CCG" => b'P',
+        b"ACT" | b"ACC" | b"ACA" | b"ACG" => b'T',
+        b"GCT" | b"GCC" | b"GCA" | b"GCG" => b'A',
+        b"TAT" | b"TAC" => b'Y',
+        b"TAA" | b"TAG" | b"TGA" => b'*',
+        b"CAT" | b"CAC" => b'H',
+        b"CAA" | b"CAG" => b'Q',
+        b"AAT" | b"AAC" => b'N',
+        b"AAA" | b"AAG" => b'K',
+        b"GAT" | b"GAC" => b'D',
+        b"GAA" | b"GAG" => b'E',
+        b"TGT" | b"TGC" => b'C',
+        b"TGG" => b'W',
+        b"CGT" | b"CGC" | b"CGA" | b"CGG" | b"AGA" | b"AGG" => b'R',
+        b"GGT" | b"GGC" | b"GGA" | b"GGG" => b'G',
+        _ => b'X',
+    }
+}
+
+#[cfg(test)]
+mod translation_tests {
+    use super::*;
+
+    #[test]
+    fn translates_standard_code_in_frame_zero() {
+        let dna = IntToDna::new(b"ATGGCTGAATTTTAA");
+        assert_eq!(dna.translate().to_string(), "MAEF*");
+    }
+
+    #[test]
+    fn translates_requested_frame() {
+        let dna = IntToDna::new(b"AATGGCTGAATTT");
+        assert_eq!(dna.translate_frame(1).to_string(), "MAEF");
     }
 }

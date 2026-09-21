@@ -116,28 +116,38 @@ fn every_builtin_feature_maps_to_its_own_feature_id() {
 }
 
 #[test]
-fn shared_8bp_prefixes_are_resolved_by_exact_16bp_confirmation() {
-    let mut mapper = FastTagMapper::new().with_min_hits(1);
+fn locator_uses_full_surrounding_feature_context() {
+    let mut mapper = FastTagMapper::new().with_min_hits(10_000);
+
+    let feature = b"AAAAAAAACCCGGGGTTTTTTTTCCCCCCCCAAACCGGGGGGGG";
 
     mapper.add_feature(
-        b"AAAAAAAACCCCCCCC",
-        FeatureEntry::new(10, "a", "Antibody Capture"),
+        feature,
+        FeatureEntry::new(10, "structured", "Antibody Capture"),
     );
-    mapper.add_feature(
-        b"AAAAAAAAGGGGGGGG",
-        FeatureEntry::new(20, "b", "Antibody Capture"),
-    );
+
+    // Exact feature embedded at a supported locator position.
+    //
+    // min_hits is deliberately impossible: this must succeed through the
+    // locator -> placement -> full-feature-overlap path, not old-style
+    // accumulation of seed votes.
+    let read = b"AAAAAAAAAAAAAAAACCCGGGGTTTTTTTTCCCCCCCCAAACCGGGGGGGGTTTTTTTT";
 
     let mut mi = info();
     assert_eq!(
-        mapper.map_feature_id(b"TTTTAAAAAAAACCCCCCCCTTTT", &mut mi),
+        mapper.map_feature_id(read, &mut mi),
         Some(10)
     );
 
+    // Plenty of locally familiar sequence, including exact indexed material,
+    // but the surrounding feature structure is wrong.  A locator alone must
+    // not be enough to call the feature.
+    let read = b"AAAAAAAAAAAAAAAACCCGGGGCCCCCCCCTTTTTTTTAAACCGGGGGGGGTTTTTTTT";
+
     let mut mi = info();
     assert_eq!(
-        mapper.map_feature_id(b"TTTTAAAAAAAAGGGGGGGGTTTT", &mut mi),
-        Some(20)
+        mapper.map_feature_id(read, &mut mi),
+        None
     );
 }
 

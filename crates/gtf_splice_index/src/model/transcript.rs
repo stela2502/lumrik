@@ -1,6 +1,8 @@
 use crate::model::types::{MatchClass, MatchHit, MatchOptions, TranscriptId};
 use crate::types::{RefBlock, SplicedRead, Strand};
 use serde::{Deserialize, Serialize};
+use int_to_dna::IntToDna;
+use int_to_prot::IntToProt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transcript {
@@ -72,6 +74,114 @@ impl Transcript {
     /// a downstream operation.
     pub fn cds_span(&self) -> Option<(u32, u32)> {
         Some((self.cds_start?, self.cds_end?))
+    }
+
+    /// Length of the spliced transcript in bases.
+    pub fn transcript_len(&self) -> usize {
+        self.exons.iter().map(|b| b.len() as usize).sum()
+    }
+
+    /// Map a genomic base coordinate onto the spliced transcript.
+    /// Transcript coordinates are always 5' -> 3', so minus-strand
+    /// transcripts run opposite to genomic coordinate order.
+    pub fn transcript_position_of_genomic(&self, genomic_pos: u32) -> Option<usize> {
+        let mut offset = 0usize;
+        match self.strand {
+            Strand::Plus | Strand::Unknown => {
+                for exon in &self.exons {
+                    if genomic_pos >= exon.start && genomic_pos < exon.end {
+                        return Some(offset + (genomic_pos - exon.start) as usize);
+                    }
+                    offset += exon.len() as usize;
+                }
+            }
+            Strand::Minus => {
+                for exon in self.exons.iter().rev() {
+                    if genomic_pos >= exon.start && genomic_pos < exon.end {
+                        return Some(offset + (exon.end - 1 - genomic_pos) as usize);
+                    }
+                    offset += exon.len() as usize;
+                }
+            }
+        }
+        None
+    }
+
+    /// Map a spliced transcript base coordinate back to the genome.
+    pub fn genomic_position_of_transcript(&self, transcript_pos: usize) -> Option<u32> {
+        let mut offset = 0usize;
+        match self.strand {
+            Strand::Plus | Strand::Unknown => {
+                for exon in &self.exons {
+                    let len = exon.len() as usize;
+                    if transcript_pos < offset + len {
+                        return Some(exon.start + (transcript_pos - offset) as u32);
+                    }
+                    offset += len;
+                }
+            }
+            Strand::Minus => {
+                for exon in self.exons.iter().rev() {
+                    let len = exon.len() as usize;
+                    if transcript_pos < offset + len {
+                        return Some(exon.end - 1 - (transcript_pos - offset) as u32);
+                    }
+                    offset += len;
+                }
+            }
+        }
+        None
+    }
+
+    /// CDS bounds in spliced transcript coordinates, 0-based and half-open.
+    pub fn cds_transcript_span(&self) -> Option<(usize, usize)> {
+        let (start, end) = self.cds_span()?;
+        if start >= end {
+            return None;
+        }
+        let a = self.transcript_position_of_genomic(start)?;
+        let b = self.transcript_position_of_genomic(end - 1)?;
+        Some((a.min(b), a.max(b) + 1))
+    }
+
+    /// Materialize the spliced cDNA from one chromosome/reference sequence.
+    /// `chromosome` must use the same 0-based genomic coordinate system as
+    /// this transcript's exon blocks.
+    pub fn cdna(&self, chromosome: &[u8]) -> Result<IntToDna, String> {
+        let mut seq = Vec::with_capacity(self.transcript_len());
+        match self.strand {
+            Strand::Plus | Strand::Unknown => {
+                for exon in &self.exons {
+                    append_reference_block(&mut seq, chromosome, *exon)?;
+                }
+            }
+            Strand::Minus => {
+                for exon in self.exons.iter().rev() {
+                    let start = exon.start as usize;
+                    let end = exon.end as usize;
+                    let bases = chromosome.get(start..end).ok_or_else(|| {
+                        format!("exon {}..{} exceeds reference length {}", start, end, chromosome.len())
+                    })?;
+                    seq.extend(bases.iter().rev().map(|&b| complement(b)));
+                }
+            }
+        }
+        IntToDna::try_new(seq)
+    }
+
+    /// Materialize only the protein-coding portion of the spliced transcript.
+    pub fn coding_dna(&self, chromosome: &[u8]) -> Result<Option<IntToDna>, String> {
+        let Some((start, end)) = self.cds_transcript_span() else {
+            return Ok(None);
+        };
+        let cdna = self.cdna(chromosome)?;
+        let seq = cdna.to_string(cdna.size);
+        Ok(Some(IntToDna::try_new(&seq.as_bytes()[start..end])?))
+    }
+
+    /// Materialize and translate this transcript's annotated CDS.
+    pub fn protein(&self, chromosome: &[u8]) -> Result<Option<IntToProt>, String> {
+        Ok(self.coding_dna(chromosome)?.map(|cds| cds.translate()))
     }
 
     /// sorts the transcripts exons and returns (total start: u32, total end: u32)
@@ -385,6 +495,29 @@ impl Transcript {
     }
 }
 
+
+fn append_reference_block(out: &mut Vec<u8>, chromosome: &[u8], block: RefBlock) -> Result<(), String> {
+    let start = block.start as usize;
+    let end = block.end as usize;
+    let bases = chromosome.get(start..end).ok_or_else(|| {
+        format!("exon {}..{} exceeds reference length {}", start, end, chromosome.len())
+    })?;
+    out.extend_from_slice(bases);
+    Ok(())
+}
+
+#[inline]
+fn complement(base: u8) -> u8 {
+    match base.to_ascii_uppercase() {
+        b'A' => b'T',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'T' => b'A',
+        b'N' => b'N',
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,4 +795,60 @@ mod tests {
             "single-block read fully inside intron must not become Compatible"
         );
     }
+
+    #[test]
+    fn plus_strand_materializes_cdna_cds_and_protein() {
+        let mut tx = Transcript::new(1, 1, "tx", 0, Strand::Plus);
+        tx.add_exon(RefBlock::new(0, 6));
+        tx.add_exon(RefBlock::new(10, 19));
+        tx.add_cds(RefBlock::new(0, 6));
+        tx.add_cds(RefBlock::new(10, 19));
+        tx.finalize();
+
+        let chromosome = b"ATGGCTNNNNGAATTTTAA";
+        assert_eq!(tx.cdna(chromosome).unwrap().to_string(15), "ATGGCTGAATTTTAA");
+        assert_eq!(tx.cds_transcript_span(), Some((0, 15)));
+        assert_eq!(
+            tx.coding_dna(chromosome).unwrap().unwrap().to_string(15),
+            "ATGGCTGAATTTTAA"
+        );
+        assert_eq!(tx.protein(chromosome).unwrap().unwrap().to_string(), "MAEF*");
+        assert_eq!(tx.transcript_position_of_genomic(10), Some(6));
+        assert_eq!(tx.genomic_position_of_transcript(6), Some(10));
+    }
+
+    #[test]
+    fn minus_strand_materializes_cdna_cds_and_protein_in_transcript_orientation() {
+        let mut tx = Transcript::new(1, 1, "tx", 0, Strand::Minus);
+        tx.add_exon(RefBlock::new(0, 9));
+        tx.add_exon(RefBlock::new(12, 18));
+        tx.add_cds(RefBlock::new(0, 9));
+        tx.add_cds(RefBlock::new(12, 18));
+        tx.finalize();
+
+        // reverse-complement(exon 12..18) + reverse-complement(exon 0..9)
+        // = ATGGCT + GAATTTTAA
+        let chromosome = b"TTAAAATTCNNNAGCCAT";
+        assert_eq!(tx.cdna(chromosome).unwrap().to_string(15), "ATGGCTGAATTTTAA");
+        assert_eq!(tx.cds_transcript_span(), Some((0, 15)));
+        assert_eq!(tx.protein(chromosome).unwrap().unwrap().to_string(), "MAEF*");
+        assert_eq!(tx.transcript_position_of_genomic(17), Some(0));
+        assert_eq!(tx.genomic_position_of_transcript(0), Some(17));
+    }
+
+    #[test]
+    fn utr_is_removed_before_translation() {
+        let mut tx = Transcript::new(1, 1, "tx", 0, Strand::Plus);
+        tx.add_exon(RefBlock::new(0, 9));
+        tx.add_exon(RefBlock::new(12, 24));
+        tx.add_cds(RefBlock::new(3, 9));
+        tx.add_cds(RefBlock::new(12, 21));
+        tx.finalize();
+
+        let chromosome = b"CCCATGGCTNNNGAATTTTAAGGG";
+        assert_eq!(tx.cdna(chromosome).unwrap().to_string(21), "CCCATGGCTGAATTTTAAGGG");
+        assert_eq!(tx.cds_transcript_span(), Some((3, 18)));
+        assert_eq!(tx.protein(chromosome).unwrap().unwrap().to_string(), "MAEF*");
+    }
+
 }

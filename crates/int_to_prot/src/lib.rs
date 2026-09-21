@@ -190,3 +190,134 @@ mod tests {
         assert!(IntToProt::try_new(b"M?K").is_err());
     }
 }
+
+/// A protease supported by the built-in virtual digestor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Protease {
+    Trypsin,
+    LysC,
+    ArgC,
+    GluC,
+    AspN,
+    Chymotrypsin,
+}
+
+/// A peptide produced by virtual proteolysis. Coordinates are 0-based,
+/// half-open positions in the parent protein.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Peptide {
+    pub sequence: IntToProt,
+    pub start: usize,
+    pub end: usize,
+    pub missed_cleavages: usize,
+}
+
+impl IntToProt {
+    /// Return an exact packed subsequence using 0-based, half-open coordinates.
+    pub fn slice(&self, start: usize, end: usize) -> Self {
+        assert!(start <= end, "protein slice start must not exceed end");
+        assert!(end <= self.size, "protein slice end exceeds sequence length");
+        let bytes: Vec<u8> = (start..end)
+            .map(|pos| Self::decode_binary(self.get(pos).unwrap()).unwrap())
+            .collect();
+        Self::new(bytes)
+    }
+
+    /// Perform an in-silico digest and retain parent-protein coordinates.
+    /// `max_missed_cleavages = 0` returns only fully cleaved peptides.
+    pub fn digest(&self, protease: Protease, max_missed_cleavages: usize) -> Vec<Peptide> {
+        if self.is_empty() {
+            return Vec::new();
+        }
+
+        let seq = self.to_bytes();
+        let mut cuts = vec![0usize];
+
+        match protease {
+            Protease::AspN => {
+                for (i, &aa) in seq.iter().enumerate() {
+                    if aa == b'D' && i != 0 {
+                        cuts.push(i);
+                    }
+                }
+            }
+            _ => {
+                for i in 0..seq.len() {
+                    let aa = seq[i];
+                    let next = seq.get(i + 1).copied();
+                    let cut = match protease {
+                        Protease::Trypsin => (aa == b'K' || aa == b'R') && next != Some(b'P'),
+                        Protease::LysC => aa == b'K',
+                        Protease::ArgC => aa == b'R',
+                        Protease::GluC => aa == b'E',
+                        Protease::Chymotrypsin => {
+                            matches!(aa, b'F' | b'W' | b'Y') && next != Some(b'P')
+                        }
+                        Protease::AspN => unreachable!(),
+                    };
+                    if cut && i + 1 < seq.len() {
+                        cuts.push(i + 1);
+                    }
+                }
+            }
+        }
+
+        if cuts.last().copied() != Some(seq.len()) {
+            cuts.push(seq.len());
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+
+        let mut peptides = Vec::new();
+        for start_cut in 0..cuts.len() - 1 {
+            let max_end_cut = (start_cut + max_missed_cleavages + 1).min(cuts.len() - 1);
+            for end_cut in (start_cut + 1)..=max_end_cut {
+                let start = cuts[start_cut];
+                let end = cuts[end_cut];
+                peptides.push(Peptide {
+                    sequence: self.slice(start, end),
+                    start,
+                    end,
+                    missed_cleavages: end_cut - start_cut - 1,
+                });
+            }
+        }
+        peptides
+    }
+}
+
+#[cfg(test)]
+mod sequence_operation_tests {
+    use super::*;
+
+    #[test]
+    fn protein_slice_preserves_exact_sequence() {
+        let protein = IntToProt::new(b"MPEPTIDEKTAIL");
+        assert_eq!(protein.slice(1, 8).to_string(), "PEPTIDE");
+    }
+
+    #[test]
+    fn trypsin_digest_retains_parent_coordinates() {
+        let protein = IntToProt::new(b"MPEPTIDEKTAIL");
+        let peptides = protein.digest(Protease::Trypsin, 0);
+        let observed: Vec<(usize, usize, String)> = peptides
+            .iter()
+            .map(|p| (p.start, p.end, p.sequence.to_string()))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                (0, 9, "MPEPTIDEK".to_string()),
+                (9, 13, "TAIL".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn trypsin_respects_proline_exception_and_missed_cleavages() {
+        let protein = IntToProt::new(b"AKPQRTAIL");
+        let peptides = protein.digest(Protease::Trypsin, 1);
+        assert!(peptides.iter().any(|p| p.sequence.to_string() == "AKPQR"));
+        assert!(peptides.iter().any(|p| p.sequence.to_string() == "AKPQRTAIL"));
+    }
+}
