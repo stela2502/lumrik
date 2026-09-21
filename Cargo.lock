@@ -1600,6 +1600,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ommverse"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "bigtools",
+ "bincode",
+ "clap",
+ "gtf_splice_index",
+ "hmm",
+ "int-to-dna",
+ "int-to-prot",
+ "serde",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

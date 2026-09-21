@@ -1,0 +1,18 @@
+[package]
+name = "ommverse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Integrated genome-to-protein biological reference model for Lumrik"
+
+[dependencies]
+anyhow = "1"
+bigtools = "0.5.6"
+bincode = "1"
+clap = { workspace = true }
+gtf_splice_index = { path = "../gtf_splice_index" }
+hmm = { path = "../hmm" }
+int-to-dna = { path = "../int_to_dna" }
+int-to-prot = { path = "../int_to_prot" }
+serde = { version = "1", features = ["derive"] }

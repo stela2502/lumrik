@@ -15,6 +15,7 @@ members = [
     "crates/int_to_dna",
     "crates/int_to_prot",
     "crates/hmm", 
+    "crates/ommverse",
     "crates/nelrune", 
     "crates/sc-vdj",
     "crates/sc-te",
