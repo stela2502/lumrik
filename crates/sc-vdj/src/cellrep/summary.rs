@@ -891,32 +891,6 @@ fn best_offset_packed(
     best
 }
 
-fn overlap_is_compatible(a: &[u8], b: &[u8], off: isize, min_overlap: usize) -> bool {
-    let a0 = off.max(0) as usize;
-    let b0 = (-off).max(0) as usize;
-    if a0 >= a.len() || b0 >= b.len() {
-        return false;
-    }
-    let ov = (a.len() - a0).min(b.len() - b0);
-    if ov < min_overlap {
-        return false;
-    }
-    let mut informative = 0usize;
-    let mut matches = 0usize;
-    for i in 0..ov {
-        let x = a[a0 + i];
-        let y = b[b0 + i];
-        if x == b'N' || y == b'N' {
-            continue;
-        }
-        informative += 1;
-        if x == y {
-            matches += 1;
-        }
-    }
-    informative >= min_overlap && matches * 100 >= informative * 90
-}
-
 pub(super) fn fast_anchor_offset(reference: &[u8], query: &[u8], seed_len: usize) -> Option<isize> {
     let k = seed_len.min(reference.len()).min(query.len());
     if k < 4 {
@@ -956,45 +930,4 @@ pub(super) fn fast_anchor_offset(reference: &[u8], query: &[u8], seed_len: usize
         }
     }
     best.map(|(_, off)| off)
-}
-
-/// Find a high-confidence observed overlap.  This remains as a bridge fallback
-/// for components carrying different germline identities, but it is no longer
-/// run as an all-reads-vs-all-reads greedy assembler.
-pub(super) fn best_offset(a: &[u8], b: &[u8], min_overlap: usize) -> Option<(isize, usize)> {
-    if a.len() < min_overlap || b.len() < min_overlap {
-        return None;
-    }
-    let mut best = None;
-    let lo = -(b.len() as isize) + min_overlap as isize;
-    let hi = a.len() as isize - min_overlap as isize;
-    for off in lo..=hi {
-        let a0 = off.max(0) as usize;
-        let b0 = (-off).max(0) as usize;
-        let ov = (a.len() - a0).min(b.len() - b0);
-        if ov < min_overlap {
-            continue;
-        }
-        let mut informative = 0usize;
-        let mut matches = 0usize;
-        for i in 0..ov {
-            let x = a[a0 + i];
-            let y = b[b0 + i];
-            if x == b'N' || y == b'N' {
-                continue;
-            }
-            informative += 1;
-            if x == y {
-                matches += 1;
-            }
-        }
-        if informative < min_overlap || matches * 100 < informative * 90 {
-            continue;
-        }
-        let cand = (off, matches);
-        if best.is_none_or(|x: (isize, usize)| cand.1 > x.1) {
-            best = Some(cand);
-        }
-    }
-    best
 }

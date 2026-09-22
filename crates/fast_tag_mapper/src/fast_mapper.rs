@@ -398,17 +398,6 @@ fn one_hot(base: u8) -> u8 { match base { b'A'|b'a'=>1, b'C'|b'c'=>2, b'G'|b'g'=
 fn complement_one_hot(base: u8) -> u8 { match base { b'A'|b'a'=>8, b'C'|b'c'=>4, b'G'|b'g'=>2, b'T'|b't'=>1, _=>0 } }
 fn reverse_complement(seq: &[u8]) -> Vec<u8> { seq.iter().rev().map(|&b| match b { b'A'|b'a'=>b'T', b'C'|b'c'=>b'G', b'G'|b'g'=>b'C', b'T'|b't'=>b'A', _=>b'N' }).collect() }
 
-#[inline(always)]
-fn encode_exact_16_at(seq: &[u8], start: usize) -> Option<u32> {
-    let window = seq.get(start..start.checked_add(SEED_BASES)?)?;
-    let mut word = 0u32;
-    for &base in window {
-        if matches!(base, b'N' | b'n') { return None; }
-        word = (word << 2) | u32::from(IntToDna::encode_binary(base).ok()?);
-    }
-    Some(word)
-}
-
 fn split_seed(seed: u32) -> (usize, u8, u16) { let first_8=(seed>>16) as u16; ((first_8>>8) as usize, first_8 as u8, seed as u16) }
 
 struct Rolling16<'a> { seq: &'a [u8], pos: usize, word: u32, valid_bases: usize }

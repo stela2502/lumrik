@@ -50,10 +50,6 @@ struct BdCall {
     d: String,
     j: String,
     c: String,
-    junction: String,
-    junction_aa: String,
-    productive: String,
-    umi_count: String,
 }
 
 fn main() -> Result<()> {
@@ -173,10 +169,6 @@ fn read_bd_airr(path: &Path) -> Result<Vec<BdCall>> {
     let d_idx = column_index(&columns, "d_call")?;
     let j_idx = column_index(&columns, "j_call")?;
     let c_idx = column_index(&columns, "c_call")?;
-    let junction_idx = column_index(&columns, "junction")?;
-    let junction_aa_idx = column_index(&columns, "junction_aa")?;
-    let productive_idx = column_index(&columns, "productive")?;
-    let umi_count_idx = column_index(&columns, "umi_count")?;
 
     let mut calls = Vec::new();
 
@@ -201,10 +193,6 @@ fn read_bd_airr(path: &Path) -> Result<Vec<BdCall>> {
             d: normalize_gene(field_ref(&fields, d_idx)),
             j: normalize_gene(field_ref(&fields, j_idx)),
             c: normalize_gene(field_ref(&fields, c_idx)),
-            junction: field(&fields, junction_idx),
-            junction_aa: field(&fields, junction_aa_idx),
-            productive: field(&fields, productive_idx),
-            umi_count: field(&fields, umi_count_idx),
         });
     }
 

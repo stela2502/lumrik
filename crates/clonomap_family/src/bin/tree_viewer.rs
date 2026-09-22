@@ -161,8 +161,6 @@ fn draw_svg(
     }))?;
 
     // Mark nodes, and label leaves
-    use plotters::style::text_anchor::{HPos, VPos};
-
     // compute which nodes are leaves (no outgoing edges as parent)
     let mut has_children = vec![false; points.len()];
     for &(_, c) in edges {

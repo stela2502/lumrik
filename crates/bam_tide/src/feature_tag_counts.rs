@@ -211,7 +211,7 @@ impl FeatureTagCounts {
             NgsNormalizerSupport::new_feature_tag_table(),
         );
 
-        let (mut filtered, background) = raw.split_by_cells(cells);
+        let (filtered, background) = raw.split_by_cells(cells);
 
         eprintln!(
     "FEATURE DEBUG: canonical GEX cells = {}",

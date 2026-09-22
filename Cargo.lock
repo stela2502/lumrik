@@ -1607,10 +1607,13 @@ dependencies = [
  "bigtools",
  "bincode",
  "clap",
+ "flate2",
  "gtf_splice_index",
  "hmm",
  "int-to-dna",
  "int-to-prot",
+ "lumrik-status",
+ "rayon",
  "serde",
 ]
 

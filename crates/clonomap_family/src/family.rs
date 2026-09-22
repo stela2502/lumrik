@@ -647,12 +647,6 @@ fn render_fragment_alignment(reference: &str, observed: &str) -> Option<(String,
     Some((expected, observed_line, differences))
 }
 
-/// Compatibility helper: expected sequence plus differences-only line.
-pub fn render_fragment_differences(reference: &str, observed: &str) -> Option<(String, String)> {
-    let (expected, _observed, differences) = render_fragment_alignment(reference, observed)?;
-    Some((expected, differences))
-}
-
 /// Fragment-aware mutation measurement for partial receptor observations.
 ///
 /// A longest exact common block anchors the two sequences. From that anchor we
@@ -728,8 +722,9 @@ mod tests {
         assert_eq!(m.informative_pairs,16);
     }
     #[test] fn difference_render_hides_matches(){
-        let (expected, diff)=render_fragment_differences("AAAACCCCGGGG","AAAATCCCGGGG").unwrap();
+        let (expected, observed, diff)=render_fragment_alignment("AAAACCCCGGGG","AAAATCCCGGGG").unwrap();
         assert_eq!(expected, "AAAACCCCGGGG");
+        assert_eq!(observed, "AAAATCCCGGGG");
         assert_eq!(diff, "    T       ");
     }
 }

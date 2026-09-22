@@ -186,6 +186,7 @@ pub enum ProductivityStatus {
     MissingVCodingStart,
     MissingVAnchor,
     MissingJAnchor,
+    InsufficientJSequence,
     InvalidAnchorOrder,
     TooShort,
 }
@@ -198,13 +199,17 @@ impl ProductivityStatus {
             Self::MissingVCodingStart => "unknown_no_v_cds",
             Self::MissingVAnchor => "unproductive_missing_v_anchor",
             Self::MissingJAnchor => "unproductive_missing_j_anchor",
+            Self::InsufficientJSequence => "unknown_insufficient_j_sequence",
             Self::InvalidAnchorOrder => "unproductive_invalid_anchor_order",
             Self::TooShort => "unproductive_sequence_too_short",
         }
     }
 
     pub fn is_unknown(self) -> bool {
-        matches!(self, Self::MissingVCodingStart)
+        matches!(
+            self,
+            Self::MissingVCodingStart | Self::InsufficientJSequence
+        )
     }
 }
 
@@ -344,6 +349,7 @@ fn identify_summary(
         v_aln,
         j_aln,
         index.segment(v_id).and_then(|s| s.coding_start()),
+        j,
     );
     let in_frame = productivity.in_frame;
     let stop = productivity.stop_codon;
@@ -420,7 +426,13 @@ pub(crate) fn refresh_recombination_from_observed(
     ) else {
         return false;
     };
-    let productivity = assess_productivity(&observed, v_aln, j_aln, v_seg.coding_start());
+    let productivity = assess_productivity(
+        &observed,
+        v_aln,
+        j_aln,
+        v_seg.coding_start(),
+        &j_seg.sequence,
+    );
     recomb.junction = measured.junction;
     recomb.naive_recombination = measured.naive;
     recomb.productive = productivity.productive;
@@ -762,31 +774,69 @@ fn empty_productivity(status: ProductivityStatus) -> ProductivityAssessment {
     }
 }
 
-/// Determine receptor productivity in the coding frame fixed by the annotated
-/// V CDS start.  We no longer choose whichever of three frames happens to make
-/// conserved receptor motifs look plausible.
+/// Determine receptor productivity from conserved receptor anchors.  Prefer the
+/// annotated V CDS frame when it exists.  Some otherwise usable V segments do
+/// not carry a CDS start in the source annotation; for those segments, infer
+/// the frame from the conserved V cysteine and J F/W-G-X-G anchors instead of
+/// discarding the reconstructed receptor.
 fn assess_productivity(
     observed: &[u8],
     v_aln: LocalAlignment,
     j_aln: LocalAlignment,
     v_coding_start: Option<usize>,
+    j_reference: &[u8],
+) -> ProductivityAssessment {
+    if let Some(cds_start) = v_coding_start {
+        // Project the V reference coding origin through the local alignment.
+        // Only the residue modulo three matters, so this remains valid when
+        // the CDS start lies outside the aligned V fragment.
+        let delta = v_aln.reference_start as isize - cds_start as isize;
+        let frame = (v_aln.query_start as isize - delta).rem_euclid(3) as usize;
+        return assess_productivity_in_frame(observed, v_aln, j_aln, frame, j_reference);
+    }
+
+    // Annotation fallback: the AIRR V and J anchors themselves define the
+    // receptor reading frame.  Evaluate all three frames and accept a frame
+    // only when both conserved anchors can be found in that same frame.  This
+    // is sequence-derived inference, not an arbitrary choice of the frame
+    // with the nicest translation.
+    let mut candidates = (0..3)
+        .map(|frame| assess_productivity_in_frame(observed, v_aln, j_aln, frame, j_reference))
+        .filter(|p| {
+            matches!(
+                p.status,
+                ProductivityStatus::Productive | ProductivityStatus::StopCodon
+            )
+        });
+
+    let Some(first) = candidates.next() else {
+        return empty_productivity(ProductivityStatus::MissingVCodingStart);
+    };
+
+    // A genuine conserved V/J anchor pair should identify one frame.  If an
+    // unusual sequence produces anchor pairs in multiple frames, retain the
+    // conservative unknown classification rather than manufacturing a call.
+    if candidates.next().is_some() {
+        return empty_productivity(ProductivityStatus::MissingVCodingStart);
+    }
+
+    first
+}
+
+fn assess_productivity_in_frame(
+    observed: &[u8],
+    v_aln: LocalAlignment,
+    j_aln: LocalAlignment,
+    frame: usize,
+    j_reference: &[u8],
 ) -> ProductivityAssessment {
     const V_ANCHOR_WINDOW: usize = 90;
     const J_ANCHOR_WINDOW: usize = 120;
 
-    let Some(cds_start) = v_coding_start else {
-        return empty_productivity(ProductivityStatus::MissingVCodingStart);
-    };
     let rearr_end = j_aln.query_end.min(observed.len());
     if rearr_end < 3 {
         return empty_productivity(ProductivityStatus::TooShort);
     }
-
-    // Project the V reference coding origin through the local alignment. Only
-    // the residue modulo three matters, so this remains valid when the CDS
-    // start lies outside the aligned V fragment.
-    let delta = v_aln.reference_start as isize - cds_start as isize;
-    let frame = (v_aln.query_start as isize - delta).rem_euclid(3) as usize;
 
     let v_start = v_aln
         .query_start
@@ -825,6 +875,18 @@ fn assess_productivity(
         q += 3;
     }
     let Some(j_anchor) = j_anchor else {
+        // Absence of the conserved J motif is only evidence of an invalid
+        // receptor if the observed J alignment actually covers the motif in
+        // the assigned germline J segment.  Shallow/truncated reads often end
+        // before F/W-G-X-G; those are unclassifiable, not unproductive.
+        if let Some(reference_anchor) = j_reference_anchor(j_reference) {
+            let reference_anchor_end = reference_anchor.saturating_add(12);
+            if j_aln.reference_start > reference_anchor
+                || j_aln.reference_end < reference_anchor_end
+            {
+                return empty_productivity(ProductivityStatus::InsufficientJSequence);
+            }
+        }
         return empty_productivity(ProductivityStatus::MissingJAnchor);
     };
     if v_c >= j_anchor {
@@ -859,6 +921,18 @@ fn assess_productivity(
         cdr3,
         cdr3_aa,
     }
+}
+
+fn j_reference_anchor(reference: &[u8]) -> Option<usize> {
+    if reference.len() < 12 {
+        return None;
+    }
+    (0..=reference.len() - 12).find(|&q| {
+        let a0 = codon(reference[q], reference[q + 1], reference[q + 2]);
+        let a1 = codon(reference[q + 3], reference[q + 4], reference[q + 5]);
+        let a3 = codon(reference[q + 9], reference[q + 10], reference[q + 11]);
+        matches!(a0, b'F' | b'W') && a1 == b'G' && a3 == b'G'
+    })
 }
 
 fn translate(seq: &[u8]) -> Vec<u8> {
@@ -933,7 +1007,7 @@ mod tests {
         // Coding frame starts at nucleotide 1: a one-base 5' UTR prefix must not
         // make an otherwise productive V-J sequence appear out of frame.
         let observed = b"AAAATGTGCCAAATGGGGTAAAGGTGCC";
-        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), Some(0));
+        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), Some(0), b"TGGGGTAAAGGTGCC");
         assert!(p.productive);
         assert!(p.in_frame);
         assert!(!p.stop_codon);
@@ -943,7 +1017,7 @@ mod tests {
     #[test]
     fn productivity_reports_stop_in_selected_vj_frame() {
         let observed = b"AAAATGTGCCTAATGGGGTAAAGGTGCC";
-        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), Some(0));
+        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), Some(0), b"TGGGGTAAAGGTGCC");
         assert!(!p.productive);
         assert!(p.in_frame);
         assert!(p.stop_codon);
@@ -954,19 +1028,78 @@ mod tests {
         // V conserved C is in frame 1, while an inserted nucleotide shifts the
         // J F/W-G-X-G motif into frame 2.
         let observed = b"AAAATGTAAACTGGGGTAAAGGT";
-        let p = assess_productivity(observed, aln(1, 10), aln(11, 23), Some(0));
+        let p = assess_productivity(observed, aln(1, 10), aln(11, 23), Some(0), b"TGGGGTAAAGGT");
         assert!(!p.productive);
         assert!(!p.in_frame);
         assert!(!p.stop_codon);
     }
 
     #[test]
-    fn productivity_without_v_cds_is_explicitly_unknown() {
+    fn productivity_without_v_cds_infers_unique_anchor_frame() {
         let observed = b"AAAATGTGCCAAATGGGGTAAAGGTGCC";
-        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), None);
+        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), None, b"TGGGGTAAAGGTGCC");
+        assert!(p.productive);
+        assert!(p.in_frame);
+        assert!(!p.stop_codon);
+        assert_eq!(p.status, ProductivityStatus::Productive);
+        assert!(!p.junction_aa.is_empty());
+    }
+
+    #[test]
+    fn productivity_without_v_cds_stays_unknown_without_anchor_pair() {
+        let observed = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), None, b"TGGGGTAAAGGTGCC");
         assert!(!p.productive);
         assert_eq!(p.status, ProductivityStatus::MissingVCodingStart);
         assert!(p.status.is_unknown());
+    }
+
+    #[test]
+    fn productivity_does_not_call_missing_j_anchor_when_j_is_truncated() {
+        // The germline J contains W-G-X-G, but the observed/aligned J ends
+        // before the complete motif.  Lack of the anchor is therefore lack of
+        // evidence, not evidence that the rearrangement is unproductive.
+        let observed = b"AAAATGTGCCAAATGGGGT";
+        let p = assess_productivity(
+            observed,
+            aln(1, 10),
+            LocalAlignment {
+                score: 1,
+                query_start: 13,
+                query_end: 19,
+                reference_start: 0,
+                reference_end: 6,
+            },
+            Some(0),
+            b"TGGGGTAAAGGTGCC",
+        );
+        assert!(!p.productive);
+        assert_eq!(p.status, ProductivityStatus::InsufficientJSequence);
+        assert!(p.status.is_unknown());
+    }
+
+    #[test]
+    fn productivity_keeps_missing_j_anchor_when_anchor_region_is_covered() {
+        // If the alignment covers the germline anchor coordinates but the
+        // observed sequence does not contain the motif in the receptor frame,
+        // MissingJAnchor remains a real unproductive classification.
+        let observed = b"AAAATGTGCCAAACCCCCCCCCCCCGCC";
+        let p = assess_productivity(
+            observed,
+            aln(1, 10),
+            LocalAlignment {
+                score: 1,
+                query_start: 13,
+                query_end: 28,
+                reference_start: 0,
+                reference_end: 15,
+            },
+            Some(0),
+            b"TGGGGTAAAGGTGCC",
+        );
+        assert!(!p.productive);
+        assert_eq!(p.status, ProductivityStatus::MissingJAnchor);
+        assert!(!p.status.is_unknown());
     }
 
     #[test]

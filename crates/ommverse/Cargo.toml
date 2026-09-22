@@ -11,8 +11,11 @@ anyhow = "1"
 bigtools = "0.5.6"
 bincode = "1"
 clap = { workspace = true }
+flate2 = "1"
 gtf_splice_index = { path = "../gtf_splice_index" }
 hmm = { path = "../hmm" }
 int-to-dna = { path = "../int_to_dna" }
 int-to-prot = { path = "../int_to_prot" }
+lumrik-status = { path = "../lumrik-status" }
+rayon = "1"
 serde = { version = "1", features = ["derive"] }

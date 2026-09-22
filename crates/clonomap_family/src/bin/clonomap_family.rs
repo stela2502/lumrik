@@ -400,46 +400,6 @@ fn family_is_selected(family: &Family, min_size: usize, max_p: f64) -> bool {
     family.members.len() >= min_size || family_is_significant(&family_plot_analysis(family), max_p)
 }
 
-fn best_significant_stat<'a>(stats: impl IntoIterator<Item = (&'a str, PearsonStat)>, max_p: f64) -> Option<(&'a str, PearsonStat)> {
-    stats.into_iter()
-        .filter(|(_, s)| s.p.is_some_and(|p| p <= max_p))
-        .min_by(|a, b| a.1.p.unwrap().total_cmp(&b.1.p.unwrap()))
-}
-
-fn plot_signal_suffix(a: &FamilyPlotAnalysis, family_size: usize, min_size: usize, max_p: f64) -> String {
-    let family = best_significant_stat([
-        ("AH", a.abundance_hc), ("AL", a.abundance_lc),
-        ("AP", a.abundance_paired), ("HL", a.hc_lc),
-    ], max_p);
-    let hclc = a.hclc.iter().filter_map(|(lc, x)| {
-        best_significant_stat([
-            ("AH", x.abundance_hc), ("AL", x.abundance_lc),
-            ("AP", x.abundance_paired), ("HL", x.hc_lc),
-        ], max_p).map(|(kind, stat)| (lc.as_str(), kind, stat))
-    }).min_by(|a, b| a.2.p.unwrap().total_cmp(&b.2.p.unwrap()));
-
-    let size = family_size >= min_size;
-    let signal = match (size, family.is_some(), hclc.is_some()) {
-        (true, true, true) => "SIZE+FAM+HCLC",
-        (true, true, false) => "SIZE+FAM",
-        (true, false, true) => "SIZE+HCLC",
-        (true, false, false) => "SIZE",
-        (false, true, true) => "FAM+HCLC",
-        (false, true, false) => "FAM",
-        (false, false, true) => "HCLC",
-        (false, false, false) => "NONE",
-    };
-    let mut out = format!("__SEL-{}", signal);
-    if let Some((kind, stat)) = family {
-        out.push_str(&format!("__F-{}-n{}-r{:+.2}-p{:.2e}", kind, stat.n, stat.r.unwrap(), stat.p.unwrap()));
-    }
-    if let Some((lc, kind, stat)) = hclc {
-        let lc = lc.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') { c } else { '_' }).collect::<String>();
-        out.push_str(&format!("__L-{}-{}-n{}-r{:+.2}-p{:.2e}", lc, kind, stat.n, stat.r.unwrap(), stat.p.unwrap()));
-    }
-    out
-}
-
 fn write_family_plots(out: &Path, families: &[Family], min_size: usize, max_p: f64, radial_layout: bool) -> Result<()> {
     create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
     for (plot_index, family) in families.iter().filter(|f| family_is_selected(f, min_size, max_p)).enumerate() {
@@ -448,7 +408,7 @@ fn write_family_plots(out: &Path, families: &[Family], min_size: usize, max_p: f
     Ok(())
 }
 
-fn write_one_family_plot(out: &Path, family: &Family, plot_index: usize, min_size: usize, max_p: f64, radial_layout: bool) -> Result<()> {
+fn write_one_family_plot(out: &Path, family: &Family, plot_index: usize, _min_size: usize, _max_p: f64, radial_layout: bool) -> Result<()> {
     // Plotting consumes the frozen Family.  It deliberately uses the mutation
     // measurements already accepted by HC/LC family logic; it never realigns a
     // receptor or changes membership.  Until span-aware positional mutation

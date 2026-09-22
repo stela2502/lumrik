@@ -482,15 +482,6 @@ impl PrimerDetector {
         (from < seq.len()).then_some(from)
     }
 
-    /// A built-in TENX_CELL without an explicit leading anchor/search is a
-    /// positional R1 grammar.  Its barcode starts at offset zero.
-    fn leading_tenx_cell(&self) -> bool {
-        matches!(
-            self.grammar.ops.as_slice(),
-            [GrammarOp::TenxCell { .. }, ..]
-        ) && matches!(&self.single_cell_system, Some(SingleCellSystem::Tenx(_)))
-    }
-
     /// SEARCH directly before BD_CELL is the only flexible prefix used by the
     /// built-in BD v2 chemistries.  Keep this deliberately narrow so arbitrary
     /// custom grammars retain the generic detector semantics.
