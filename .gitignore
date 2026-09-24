@@ -15,3 +15,4 @@ bd_diagnostics.tsv
 *.orig
 clonomap_test
 :n
+crates/bam_tide/legacy/testData/cmp.tsv
