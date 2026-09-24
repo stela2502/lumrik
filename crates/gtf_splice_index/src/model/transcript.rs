@@ -2,7 +2,6 @@ use crate::model::types::{MatchClass, MatchHit, MatchOptions, TranscriptId};
 use crate::types::{RefBlock, SplicedRead, Strand};
 use serde::{Deserialize, Serialize};
 
-const MIN_TRANSCRIPT_END_OVERHANG_BP: u32 = 100;
 use int_to_dna::IntToDna;
 use int_to_prot::IntToProt;
 
@@ -364,13 +363,10 @@ impl Transcript {
         // ------------------------------------------------------------
         // 3) Transcript boundary overhang check
         // ------------------------------------------------------------
-        // Transcript ends, especially annotated 3-prime/poly(A) ends, are not
-        // exact biological boundaries. Never make the matcher stricter than
-        // 100 bp even when an older caller explicitly passes zero. Larger user
-        // tolerances remain honored.
-        let max_5p_overhang_bp = opts.max_5p_overhang_bp.max(MIN_TRANSCRIPT_END_OVERHANG_BP);
-        let max_3p_overhang_bp = opts.max_3p_overhang_bp.max(MIN_TRANSCRIPT_END_OVERHANG_BP);
-        if over5 > max_5p_overhang_bp || over3 > max_3p_overhang_bp {
+        // Transcript-end tolerance is caller-configurable. MatchOptions::default()
+        // provides the biologically lenient 100 bp default, while explicit
+        // stricter values (including zero) must be honored here.
+        if over5 > opts.max_5p_overhang_bp || over3 > opts.max_3p_overhang_bp {
             return MatchHit::new(MatchClass::OverhangTooLarge, over5, over3);
         }
 
@@ -751,7 +747,10 @@ mod tests {
             vec![RefBlock::new(70, 150), RefBlock::new(200, 250)],
         );
 
-        let hit = tx.match_spliced_read(&read, opts());
+        let mut options = opts();
+        options.max_5p_overhang_bp = 0;
+
+        let hit = tx.match_spliced_read(&read, options);
 
         assert_eq!(hit.class, MatchClass::OverhangTooLarge);
         assert_eq!(hit.overhang_5p_bp, 30);
@@ -955,11 +954,11 @@ mod tests {
     #[test]
     fn exon_fit_failure_without_intron_overlap_is_not_intronic() {
         let tx = tx_two_exons(1, Strand::Plus);
-        let read = read(1, Strand::Plus, vec![RefBlock::new(90, 160)]);
+        let r1 = read(1, Strand::Plus, vec![RefBlock::new(90, 160)]);
         let mut o = opts();
         o.max_5p_overhang_bp = 100;
         o.max_3p_overhang_bp = 100;
-        let hit = tx.match_spliced_read(&read, o);
+        let hit = tx.match_spliced_read(&r1, o);
         assert_eq!(
             hit.class,
             MatchClass::Intronic,
@@ -969,8 +968,8 @@ mod tests {
         let mut single = Transcript::new(0, 0, "single", 1, Strand::Plus);
         single.add_exon(RefBlock::new(100, 150));
         single.finalize();
-        let read = read(1, Strand::Plus, vec![RefBlock::new(90, 160)]);
-        let hit = single.match_spliced_read(&read, o);
+        let r2 = read(1, Strand::Plus, vec![RefBlock::new(90, 160)]);
+        let hit = single.match_spliced_read(&r2, o);
         assert_eq!(
             hit.class,
             MatchClass::Compatible,
@@ -1009,7 +1008,7 @@ mod tests {
         };
         assert_eq!(
             tx.match_spliced_read(&right, legacy_zero).class,
-            MatchClass::Compatible
+            MatchClass::OverhangTooLarge
         );
     }
 

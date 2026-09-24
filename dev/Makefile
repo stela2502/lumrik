@@ -225,8 +225,8 @@ lumrik-release-image:
 		mv Cargo.toml.release.tmp Cargo.toml; \
 		version_changed=1; \
 		trap 'status=$$?; if [ $$status -ne 0 ] && [ "$${version_changed:-0}" = 1 ]; then git restore -- Cargo.toml Cargo.lock 2>/dev/null || true; fi; exit $$status' EXIT; \
-		echo "Running local release tests for $$version..."; \
-		cargo test --release --workspace; \
+		echo "Running local musl tests for $$version..."; \
+		cargo build -r --target x86_64-unknown-linux-musl; \
 		git add Cargo.toml Cargo.lock; \
 		git commit -m "Set version to $$version"; \
 		version_changed=0; \

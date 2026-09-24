@@ -369,7 +369,7 @@ fn run_lights(
     )?;
 
     let mut edges = 0usize;
-    let mut distance_bins = vec![
+    let distance_bins = vec![
         ("<10kb", 0u64, 10_000u64),
         ("10-25kb", 10_000, 25_000),
         ("25-50kb", 25_000, 50_000),

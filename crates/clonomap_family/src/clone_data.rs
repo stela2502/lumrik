@@ -327,7 +327,7 @@ fn test_imgt_long_gap_yields_long_x_prefix() {
     let nt = "\
 ................................................................................................................................................................................................................................................................AAGCAGTGGTATCAACGCAGAGTTCAGTGGGGGAGGACACAGCCCTTTATTACTGTGCAAGACGGGATTACTACGGTAGCCACTACTTTGACTACTGGGGCCAAGACACCACTCTCACAGTCTCCTCAG";
 
-    let AA_TAIL: &str = "AVVSTQSSVGEDTALYYCARRDYYGSHYFDYWGQDTTLTVSS";
+    let aa_tail1: &str = "AVVSTQSSVGEDTALYYCARRDYYGSHYFDYWGQDTTLTVSS";
     // Count leading gaps
     let n_gaps = nt.chars().take_while(|c| *c == '.').count();
 
@@ -336,7 +336,7 @@ fn test_imgt_long_gap_yields_long_x_prefix() {
 
     // Build expected aligned AA sequence
     let mut expected = "X".repeat(expected_x_codons);
-    expected.push_str(AA_TAIL);
+    expected.push_str(aa_tail1);
 
     // Perform translation
     let aa = translate_imgt_alignment(nt);
@@ -351,11 +351,11 @@ fn test_imgt_long_gap_yields_long_x_prefix() {
 
     // 2. Tail AA matches the known biological translation
     let tail_start = expected_x_codons;
-    let aa_tail = &aa[tail_start..tail_start + AA_TAIL.len()];
+    let aa_tail = &aa[tail_start..tail_start + aa_tail1.len()];
 
     assert_eq!(
-        aa_tail, AA_TAIL,
-        "Translated AA tail does not match expected.\nAA_TAIL: {}\nExpect: {}",
-        aa_tail, AA_TAIL
+        aa_tail, aa_tail1,
+        "Translated AA tail does not match expected.\naa_tail1: {}\nExpect: {}",
+        aa_tail, aa_tail1
     );
 }
