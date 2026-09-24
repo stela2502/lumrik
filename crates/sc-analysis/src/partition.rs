@@ -13,13 +13,7 @@ pub(crate) fn spatial_patches(pca: &Array2<f32>, explained: &[f64]) -> Vec<usize
     let max_patch_cells = 50usize.max((n + 99) / 100); // ceil(1% of retained cells)
     let dims = informative_dimensions(pca.ncols(), explained);
     let mut leaves = Vec::<Vec<usize>>::new();
-    split_patch(
-        pca,
-        (0..n).collect(),
-        &dims,
-        max_patch_cells,
-        &mut leaves,
-    );
+    split_patch(pca, (0..n).collect(), &dims, max_patch_cells, &mut leaves);
 
     let mut labels = vec![0usize; n];
     for (label, cells) in leaves.iter().enumerate() {
@@ -71,11 +65,7 @@ fn split_patch(
     }
 
     let axis = highest_variance_axis(pca, &cells, dims);
-    cells.sort_unstable_by(|&a, &b| {
-        pca[(a, axis)]
-            .total_cmp(&pca[(b, axis)])
-            .then(a.cmp(&b))
-    });
+    cells.sort_unstable_by(|&a, &b| pca[(a, axis)].total_cmp(&pca[(b, axis)]).then(a.cmp(&b)));
     let right = cells.split_off(cells.len() / 2);
     split_patch(pca, cells, dims, max_patch_cells, leaves);
     split_patch(pca, right, dims, max_patch_cells, leaves);

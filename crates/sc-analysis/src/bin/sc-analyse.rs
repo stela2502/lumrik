@@ -102,13 +102,15 @@ fn main() -> Result<()> {
     }
     eprintln!(
         "  V/D/J before normalization: {}",
-        if config.exclude_vdj_before_normalization { "excluded" } else { "retained" }
+        if config.exclude_vdj_before_normalization {
+            "excluded"
+        } else {
+            "retained"
+        }
     );
     eprintln!("  variable genes: {}", config.variable_genes);
     eprintln!("  PCA components: {}", config.pca_components);
-    eprintln!(
-        "  spatial patching: recursive PCA boxes, max(50 cells, 1% of retained cells)"
-    );
+    eprintln!("  spatial patching: recursive PCA boxes, max(50 cells, 1% of retained cells)");
     eprintln!(
         "  UMAP neighbours / epochs: {} / {}",
         config.umap_neighbors, config.umap_epochs

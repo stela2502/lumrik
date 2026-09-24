@@ -301,9 +301,13 @@ struct MatrixFeatureCounts {
 impl MatrixFeatureCounts {
     fn from_output(outpath: &Path) -> Result<Self> {
         Ok(Self {
-            unfiltered_exonic: count_gzip_lines(&outpath.join("unfiltered/exonic/features.tsv.gz"))?,
+            unfiltered_exonic: count_gzip_lines(
+                &outpath.join("unfiltered/exonic/features.tsv.gz"),
+            )?,
             filtered_exonic: count_gzip_lines(&outpath.join("exonic/features.tsv.gz"))?,
-            unfiltered_intronic: count_gzip_lines(&outpath.join("unfiltered/intronic/features.tsv.gz"))?,
+            unfiltered_intronic: count_gzip_lines(
+                &outpath.join("unfiltered/intronic/features.tsv.gz"),
+            )?,
             filtered_intronic: count_gzip_lines(&outpath.join("intronic/features.tsv.gz"))?,
         })
     }
@@ -313,10 +317,26 @@ impl std::fmt::Display for MatrixFeatureCounts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Matrix feature counts")?;
         writeln!(f, "---------------------")?;
-        writeln!(f, "unfiltered exonic features written: {}", self.unfiltered_exonic)?;
-        writeln!(f, "filtered exonic features written: {}", self.filtered_exonic)?;
-        writeln!(f, "unfiltered intronic features written: {}", self.unfiltered_intronic)?;
-        writeln!(f, "filtered intronic features written: {}", self.filtered_intronic)?;
+        writeln!(
+            f,
+            "unfiltered exonic features written: {}",
+            self.unfiltered_exonic
+        )?;
+        writeln!(
+            f,
+            "filtered exonic features written: {}",
+            self.filtered_exonic
+        )?;
+        writeln!(
+            f,
+            "unfiltered intronic features written: {}",
+            self.unfiltered_intronic
+        )?;
+        writeln!(
+            f,
+            "filtered intronic features written: {}",
+            self.filtered_intronic
+        )?;
         Ok(())
     }
 }

@@ -150,7 +150,7 @@ fn main() -> Result<()> {
             variable_genes: cli.analysis_variable_genes,
             pca_components: cli.analysis_pcs,
             umap_neighbors: 15,
-            exclude_vdj_before_normalization : false,
+            exclude_vdj_before_normalization: false,
             min_umi_count: Some(400),
             umap_components: 2,
             umap_epochs: 200,

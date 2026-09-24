@@ -14,13 +14,8 @@ pub(crate) struct QcMetrics {
 pub(crate) fn is_vdj_segment_gene(name: &str) -> bool {
     let u = name.to_ascii_uppercase();
     const PREFIXES: &[&str] = &[
-        "IGHV", "IGHD", "IGHJ",
-        "IGKV", "IGKJ",
-        "IGLV", "IGLJ",
-        "TRAV", "TRAJ",
-        "TRBV", "TRBD", "TRBJ",
-        "TRGV", "TRGJ",
-        "TRDV", "TRDD", "TRDJ",
+        "IGHV", "IGHD", "IGHJ", "IGKV", "IGKJ", "IGLV", "IGLJ", "TRAV", "TRAJ", "TRBV", "TRBD",
+        "TRBJ", "TRGV", "TRGJ", "TRDV", "TRDD", "TRDJ",
     ];
     PREFIXES.iter().any(|prefix| u.starts_with(prefix))
 }
@@ -85,17 +80,23 @@ mod tests {
     #[test]
     fn receptor_vdj_segments_are_classified_without_constants() {
         for gene in [
-            "Ighv1-39", "Ighd1-1", "Ighj3", "Igkv8-24", "Igkj2", "Iglv1", "Iglj1",
-            "Trav1", "Traj1", "Trbv1", "Trbd1", "Trbj1", "Trgv1", "Trgj1",
-            "Trdv1", "Trdd1", "Trdj1", "IGHV3-23", "TRBJ2-7",
+            "Ighv1-39", "Ighd1-1", "Ighj3", "Igkv8-24", "Igkj2", "Iglv1", "Iglj1", "Trav1",
+            "Traj1", "Trbv1", "Trbd1", "Trbj1", "Trgv1", "Trgj1", "Trdv1", "Trdd1", "Trdj1",
+            "IGHV3-23", "TRBJ2-7",
         ] {
-            assert!(is_vdj_segment_gene(gene), "{gene} should be a V/D/J segment");
+            assert!(
+                is_vdj_segment_gene(gene),
+                "{gene} should be a V/D/J segment"
+            );
         }
         for gene in [
-            "Ighm", "Ighg1", "Igha", "Igkc", "Iglc1", "Trac", "Trbc1",
-            "IGHM", "IGKC", "TRAC", "Cd79a", "Ms4a1", "Jchain",
+            "Ighm", "Ighg1", "Igha", "Igkc", "Iglc1", "Trac", "Trbc1", "IGHM", "IGKC", "TRAC",
+            "Cd79a", "Ms4a1", "Jchain",
         ] {
-            assert!(!is_vdj_segment_gene(gene), "{gene} should remain ordinary expression");
+            assert!(
+                !is_vdj_segment_gene(gene),
+                "{gene} should remain ordinary expression"
+            );
         }
     }
 }

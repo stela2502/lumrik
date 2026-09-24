@@ -78,7 +78,11 @@ pub struct AnalysisTiming {
 fn format_elapsed(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs_f64();
     if seconds >= 60.0 {
-        format!("{}m {:.1}s", (seconds / 60.0).floor() as u64, seconds % 60.0)
+        format!(
+            "{}m {:.1}s",
+            (seconds / 60.0).floor() as u64,
+            seconds % 60.0
+        )
     } else {
         format!("{seconds:.2}s")
     }
@@ -113,16 +117,8 @@ fn subset_cells(data: &SingleCellData, keep: &[usize]) -> Result<SingleCellData>
         .iter()
         .map(|&i| data.cells[i].clone())
         .collect::<Vec<_>>();
-    let annotations = CellAnnotations::from_columns(
-        vec![("cell", cells.clone())],
-        cells.len(),
-    )?;
-    SingleCellData::new(
-        triplets.to_csr(),
-        data.features.clone(),
-        cells,
-        annotations,
-    )
+    let annotations = CellAnnotations::from_columns(vec![("cell", cells.clone())], cells.len())?;
+    SingleCellData::new(triplets.to_csr(), data.features.clone(), cells, annotations)
 }
 
 pub fn analyze_exon_matrix(
@@ -168,9 +164,7 @@ pub fn analyze_exon_matrix(
     finish_stage(&mut timings, "UMI filtering", started);
     let n_cells = raw.n_cells();
     if n_cells < 4 {
-        bail!(
-            "min_umi_count retained only {n_cells} cells; at least 4 are required"
-        );
+        bail!("min_umi_count retained only {n_cells} cells; at least 4 are required");
     }
     eprintln!("Starting QC and normalization...");
     let started = Instant::now();
@@ -415,4 +409,3 @@ pub fn analyze_exon_matrix(
         },
     ))
 }
-

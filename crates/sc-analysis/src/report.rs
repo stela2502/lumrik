@@ -147,7 +147,10 @@ fn write_cells(
 fn write_clusters(out: &Path, l: &[usize], h: &[bool]) -> Result<()> {
     let k = l.iter().copied().max().unwrap_or(0) + 1;
     let mut w = BufWriter::new(File::create(out.join("clusters.tsv"))?);
-    writeln!(w, "cluster\tcells\tfraction_cells\ttraining_cells\tpseudo_deep_cells")?;
+    writeln!(
+        w,
+        "cluster\tcells\tfraction_cells\ttraining_cells\tpseudo_deep_cells"
+    )?;
     for cl in 0..k {
         let cells = (0..l.len()).filter(|&i| l[i] == cl).collect::<Vec<_>>();
         let held = cells.iter().filter(|&&i| h[i]).count();
@@ -287,7 +290,10 @@ fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize) -> Re
         top,
         "cluster\tdirection\trank\tgene\tmean_cluster\tmean_rest\tpct_cluster\tpct_rest\tlog2_fold_change\twilcoxon_u\tp_value\tp_adj"
     )?;
-    writeln!(summary, "cluster\tn_cells\tfraction_cells\ttop20_up\ttop20_down")?;
+    writeln!(
+        summary,
+        "cluster\tn_cells\tfraction_cells\ttop20_up\ttop20_down"
+    )?;
     for cl in 0..k {
         let inside = (0..d.n_cells()).filter(|&i| l[i] == cl).collect::<Vec<_>>();
         let outside = (0..d.n_cells()).filter(|&i| l[i] != cl).collect::<Vec<_>>();
@@ -477,12 +483,7 @@ fn plots(
     let vdj = (0..q.total.len())
         .map(|i| frac(q.vdj[i], q.total[i]))
         .collect::<Vec<_>>();
-    scatter_num(
-        &dir.join("umap_vdj.svg"),
-        "UMAP — V/D/J fraction",
-        u,
-        &vdj,
-    )?;
+    scatter_num(&dir.join("umap_vdj.svg"), "UMAP — V/D/J fraction", u, &vdj)?;
     hist(
         &dir.join("qc_mitochondrial.svg"),
         "Mitochondrial fraction",
@@ -622,7 +623,11 @@ fn scatter_num(path: &Path, title: &str, u: &Array2<f32>, v: &[f64]) -> Result<(
         .margin(20)
         .build_cartesian_2d(x0..x1, y0..y1)?;
     c.draw_series((0..u.nrows()).map(|i| {
-        let t = if hi > lo { (v[i] - lo) / (hi - lo) } else { 0.0 };
+        let t = if hi > lo {
+            (v[i] - lo) / (hi - lo)
+        } else {
+            0.0
+        };
         Circle::new((u[(i, 0)], u[(i, 1)]), 2, yellow_red_blue(t).filled())
     }))?;
 
@@ -677,11 +682,7 @@ fn umi_rank_plot(path: &Path, umi: &[f64]) -> Result<()> {
         return Ok(());
     }
     let x_max = points.last().map(|x| x.0).unwrap_or(1.0).max(1.0);
-    let y_max = points
-        .iter()
-        .map(|x| x.1)
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
+    let y_max = points.iter().map(|x| x.1).fold(0.0_f64, f64::max).max(1.0);
     let root = SVGBackend::new(path, (1000, 700)).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
