@@ -1,57 +1,26 @@
-use crate::data::{CellAnnotations, SingleCellData, open_reader, read_matrix_market_csc};
-use anyhow::{Context, Result, bail};
-use std::io::BufRead;
-use std::path::{Path, PathBuf};
-
-fn find(dir: &Path, names: &[&str]) -> Result<PathBuf> {
-    names
-        .iter()
-        .map(|n| dir.join(n))
-        .find(|p| p.is_file())
-        .with_context(|| format!("none of {} found in {}", names.join(", "), dir.display()))
-}
+use crate::data::{CellAnnotations, SingleCellData};
+use anyhow::{Context, Result};
+use scdata::{FeatureIndex, load_mtx_feature_matrix, read_mtx_barcodes};
+use std::path::Path;
 
 pub(crate) fn load_mex(dir: &Path) -> Result<SingleCellData> {
-    let matrix_path = find(dir, &["matrix.mtx.gz", "matrix.mtx"])?;
-    let features_path = find(
-        dir,
-        &[
-            "features.tsv.gz",
-            "features.tsv",
-            "genes.tsv.gz",
-            "genes.tsv",
-        ],
-    )?;
-    let barcodes_path = find(dir, &["barcodes.tsv.gz", "barcodes.tsv"])?;
-    let matrix = read_matrix_market_csc(&matrix_path)?.to_csr();
-
-    let mut features = Vec::new();
-    for line in open_reader(&features_path)?.lines() {
-        let line = line?;
-        let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.is_empty() {
-            continue;
-        }
-        // Standard MEX: id, symbol, feature type. Prefer the human-readable symbol.
-        features.push(fields.get(1).copied().unwrap_or(fields[0]).to_string());
-    }
-    let cells = open_reader(&barcodes_path)?
-        .lines()
-        .collect::<std::io::Result<Vec<_>>>()?;
-    if matrix.rows() != features.len() {
-        bail!(
-            "MEX matrix rows {} != feature rows {}",
-            matrix.rows(),
-            features.len()
-        );
-    }
-    if matrix.cols() != cells.len() {
-        bail!(
-            "MEX matrix columns {} != barcodes {}",
-            matrix.cols(),
-            cells.len()
-        );
-    }
+    // scdata owns the external MEX contract. Its importer accepts standard
+    // coordinate MatrixMarket input independent of whether entries arrive in
+    // row-major, column-major, or otherwise valid coordinate order.
+    let (counts, feature_index, _) = load_mtx_feature_matrix(dir, "Gene Expression", 1)
+        .with_context(|| format!("loading Gene Expression MEX from {}", dir.display()))?;
+    let barcodes = read_mtx_barcodes(dir)?;
+    let cells = barcodes
+        .into_iter()
+        .map(|(barcode, _)| barcode)
+        .collect::<Vec<_>>();
+    let matrix = counts.as_sprs().map_err(anyhow::Error::msg)?;
+    let features = feature_index
+        .ordered_feature_ids()
+        .into_iter()
+        .map(|feature_id| feature_index.feature_name(feature_id).to_string())
+        .collect::<Vec<_>>();
     let annotations = CellAnnotations::from_columns(vec![("cell", cells.clone())], cells.len())?;
+
     SingleCellData::new(matrix, features, cells, annotations)
 }

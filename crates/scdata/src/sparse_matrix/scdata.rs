@@ -8,6 +8,7 @@ use mapping_info::MappingInfo;
 use crate::cell_data::CellData;
 use crate::cell_data::GeneUmiHash;
 use crate::{CellHash, FeatureIndex, MatrixValueType};
+use sprs::{CsMat, TriMat};
 
 /// Sparse single-cell count store.
 ///
@@ -25,6 +26,14 @@ pub struct Scdata {
 
     /// Ordered list of cells that define export column order.
     pub(crate) export_cell_ids: Vec<u64>,
+
+    /// Canonical feature order for materializing the complete matrix.
+    /// Populated by importers that know the source matrix dimensions/order.
+    matrix_feature_ids: Vec<u64>,
+
+    /// Canonical cell order for materializing the complete matrix.
+    /// Populated by importers that know the source matrix dimensions/order.
+    matrix_cell_ids: Vec<u64>,
 
     /// True once export selection/filtering has been evaluated.
     checked: bool,
@@ -137,6 +146,8 @@ impl Scdata {
             feature_ids_with_data: Vec::new(),
             total_feature_data_entries: 0,
             export_cell_ids: Vec::new(),
+            matrix_feature_ids: Vec::new(),
+            matrix_cell_ids: Vec::new(),
             checked: false,
             num_threads,
             value_type,
@@ -145,6 +156,62 @@ impl Scdata {
 
     pub fn n_features(&self) -> usize {
         self.feature_ids_with_data.len()
+    }
+
+    /// Materialize all stored counts as an `sprs` feature x cell CSR matrix.
+    ///
+    /// Imported matrices preserve their source feature and cell order, including
+    /// empty rows or columns. For matrices assembled directly in `Scdata`, rows
+    /// and columns are ordered by their numeric feature and cell ids.
+    pub fn as_sprs(&self) -> Result<CsMat<f32>, String> {
+        use std::collections::{BTreeSet, HashMap};
+
+        let feature_ids = if self.matrix_feature_ids.is_empty() {
+            self.values()
+                .flat_map(|cell| cell.total_reads.keys().copied())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            self.matrix_feature_ids.clone()
+        };
+        let cell_ids = if self.matrix_cell_ids.is_empty() {
+            let mut ids = self.keys();
+            ids.sort_unstable();
+            ids
+        } else {
+            self.matrix_cell_ids.clone()
+        };
+
+        let feature_rows: HashMap<u64, usize> = feature_ids
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(row, feature_id)| (feature_id, row))
+            .collect();
+
+        let mut triplets = TriMat::<f32>::new((feature_ids.len(), cell_ids.len()));
+        for (col, cell_id) in cell_ids.iter().enumerate() {
+            let Some(cell) = self.get(cell_id) else {
+                continue;
+            };
+            for (feature_id, value) in &cell.total_reads {
+                if !Self::is_sparse_export_value(*value) {
+                    continue;
+                }
+                let row = feature_rows.get(feature_id).copied().ok_or_else(|| {
+                    format!("feature id {feature_id} is not present in the matrix feature order")
+                })?;
+                triplets.add_triplet(row, col, *value);
+            }
+        }
+
+        Ok(triplets.to_csr())
+    }
+
+    pub(crate) fn set_matrix_order(&mut self, feature_ids: Vec<u64>, cell_ids: Vec<u64>) {
+        self.matrix_feature_ids = feature_ids;
+        self.matrix_cell_ids = cell_ids;
     }
 
     /// Get the current matrix value type, or update it if a new one is provided.
@@ -167,6 +234,8 @@ impl Scdata {
         self.export_cell_ids.clear();
         self.feature_ids_with_data.clear();
         self.total_feature_data_entries = 0;
+        self.matrix_feature_ids.clear();
+        self.matrix_cell_ids.clear();
     }
 
     /// Iterate over all currently stored cells across all buckets.

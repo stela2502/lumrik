@@ -16,3 +16,4 @@ bd_diagnostics.tsv
 clonomap_test
 :n
 crates/bam_tide/legacy/testData/cmp.tsv
+mex_compare

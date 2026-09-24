@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
+
 #[derive(Debug, Parser)]
 #[command(name = "traconmech")]
 #[command(about = "Trace biological context to candidate mechanisms")]
@@ -130,8 +131,10 @@ fn main() -> Result<()> {
         anyhow::bail!("--ommverse is required with --data or --exon-matrix");
     };
     if let Some(data_path) = cli.data.as_ref() {
+
         let data = SingleCellData::from_mtx_dir(data_path)
             .with_context(|| format!("loading single-cell data {}", data_path.display()))?;
+
         run_lights(
             &cli,
             ommverse_path,

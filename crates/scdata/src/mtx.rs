@@ -27,8 +27,9 @@ pub struct MexFeatureIndex {
 
 impl MexFeatureIndex {
     pub fn from_dir(dir: impl AsRef<Path>, feature_type: &str) -> Result<Self> {
-        let path = dir.as_ref().join("features.tsv.gz");
-        let reader = gz_lines(&path)?;
+        let dir = dir.as_ref();
+        let path = find_text_file(dir, &["features.tsv.gz", "features.tsv", "genes.tsv.gz", "genes.tsv"])?;
+        let reader = text_lines(&path)?;
 
         let mut features = Vec::new();
         let mut name_to_id = HashMap::new();
@@ -152,8 +153,8 @@ pub fn load_mtx_feature_matrix(
     let mut cells = Scdata::new(threads.max(1), MatrixValueType::Integer);
     let mut report = MappingInfo::new(None, 0.0, 0);
 
-    let matrix_path = dir.join("matrix.mtx.gz");
-    let mut lines = gz_lines(&matrix_path)?;
+    let matrix_path = find_text_file(dir, &["matrix.mtx.gz", "matrix.mtx"])?;
+    let mut lines = text_lines(&matrix_path)?;
     let mut header_seen = false;
     let mut dims_seen = false;
 
@@ -226,6 +227,11 @@ pub fn load_mtx_feature_matrix(
         );
     }
 
+    cells.set_matrix_order(
+        index.ordered_feature_ids(),
+        barcodes.iter().map(|(_, cell_id)| *cell_id).collect(),
+    );
+
     Ok((cells, index, cell_barcode_len))
 }
 
@@ -259,6 +265,14 @@ fn resolve_mtx_dir(path: &Path) -> Result<std::path::PathBuf> {
     )
 }
 
+fn find_text_file(dir: &Path, names: &[&str]) -> Result<std::path::PathBuf> {
+    names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
+        .with_context(|| format!("none of {} found in {}", names.join(", "), dir.display()))
+}
+
 fn barcode_path(dir: &Path) -> Option<std::path::PathBuf> {
     ["barcodes.tsv.gz", "barcodes.tsv"]
         .into_iter()
@@ -266,7 +280,14 @@ fn barcode_path(dir: &Path) -> Option<std::path::PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn read_mtx_barcodes(dir: &Path) -> Result<Vec<(String, u64)>> {
+/// Return barcode labels together with stable internal cell ids in MEX column order.
+///
+/// DNA barcodes retain Lumrik's packed `IntToDna` identity so imported Lumrik/10x
+/// matrices still match molecule-level cell ids. Numeric vendor ids are used as-is.
+/// Any other external label receives a deterministic internal id while the original
+/// label is preserved for analysis/reporting. Consumers must never decode these ids
+/// back into barcode strings; the label in this return value is authoritative.
+pub fn read_mtx_barcodes(dir: &Path) -> Result<Vec<(String, u64)>> {
     let path = barcode_path(dir).with_context(|| {
         format!(
             "no barcodes.tsv.gz or barcodes.tsv found in {}",
@@ -275,6 +296,7 @@ fn read_mtx_barcodes(dir: &Path) -> Result<Vec<(String, u64)>> {
     })?;
     let reader = text_lines(&path)?;
     let mut out = Vec::new();
+    let mut ids = HashMap::<u64, String>::new();
 
     for line in reader {
         let barcode = line.with_context(|| format!("reading {}", path.display()))?;
@@ -283,22 +305,45 @@ fn read_mtx_barcodes(dir: &Path) -> Result<Vec<(String, u64)>> {
             continue;
         }
 
-        let sequence = barcode
-            .split_once('-')
-            .map(|(seq, _)| seq)
-            .unwrap_or(&barcode);
-
-        let id = IntToDna::new(sequence.as_bytes()).into_u64();
+        let id = external_cell_id(&barcode);
+        if let Some(previous) = ids.insert(id, barcode.clone()) {
+            if previous != barcode {
+                bail!(
+                    "cell labels {:?} and {:?} map to the same internal id {id}",
+                    previous,
+                    barcode
+                );
+            }
+        }
         out.push((barcode, id));
     }
 
     Ok(out)
 }
 
-fn gz_lines(path: &Path) -> Result<impl Iterator<Item = std::io::Result<String>>> {
-    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let decoder = MultiGzDecoder::new(file);
-    Ok(BufReader::new(decoder).lines())
+fn external_cell_id(label: &str) -> u64 {
+    let sequence = label.split_once('-').map(|(seq, _)| seq).unwrap_or(label);
+
+    if !sequence.is_empty()
+        && sequence
+            .bytes()
+            .all(|base| matches!(base.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
+    {
+        return IntToDna::new(sequence.as_bytes()).into_u64();
+    }
+
+    if let Ok(id) = label.parse::<u64>() {
+        return id;
+    }
+
+    // FNV-1a gives arbitrary external labels a stable process-independent id.
+    // Collisions are checked explicitly by `read_mtx_barcodes`.
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in label.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn text_lines(path: &Path) -> Result<Box<dyn Iterator<Item = std::io::Result<String>>>> {
