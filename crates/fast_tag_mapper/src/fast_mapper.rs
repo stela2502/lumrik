@@ -384,6 +384,55 @@ impl FastTagMapper {
         })
     }
 
+    /// Return every independently placed feature match that passes the normal
+    /// seed threshold.  Unlike `align`, this deliberately does not choose a
+    /// single winner: diagnostic callers can use it to find repeated features
+    /// in long reads (for example raw ONT BAM records).
+    pub fn align_all(&self, seq: &[u8], qual: Option<&[u8]>) -> Vec<FastAlignment> {
+        let mut candidates = self.discover_candidates(seq);
+        candidates.retain(|c| c.hits >= self.min_hits);
+        let verified = self.verify_candidates_unbounded(seq, qual, candidates);
+
+        verified
+            .into_iter()
+            .map(|winner| {
+                let len = self.genome.spans[winner.candidate.feature_index].len as usize;
+                FastAlignment {
+                    feature_id: self.features[winner.candidate.feature_index].id,
+                    feature_index: winner.candidate.feature_index,
+                    query_start: winner.candidate.query_start as usize,
+                    strand: if winner.candidate.reverse {
+                        AlignmentStrand::Reverse
+                    } else {
+                        AlignmentStrand::Forward
+                    },
+                    seed_hits: winner.candidate.hits,
+                    score: winner.score,
+                    second_best_score: None,
+                    mismatches: winner.mismatches,
+                    cigar: format!("{len}M"),
+                }
+            })
+            .collect()
+    }
+
+    fn verify_candidates_unbounded(
+        &self,
+        seq: &[u8],
+        qual: Option<&[u8]>,
+        candidates: Vec<Candidate>,
+    ) -> Vec<VerifiedCandidate> {
+        if let Some(q) = qual {
+            if q.len() != seq.len() {
+                return Vec::new();
+            }
+        }
+        candidates
+            .into_iter()
+            .filter_map(|c| self.verify_candidate(seq, qual, c))
+            .collect()
+    }
+
     /// Direct locator -> full-overlap hot path.
     ///
     /// For each query 16-mer, the index bucket is already the complete array

@@ -58,6 +58,48 @@ The important part is that these stages are designed to cooperate as a pipeline.
 
 ---
 
+## Find experimental sequences before a full analysis
+
+`find-sequences` is a lightweight sanity/debugging tool for asking whether known
+experimental sequences are present in sequencing data before committing to a
+full analysis. Give it a FASTA containing constructs, reporters, vector sequence,
+custom-capture targets, primer targets, spike-ins, or other sequences of interest.
+It reports the matching FASTA entry and interval and, when the library structure
+provides them, the cell barcode and UMI.
+
+```bash
+find-sequences \
+    --fastq R1.fastq.gz \
+    --r2-fastq R2.fastq.gz \
+    --chemistry bd-v2-384 \
+    --fasta constructs.fa \
+    --out sequence_hits.tsv
+```
+
+Raw ONT BAM is supported directly; BAM records do **not** need to be mapped:
+
+```bash
+find-sequences \
+    --bam raw_ont.bam \
+    --fasta constructs.fa \
+    --out sequence_hits.tsv
+```
+
+Long FASTA entries are tiled internally using Lumrik's fast feature matcher, but
+the output is expressed in the original FASTA coordinates:
+
+```text
+cell_id  umi  feature  feature_start  feature_end  strand  matched_sequence
+```
+
+Overlapping internal tiles are collapsed before reporting. For long-read data the
+final console summary also reports how many reads contain each FASTA feature and
+the maximum number of separable occurrences observed in one read. This makes the
+tool useful for early construct/primer validation as well as for inspecting
+reporters, vectors, repeated inserts, and unexpected sequence content.
+
+---
+
 ## Performance
 
 Lumrik is designed for datasets containing tens of millions of sequencing reads while keeping memory consumption bounded wherever possible.
