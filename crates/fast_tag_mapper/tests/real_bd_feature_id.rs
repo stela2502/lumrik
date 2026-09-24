@@ -134,10 +134,7 @@ fn locator_uses_full_surrounding_feature_context() {
     let read = b"AAAAAAAAAAAAAAAACCCGGGGTTTTTTTTCCCCCCCCAAACCGGGGGGGGTTTTTTTT";
 
     let mut mi = info();
-    assert_eq!(
-        mapper.map_feature_id(read, &mut mi),
-        Some(10)
-    );
+    assert_eq!(mapper.map_feature_id(read, &mut mi), Some(10));
 
     // Plenty of locally familiar sequence, including exact indexed material,
     // but the surrounding feature structure is wrong.  A locator alone must
@@ -145,10 +142,7 @@ fn locator_uses_full_surrounding_feature_context() {
     let read = b"AAAAAAAAAAAAAAAACCCGGGGCCCCCCCCTTTTTTTTAAACCGGGGGGGGTTTTTTTT";
 
     let mut mi = info();
-    assert_eq!(
-        mapper.map_feature_id(read, &mut mi),
-        None
-    );
+    assert_eq!(mapper.map_feature_id(read, &mut mi), None);
 }
 
 #[test]

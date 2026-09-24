@@ -16,6 +16,8 @@ members = [
     "crates/int_to_prot",
     "crates/hmm", 
     "crates/ommverse",
+    "crates/traconmech",
+    "crates/sc-analysis",
     "crates/nelrune", 
     "crates/sc-vdj",
     "crates/sc-te",

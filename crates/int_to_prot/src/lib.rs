@@ -25,18 +25,26 @@ impl Chemistry {
     pub const GLYCINE: Self = Self(1 << 12);
 
     #[inline]
-    pub const fn bits(self) -> u16 { self.0 }
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
 }
 
 impl AminoAcid {
     #[inline]
-    pub const fn code(self) -> u8 { self.0 }
+    pub const fn code(self) -> u8 {
+        self.0
+    }
 
     #[inline]
-    pub fn residue(self) -> Option<u8> { IntToProt::decode_binary(self) }
+    pub fn residue(self) -> Option<u8> {
+        IntToProt::decode_binary(self)
+    }
 
     #[inline]
-    pub const fn chemistry(self) -> u16 { chemistry_bits(self.0) }
+    pub const fn chemistry(self) -> u16 {
+        chemistry_bits(self.0)
+    }
 
     #[inline]
     pub const fn is(self, property: Chemistry) -> bool {
@@ -48,10 +56,14 @@ impl AminoAcid {
     /// distance is the normalized Hamming distance between chemistry flags.
     /// Unknown/non-residue symbols are maximally distant from ordinary residues.
     pub fn dist(self, other: Self) -> f32 {
-        if self == other { return 0.0; }
+        if self == other {
+            return 0.0;
+        }
         let a = self.chemistry();
         let b = other.chemistry();
-        if a == 0 || b == 0 { return 1.0; }
+        if a == 0 || b == 0 {
+            return 1.0;
+        }
         let union = (a | b).count_ones();
         let different = (a ^ b).count_ones();
         different as f32 / union as f32
@@ -59,39 +71,46 @@ impl AminoAcid {
 }
 
 const fn chemistry_bits(code: u8) -> u16 {
-    let h = Chemistry::HYDROPHOBIC.0; let p = Chemistry::POLAR.0;
-    let pos = Chemistry::POSITIVE.0; let neg = Chemistry::NEGATIVE.0;
-    let ar = Chemistry::AROMATIC.0; let al = Chemistry::ALIPHATIC.0;
-    let sm = Chemistry::SMALL.0; let ti = Chemistry::TINY.0;
-    let su = Chemistry::SULFUR.0; let oh = Chemistry::HYDROXYL.0;
-    let am = Chemistry::AMIDE.0; let pro = Chemistry::PROLINE.0; let gly = Chemistry::GLYCINE.0;
+    let h = Chemistry::HYDROPHOBIC.0;
+    let p = Chemistry::POLAR.0;
+    let pos = Chemistry::POSITIVE.0;
+    let neg = Chemistry::NEGATIVE.0;
+    let ar = Chemistry::AROMATIC.0;
+    let al = Chemistry::ALIPHATIC.0;
+    let sm = Chemistry::SMALL.0;
+    let ti = Chemistry::TINY.0;
+    let su = Chemistry::SULFUR.0;
+    let oh = Chemistry::HYDROXYL.0;
+    let am = Chemistry::AMIDE.0;
+    let pro = Chemistry::PROLINE.0;
+    let gly = Chemistry::GLYCINE.0;
     match code {
-        0 => sm | ti,                         // A
-        1 => p | sm | su,                     // C
-        2 => p | neg | sm,                    // D
-        3 => p | neg,                         // E
-        4 => h | ar,                          // F
-        5 => sm | ti | gly,                   // G
-        6 => p | pos | ar,                    // H
-        7 => h | al,                          // I
-        8 => p | pos,                         // K
-        9 => h | al,                          // L
-        10 => h | su,                         // M
-        11 => p | sm | am,                    // N
-        12 => h | sm | pro,                   // P
-        13 => p | am,                         // Q
-        14 => p | pos,                        // R
-        15 => p | sm | ti | oh,               // S
-        16 => p | sm | oh,                    // T
-        17 => h | al | sm,                    // V
-        18 => h | ar,                         // W
-        19 => p | ar | oh,                    // Y
-        22 => p | neg | sm | am,              // B: D/N ambiguity
-        23 => p | neg | am,                   // Z: E/Q ambiguity
-        24 => h | al,                         // J: I/L ambiguity
-        25 => p | sm | su,                    // U: selenocysteine, C-like
-        26 => p | pos,                        // O: pyrrolysine, K-like
-        _ => 0,                               // X, stop, gap, reserved
+        0 => sm | ti,            // A
+        1 => p | sm | su,        // C
+        2 => p | neg | sm,       // D
+        3 => p | neg,            // E
+        4 => h | ar,             // F
+        5 => sm | ti | gly,      // G
+        6 => p | pos | ar,       // H
+        7 => h | al,             // I
+        8 => p | pos,            // K
+        9 => h | al,             // L
+        10 => h | su,            // M
+        11 => p | sm | am,       // N
+        12 => h | sm | pro,      // P
+        13 => p | am,            // Q
+        14 => p | pos,           // R
+        15 => p | sm | ti | oh,  // S
+        16 => p | sm | oh,       // T
+        17 => h | al | sm,       // V
+        18 => h | ar,            // W
+        19 => p | ar | oh,       // Y
+        22 => p | neg | sm | am, // B: D/N ambiguity
+        23 => p | neg | am,      // Z: E/Q ambiguity
+        24 => h | al,            // J: I/L ambiguity
+        25 => p | sm | su,       // U: selenocysteine, C-like
+        26 => p | pos,           // O: pyrrolysine, K-like
+        _ => 0,                  // X, stop, gap, reserved
     }
 }
 
@@ -215,7 +234,10 @@ impl IntToProt {
             b'U' => Ok(U),
             b'O' => Ok(O),
             b'-' => Ok(GAP),
-            other => Err(format!("cannot encode '{}' as an amino acid", other as char)),
+            other => Err(format!(
+                "cannot encode '{}' as an amino acid",
+                other as char
+            )),
         }
     }
 
@@ -308,7 +330,10 @@ impl IntToProt {
     /// Return an exact packed subsequence using 0-based, half-open coordinates.
     pub fn slice(&self, start: usize, end: usize) -> Self {
         assert!(start <= end, "protein slice start must not exceed end");
-        assert!(end <= self.size, "protein slice end exceeds sequence length");
+        assert!(
+            end <= self.size,
+            "protein slice end exceeds sequence length"
+        );
         let bytes: Vec<u8> = (start..end)
             .map(|pos| Self::decode_binary(self.get(pos).unwrap()).unwrap())
             .collect();
@@ -433,10 +458,7 @@ mod sequence_operation_tests {
             .collect();
         assert_eq!(
             observed,
-            vec![
-                (0, 9, "MPEPTIDEK".to_string()),
-                (9, 13, "TAIL".to_string()),
-            ]
+            vec![(0, 9, "MPEPTIDEK".to_string()), (9, 13, "TAIL".to_string()),]
         );
     }
 
@@ -445,6 +467,10 @@ mod sequence_operation_tests {
         let protein = IntToProt::new(b"AKPQRTAIL");
         let peptides = protein.digest(Protease::Trypsin, 1);
         assert!(peptides.iter().any(|p| p.sequence.to_string() == "AKPQR"));
-        assert!(peptides.iter().any(|p| p.sequence.to_string() == "AKPQRTAIL"));
+        assert!(
+            peptides
+                .iter()
+                .any(|p| p.sequence.to_string() == "AKPQRTAIL")
+        );
     }
 }

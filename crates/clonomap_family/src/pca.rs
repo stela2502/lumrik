@@ -141,7 +141,7 @@ impl PcaModel {
     pub fn components(&self) -> &Array2<f32> {
         &self.components
     }
-        pub fn plot_2d_clusters(
+    pub fn plot_2d_clusters(
         &self,
         tree: &crate::MstTree,
         outfile: &str,
@@ -212,7 +212,7 @@ impl PcaModel {
         root.present()?;
         Ok(())
     }
-        pub fn plot_2d(&self, outfile: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn plot_2d(&self, outfile: &str) -> Result<(), Box<dyn std::error::Error>> {
         use plotters::prelude::*;
 
         let root = SVGBackend::new(outfile, (900, 900)).into_drawing_area();

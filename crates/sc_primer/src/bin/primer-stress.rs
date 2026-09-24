@@ -4,8 +4,8 @@ use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use int_to_dna::IntToDna;
-use onehot_dna::OneHotSequence;
 use mapping_info::MappingInfo;
+use onehot_dna::OneHotSequence;
 use sc_primer::{Chemistry, Grammar, PrimerDetector};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -296,29 +296,49 @@ where
     Ok(())
 }
 
-
 fn trim_r2_primer_readthrough(
-    r1_seq: &[u8], r2_seq: &mut Vec<u8>, r2_qual: &mut Vec<u8>, primer_match: &sc_primer::PrimerMatch,
+    r1_seq: &[u8],
+    r2_seq: &mut Vec<u8>,
+    r2_qual: &mut Vec<u8>,
+    primer_match: &sc_primer::PrimerMatch,
 ) -> bool {
     use sc_primer::Orientation;
-    if primer_match.orientation != Orientation::Forward || primer_match.primer_start >= primer_match.insert_start || primer_match.insert_start > r1_seq.len() { return false; }
+    if primer_match.orientation != Orientation::Forward
+        || primer_match.primer_start >= primer_match.insert_start
+        || primer_match.insert_start > r1_seq.len()
+    {
+        return false;
+    }
     let r1_primer = &r1_seq[primer_match.primer_start..primer_match.insert_start];
-    if r1_primer.len() < 2 || r2_seq.len() < 2 { return false; }
+    if r1_primer.len() < 2 || r2_seq.len() < 2 {
+        return false;
+    }
     let expected_seq = PrimerDetector::reverse_complement(r1_primer);
     let expected = OneHotSequence::from_iupac_bytes(&expected_seq);
     let observed = OneHotSequence::from_iupac_bytes(r2_seq);
     let lookup = expected.mask_at(0).unwrap();
-    let external: Vec<_> = (1..expected.len()).map(|i| expected.mask_at(i).unwrap()).collect();
+    let external: Vec<_> = (1..expected.len())
+        .map(|i| expected.mask_at(i).unwrap())
+        .collect();
     let mut hit = observed.find_with_external_after(lookup, &external);
     if hit.is_none() {
         let max_proof = expected.len().min(r2_seq.len());
         for proof in (2..=max_proof).rev() {
             let start = r2_seq.len() - proof;
-            if observed.find_next_with_external_after(lookup, &external[..proof - 1], start) == Some(start) { hit = Some(start); break; }
+            if observed.find_next_with_external_after(lookup, &external[..proof - 1], start)
+                == Some(start)
+            {
+                hit = Some(start);
+                break;
+            }
         }
     }
-    let Some(start) = hit else { return false; };
-    r2_seq.truncate(start); r2_qual.truncate(start); true
+    let Some(start) = hit else {
+        return false;
+    };
+    r2_seq.truncate(start);
+    r2_qual.truncate(start);
+    true
 }
 
 fn main() -> Result<(), String> {
@@ -483,12 +503,7 @@ fn main() -> Result<(), String> {
                 };
                 let mut r2_seq = r.r2_seq.clone();
                 let mut r2_qual = r.r2_qual.clone();
-                let trimmed = trim_r2_primer_readthrough(
-                    &r.r1_seq,
-                    &mut r2_seq,
-                    &mut r2_qual,
-                    &m,
-                );
+                let trimmed = trim_r2_primer_readthrough(&r.r1_seq, &mut r2_seq, &mut r2_qual, &m);
                 std::hint::black_box((trimmed, r2_seq.len()));
                 Ok(true)
             },
@@ -525,7 +540,12 @@ fn main() -> Result<(), String> {
                 let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
                 let Some(id) = detector
                     .grammar_for_match(&m)
-                    .molecule_identity_if_exact(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq)
+                    .molecule_identity_if_exact(
+                        Some(&normalized_cell),
+                        Some(&umi.seq),
+                        &r.r1_seq,
+                        &r.r2_seq,
+                    )
                     .map_err(|e| e.to_string())?
                 else {
                     return Ok(false);
@@ -566,7 +586,12 @@ fn main() -> Result<(), String> {
                 let normalized_cell = m.cell_seq.clone().unwrap_or_else(|| cell.seq.clone());
                 let Some(identity) = detector
                     .grammar_for_match(&m)
-                    .molecule_identity_if_exact(Some(&normalized_cell), Some(&umi.seq), &r.r1_seq, &r.r2_seq)
+                    .molecule_identity_if_exact(
+                        Some(&normalized_cell),
+                        Some(&umi.seq),
+                        &r.r1_seq,
+                        &r.r2_seq,
+                    )
                     .map_err(|e| e.to_string())?
                 else {
                     return Ok(false);
@@ -695,7 +720,6 @@ fn main() -> Result<(), String> {
         );
     }
 
-
     if cli.r2.is_some() {
         let mut best = Duration::MAX;
         let mut total = Duration::ZERO;
@@ -752,7 +776,10 @@ fn main() -> Result<(), String> {
 
                 // Match IlluminaNormalizer ordering: feature-tag reads leave before
                 // genomic R2 cleanup, while genomic candidates pay the read-through scan.
-                if feature_mapper.map_feature_id(&r.r2_seq, &mut stats).is_some() {
+                if feature_mapper
+                    .map_feature_id(&r.r2_seq, &mut stats)
+                    .is_some()
+                {
                     this_feature_hits += 1;
                     this_called += 1;
                     continue;
@@ -774,7 +801,8 @@ fn main() -> Result<(), String> {
                 trimmed = this_trimmed;
                 feature_hits = this_feature_hits;
             }
-            if called != this_called || trimmed != this_trimmed || feature_hits != this_feature_hits {
+            if called != this_called || trimmed != this_trimmed || feature_hits != this_feature_hits
+            {
                 return Err("non-deterministic counts in stage 6c".to_string());
             }
         }

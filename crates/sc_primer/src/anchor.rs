@@ -21,7 +21,13 @@ impl AnchorSearch {
         let anchor = fixed[anchor_offset..].to_vec();
 
         let anchor_onehot = OneHotSequence::from_iupac_bytes(&anchor);
-        Some(Self { fixed: fixed.to_vec(), anchor, anchor_onehot, anchor_offset, max_mismatches })
+        Some(Self {
+            fixed: fixed.to_vec(),
+            anchor,
+            anchor_onehot,
+            anchor_offset,
+            max_mismatches,
+        })
     }
 
     pub fn identify_cell_start(&self, read: &[u8]) -> Option<usize> {
@@ -54,7 +60,9 @@ impl AnchorSearch {
             from.checked_add(self.anchor_offset)?
         };
         let last_anchor = observed.len().checked_sub(self.anchor.len())?;
-        if first_anchor > last_anchor { return None; }
+        if first_anchor > last_anchor {
+            return None;
+        }
 
         // Eight compatible bases are the fast gate. Four packed bytes give
         // canonical anchors ~1/65,536 random selectivity before the complete
@@ -64,16 +72,25 @@ impl AnchorSearch {
         let mut anchor_start = first_anchor;
         while anchor_start <= last_anchor {
             let candidate = observed.find_next_compatible_seed_with_mismatches(
-                &self.anchor_onehot, anchor_start, seed_len, self.max_mismatches,
+                &self.anchor_onehot,
+                anchor_start,
+                seed_len,
+                self.max_mismatches,
             )?;
-            if candidate > last_anchor { return None; }
-            let Some((informative, compatible)) = observed.compatibility_counts(
-                candidate, &self.anchor_onehot, 0, self.anchor.len(),
-            ) else { return None; };
+            if candidate > last_anchor {
+                return None;
+            }
+            let Some((informative, compatible)) =
+                observed.compatibility_counts(candidate, &self.anchor_onehot, 0, self.anchor.len())
+            else {
+                return None;
+            };
             let mismatches = self.anchor.len().saturating_sub(compatible);
             if informative == self.anchor.len() && mismatches <= self.max_mismatches {
                 let primer_start = candidate.saturating_sub(self.anchor_offset);
-                if primer_start >= from { return Some(primer_start); }
+                if primer_start >= from {
+                    return Some(primer_start);
+                }
             }
             anchor_start = candidate.saturating_add(1);
         }
@@ -120,12 +137,9 @@ impl AnchorSearch {
                 return None;
             }
 
-            let Some((informative, compatible)) = observed.compatibility_counts(
-                candidate,
-                &self.anchor_onehot,
-                0,
-                self.anchor.len(),
-            ) else {
+            let Some((informative, compatible)) =
+                observed.compatibility_counts(candidate, &self.anchor_onehot, 0, self.anchor.len())
+            else {
                 return None;
             };
             let mismatches = self.anchor.len().saturating_sub(compatible);

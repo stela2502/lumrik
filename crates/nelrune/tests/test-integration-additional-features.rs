@@ -130,7 +130,6 @@ fn assert_feature_output(out: &Path, feature_type: &str, feature_name: &str) {
     );
 }
 
-
 #[test]
 fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
     let r1 = test_path("additional_features_R1.fastq");
@@ -211,7 +210,7 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
             "--require-strand",
             "--min-mapq",
             "0",
-            "--min-cell-counts",
+            "--min-umi-count",
             "1",
             "--min-insert-len",
             "20",
@@ -224,7 +223,7 @@ fn integration_additional_features_preserves_bd_rhapsody_and_hto_names() {
         .output()
         .expect("failed to start nelrune");
     eprintln!(
-      "\n========== NELRUNE STDOUT ==========\n{}",
+        "\n========== NELRUNE STDOUT ==========\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
 

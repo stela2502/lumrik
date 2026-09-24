@@ -1130,8 +1130,8 @@ fn main() -> Result<()> {
     // Keep a conventional persistent log beside the structured/static status
     // reports. The YAML/HTML files remain the authoritative final dashboard
     // snapshot; this file is deliberately human-readable.
-    let mut run_log = File::create(c.out.join("nelrune-vdj.log"))
-        .context("creating nelrune-vdj.log")?;
+    let mut run_log =
+        File::create(c.out.join("nelrune-vdj.log")).context("creating nelrune-vdj.log")?;
     writeln!(run_log, "{mapping_info}")?;
     writeln!(run_log, "final stage: {}", final_status.stage)?;
     writeln!(run_log, "evidence cells: {}", runner.evidence.cell_count())?;

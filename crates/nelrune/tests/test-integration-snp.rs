@@ -188,7 +188,7 @@ fn integration_tiny_star_snp() {
             "--min-mapq",
             "0",
             // One cell with four distinct molecules.
-            "--min-cell-counts",
+            "--min-umi-count",
             "1",
             "--min-insert-len",
             "20",

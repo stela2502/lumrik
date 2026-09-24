@@ -49,10 +49,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // Compute bounds for plotting
-        let (min_x, max_x, min_y, max_y) = bounds(&points);
+    let (min_x, max_x, min_y, max_y) = bounds(&points);
 
     // Draw to SVG
-        draw_svg(
+    draw_svg(
         &out_path, &points, &labels, &edges, min_x, max_x, min_y, max_y,
     )?;
 

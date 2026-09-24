@@ -471,13 +471,7 @@ impl VdjRunner {
         R: BamIdentityResolver,
         F: FnMut(BamIngestProgress, &CellEvidenceVdj, &VdjIndex),
     {
-        self.read_bam_with_progress_for_cells_limited(
-            path,
-            resolver,
-            allowed_cells,
-            None,
-            progress,
-        )
+        self.read_bam_with_progress_for_cells_limited(path, resolver, allowed_cells, None, progress)
     }
 
     /// As `read_bam_with_progress_for_cells`, but optionally stop the initial

@@ -4,42 +4,74 @@
 //! UCSC GTF, twoBit and UniProt bigBed files are import formats; callers see
 //! genes, transcripts, proteins and protein features.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use bigtools::BigBedRead;
-use gtf_splice_index::{IdNameKeys, SpliceIndex, Strand, TranscriptId};
 use gtf_splice_index::types::RefBlock;
+use gtf_splice_index::{Gene, GeneId, IdNameKeys, SpliceIndex, Strand, Transcript, TranscriptId};
+use hmm::{CategoricalEmission, Hmm};
 use int_to_dna::{IntToDna, TwoBitReader};
 use int_to_prot::IntToProt;
-use hmm::{CategoricalEmission, Hmm};
-use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 const MAGIC: &[u8; 4] = b"OMM1";
-pub const OMMVERSE_FORMAT_VERSION: u32 = 5;
+pub const OMMVERSE_FORMAT_VERSION: u32 = 7;
 
 pub mod sources;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReviewStatus { SwissProt, Trembl, Other }
+pub enum ReviewStatus {
+    SwissProt,
+    Trembl,
+    Other,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ProteinFeatureKind {
-    Transmembrane, Domain, SignalPeptide, Cytoplasmic, Extracellular,
-    ModifiedResidue, Disulfide, Repeat, Chain, Conflict, Interest,
-    Mutagenesis, SpliceVariant, Structure, Other,
-    ActiveSite, BindingSite, ConservedSite, ProteinFamily, HomologousSuperfamily, PtmSite,
+    Transmembrane,
+    Domain,
+    SignalPeptide,
+    Cytoplasmic,
+    Extracellular,
+    ModifiedResidue,
+    Disulfide,
+    Repeat,
+    Chain,
+    Conflict,
+    Interest,
+    Mutagenesis,
+    SpliceVariant,
+    Structure,
+    Other,
+    ActiveSite,
+    BindingSite,
+    ConservedSite,
+    ProteinFamily,
+    HomologousSuperfamily,
+    PtmSite,
 }
 
 impl ProteinFeatureKind {
     pub const ALL: [Self; 15] = [
-        Self::Transmembrane, Self::Domain, Self::SignalPeptide, Self::Cytoplasmic,
-        Self::Extracellular, Self::ModifiedResidue, Self::Disulfide, Self::Repeat,
-        Self::Chain, Self::Conflict, Self::Interest, Self::Mutagenesis,
-        Self::SpliceVariant, Self::Structure, Self::Other,
+        Self::Transmembrane,
+        Self::Domain,
+        Self::SignalPeptide,
+        Self::Cytoplasmic,
+        Self::Extracellular,
+        Self::ModifiedResidue,
+        Self::Disulfide,
+        Self::Repeat,
+        Self::Chain,
+        Self::Conflict,
+        Self::Interest,
+        Self::Mutagenesis,
+        Self::SpliceVariant,
+        Self::Structure,
+        Self::Other,
     ];
 }
 
@@ -103,7 +135,6 @@ pub struct Protein {
     pub review_status: ReviewStatus,
     pub features: Vec<ProteinFeature>,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct ProteinTrainingExample {
@@ -182,14 +213,27 @@ pub struct FeatureEvaluation {
 }
 
 impl FeatureEvaluation {
-    pub fn precision(&self) -> f64 { ratio(self.true_positive, self.true_positive + self.false_positive) }
-    pub fn recall(&self) -> f64 { ratio(self.true_positive, self.true_positive + self.false_negative) }
-    pub fn specificity(&self) -> f64 { ratio(self.true_negative, self.true_negative + self.false_positive) }
-    pub fn f1(&self) -> f64 {
-        let p = self.precision(); let r = self.recall();
-        if p + r == 0.0 { 0.0 } else { 2.0 * p * r / (p + r) }
+    pub fn precision(&self) -> f64 {
+        ratio(self.true_positive, self.true_positive + self.false_positive)
     }
-    pub fn segment_recall(&self) -> f64 { ratio(self.recovered_segments, self.truth_segments) }
+    pub fn recall(&self) -> f64 {
+        ratio(self.true_positive, self.true_positive + self.false_negative)
+    }
+    pub fn specificity(&self) -> f64 {
+        ratio(self.true_negative, self.true_negative + self.false_positive)
+    }
+    pub fn f1(&self) -> f64 {
+        let p = self.precision();
+        let r = self.recall();
+        if p + r == 0.0 {
+            0.0
+        } else {
+            2.0 * p * r / (p + r)
+        }
+    }
+    pub fn segment_recall(&self) -> f64 {
+        ratio(self.recovered_segments, self.truth_segments)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -214,29 +258,48 @@ impl TopologyState {
         ProteinFeatureKind::Extracellular,
     ];
     pub const ALL: [Self; 8] = [
-        Self::Other, Self::Transmembrane, Self::CytoShortLoop, Self::CytoMediumLoop,
-        Self::CytoLongRegion, Self::ExtraShortLoop, Self::ExtraMediumLoop,
+        Self::Other,
+        Self::Transmembrane,
+        Self::CytoShortLoop,
+        Self::CytoMediumLoop,
+        Self::CytoLongRegion,
+        Self::ExtraShortLoop,
+        Self::ExtraMediumLoop,
         Self::ExtraLongRegion,
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::Other => "OTHER", Self::Transmembrane => "TM",
-            Self::CytoShortLoop => "CYTO_SHORT", Self::CytoMediumLoop => "CYTO_MEDIUM",
+            Self::Other => "OTHER",
+            Self::Transmembrane => "TM",
+            Self::CytoShortLoop => "CYTO_SHORT",
+            Self::CytoMediumLoop => "CYTO_MEDIUM",
             Self::CytoLongRegion => "CYTO_LONG",
-            Self::ExtraShortLoop => "EXTRA_SHORT", Self::ExtraMediumLoop => "EXTRA_MEDIUM",
+            Self::ExtraShortLoop => "EXTRA_SHORT",
+            Self::ExtraMediumLoop => "EXTRA_MEDIUM",
             Self::ExtraLongRegion => "EXTRA_LONG",
         }
     }
-    fn index(self) -> usize { self as usize }
+    fn index(self) -> usize {
+        self as usize
+    }
     fn feature(self) -> Option<ProteinFeatureKind> {
         match self {
             Self::Other => None,
             Self::Transmembrane => Some(ProteinFeatureKind::Transmembrane),
-            Self::CytoShortLoop | Self::CytoMediumLoop | Self::CytoLongRegion => Some(ProteinFeatureKind::Cytoplasmic),
-            Self::ExtraShortLoop | Self::ExtraMediumLoop | Self::ExtraLongRegion => Some(ProteinFeatureKind::Extracellular),
+            Self::CytoShortLoop | Self::CytoMediumLoop | Self::CytoLongRegion => {
+                Some(ProteinFeatureKind::Cytoplasmic)
+            }
+            Self::ExtraShortLoop | Self::ExtraMediumLoop | Self::ExtraLongRegion => {
+                Some(ProteinFeatureKind::Extracellular)
+            }
         }
     }
-    fn region_state(feature: ProteinFeatureKind, start: usize, end: usize, _protein_len: usize) -> Self {
+    fn region_state(
+        feature: ProteinFeatureKind,
+        start: usize,
+        end: usize,
+        _protein_len: usize,
+    ) -> Self {
         // Terminality is known geometry, not a sequence property. Do not give the
         // HMM dedicated terminal escape states; terminal regions use the same
         // length-based latent contexts as every other CYTO/EXTRA annotation.
@@ -332,12 +395,24 @@ pub struct ModelVaultMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProteinFeatureModel {
-    ExactAa { model: ExactAaFeatureModel, evaluation: FeatureEvaluation },
-    Chemistry { model: ChemistryFeatureModel, evaluation: FeatureEvaluation },
+    ExactAa {
+        model: ExactAaFeatureModel,
+        evaluation: FeatureEvaluation,
+    },
+    Chemistry {
+        model: ChemistryFeatureModel,
+        evaluation: FeatureEvaluation,
+    },
     /// Opinionated membrane-architecture HMM. Cytoplasmic/extracellular sequence
     /// is represented by latent loop/long/terminal substates and collapsed on output.
-    TopologyExactAa { model: ExactAaTopologyModel, evaluation: TopologyEvaluation },
-    TopologyChemistry { model: ChemistryTopologyModel, evaluation: TopologyEvaluation },
+    TopologyExactAa {
+        model: ExactAaTopologyModel,
+        evaluation: TopologyEvaluation,
+    },
+    TopologyChemistry {
+        model: ChemistryTopologyModel,
+        evaluation: TopologyEvaluation,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -419,6 +494,94 @@ struct OmmverseV3 {
     chromatin: Vec<ChromatinElement>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OmmverseV6 {
+    assembly: String,
+    source_root: PathBuf,
+    genome_twobit: PathBuf,
+    splice: SpliceIndex,
+    proteins: Vec<Protein>,
+    report: BuildReport,
+    interpro_entries: HashMap<String, InterProEntry>,
+    chromatin: Vec<ChromatinElement>,
+    protein_binding: ProteinBindingUnion,
+    ctcf: CtcfArchitecture,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OmmverseV5 {
+    assembly: String,
+    source_root: PathBuf,
+    genome_twobit: PathBuf,
+    splice: SpliceIndex,
+    proteins: Vec<Protein>,
+    report: BuildReport,
+    interpro_entries: HashMap<String, InterProEntry>,
+    chromatin: Vec<ChromatinElement>,
+    protein_binding: ProteinBindingUnion,
+}
+
+/// A merged ENCODE CTCF rPeak anchor. Multiple overlapping CTCF rPeaks are
+/// collapsed into one candidate anchor; experiment/biosample detail stays in
+/// the cached ENCODE bigBed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CtcfAnchor {
+    pub chromosome_id: u16,
+    pub region: RefBlock,
+    pub source_peak_count: u32,
+}
+
+/// The interval between two adjacent candidate CTCF anchors. This is a
+/// reference architectural unit, not a claim that a physical chromatin loop
+/// has been observed in a particular cell type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CtcfDomain {
+    pub chromosome_id: u16,
+    pub region: RefBlock,
+    pub left_anchor: u32,
+    pub right_anchor: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CtcfArchitecture {
+    pub chromosomes: Vec<String>,
+    pub anchors: Vec<CtcfAnchor>,
+    pub domains: Vec<CtcfDomain>,
+    pub source_peak_count: usize,
+    pub source: String,
+    pub source_url: String,
+}
+
+/// A 25-kb genomic endpoint bin supported by one or more independent loop
+/// experiments. Multiple callers/resolutions from the same experiment count once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExperimentalLoopAnchor {
+    pub chromosome_id: u16,
+    pub region: RefBlock,
+    pub experiment_count: u32,
+}
+
+/// A loop observed in one or more independent experiments. Endpoints are the
+/// compact anchor bins above; Ommverse stores recurrence, not per-experiment evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExperimentalLoop {
+    pub left_anchor: u32,
+    pub right_anchor: u32,
+    pub experiment_count: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExperimentalLoopArchitecture {
+    pub chromosomes: Vec<String>,
+    pub anchors: Vec<ExperimentalLoopAnchor>,
+    pub loops: Vec<ExperimentalLoop>,
+    pub experiment_count: usize,
+    pub source_loop_count: usize,
+    pub anchor_bin_size: u32,
+    pub source: String,
+    pub source_url: String,
+}
+
 /// A merged genomic interval where ENCODE has observed at least one
 /// DNA-associated protein binding event in any assayed biosample.  Ommverse
 /// deliberately stores only this union: factor-, experiment- and biosample-
@@ -444,19 +607,35 @@ pub struct ProteinBindingUnion {
 // Version-4 compatibility only.  v4 serialized every ENCODE rPeak.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct ProteinBindingPeakV4 {
-    chromosome_id: u16, region: RefBlock, score: u16, factor_id: u16, peak_id: u32,
-    observed_experiments: u16, assayed_experiments: u16, ccre_id: u32,
+    chromosome_id: u16,
+    region: RefBlock,
+    score: u16,
+    factor_id: u16,
+    peak_id: u32,
+    observed_experiments: u16,
+    assayed_experiments: u16,
+    ccre_id: u32,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ProteinBindingIndexV4 {
-    chromosomes: Vec<String>, factors: Vec<String>, ccres: Vec<String>,
-    peaks: Vec<ProteinBindingPeakV4>, source: String, source_url: String,
+    chromosomes: Vec<String>,
+    factors: Vec<String>,
+    ccres: Vec<String>,
+    peaks: Vec<ProteinBindingPeakV4>,
+    source: String,
+    source_url: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OmmverseV4 {
-    assembly: String, source_root: PathBuf, genome_twobit: PathBuf, splice: SpliceIndex,
-    proteins: Vec<Protein>, report: BuildReport, interpro_entries: HashMap<String, InterProEntry>,
-    chromatin: Vec<ChromatinElement>, protein_binding: ProteinBindingIndexV4,
+    assembly: String,
+    source_root: PathBuf,
+    genome_twobit: PathBuf,
+    splice: SpliceIndex,
+    proteins: Vec<Protein>,
+    report: BuildReport,
+    interpro_entries: HashMap<String, InterProEntry>,
+    chromatin: Vec<ChromatinElement>,
+    protein_binding: ProteinBindingIndexV4,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -487,15 +666,25 @@ pub struct Ommverse {
     pub chromatin: Vec<ChromatinElement>,
     /// Union of loci with ENCODE DNA-associated-protein binding evidence.
     pub protein_binding: ProteinBindingUnion,
+    /// Candidate CTCF-bounded architectural units derived from ENCODE4 rPeaks.
+    pub ctcf: CtcfArchitecture,
+    /// Compact recurrence map from experimentally observed chromatin loops.
+    pub experimental_loops: ExperimentalLoopArchitecture,
     #[serde(skip)]
     protein_by_accession: HashMap<String, usize>,
     #[serde(skip)]
     proteins_by_gene: HashMap<String, Vec<usize>>,
+    /// Case-insensitive gene symbols, aliases and stable accessions -> internal GeneId.
+    #[serde(skip)]
+    gene_by_name: HashMap<String, GeneId>,
 }
 
 fn find_gtf(genes_dir: &Path) -> Result<PathBuf> {
     if !genes_dir.is_dir() {
-        bail!("required UCSC Genes directory missing: {}", genes_dir.display());
+        bail!(
+            "required UCSC Genes directory missing: {}",
+            genes_dir.display()
+        );
     }
 
     let mut gtfs = std::fs::read_dir(genes_dir)
@@ -508,7 +697,23 @@ fn find_gtf(genes_dir: &Path) -> Result<PathBuf> {
             path.is_file() && (name.ends_with(".gtf") || name.ends_with(".gtf.gz"))
         })
         .collect::<Vec<_>>();
-    gtfs.sort();
+    // knownGene is transcript-centric: in its UCSC GTF export the `gene_id`
+    // can effectively identify individual knownGene transcripts.  That is useful
+    // for alignment, but disastrous for Ommverse gene identity (hg38 produced
+    // ~236k one-name "genes").  Prefer annotations that preserve a real gene
+    // hierarchy and human-readable gene names.
+    gtfs.sort_by_key(|path| {
+        let name = path.file_name().and_then(|x| x.to_str()).unwrap_or("");
+        if name.contains("ncbiRefSeq") {
+            0
+        } else if name == "refGene.gtf.gz" || name == "refGene.gtf" {
+            1
+        } else if name.contains("knownGene") {
+            2
+        } else {
+            3
+        }
+    });
 
     gtfs.into_iter().next().with_context(|| {
         format!(
@@ -530,7 +735,11 @@ pub struct InterProImportReport {
 }
 
 fn interpro_feature_kind(value: &str) -> ProteinFeatureKind {
-    match value.to_ascii_lowercase().replace(['-', '_', ' '], "").as_str() {
+    match value
+        .to_ascii_lowercase()
+        .replace(['-', '_', ' '], "")
+        .as_str()
+    {
         "domain" => ProteinFeatureKind::Domain,
         "family" => ProteinFeatureKind::ProteinFamily,
         "homologoussuperfamily" => ProteinFeatureKind::HomologousSuperfamily,
@@ -542,7 +751,6 @@ fn interpro_feature_kind(value: &str) -> ProteinFeatureKind {
         _ => ProteinFeatureKind::Other,
     }
 }
-
 
 pub fn ingest_interpro_many<F>(
     ommverses: &mut [Ommverse],
@@ -558,12 +766,18 @@ where
     use std::io::{BufRead, BufReader};
 
     let mut entries = HashMap::<String, (ProteinFeatureKind, String)>::new();
-    let reader = BufReader::new(File::open(entry_list).with_context(|| format!("opening {}", entry_list.display()))?);
+    let reader = BufReader::new(
+        File::open(entry_list).with_context(|| format!("opening {}", entry_list.display()))?,
+    );
     for line in reader.lines() {
         let line = line?;
-        if line.trim().is_empty() || line.starts_with('#') { continue; }
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
         let mut f = line.split('\t');
-        let Some(ipr) = f.next().map(str::trim).filter(|x| !x.is_empty()) else { continue; };
+        let Some(ipr) = f.next().map(str::trim).filter(|x| !x.is_empty()) else {
+            continue;
+        };
         let kind = interpro_feature_kind(f.next().unwrap_or("").trim());
         let name = f.next().unwrap_or("").trim().to_owned();
         entries.insert(ipr.to_owned(), (kind, name));
@@ -571,29 +785,51 @@ where
 
     for omm in ommverses.iter_mut() {
         for (ipr, (kind, name)) in &entries {
-            omm.interpro_entries.entry(ipr.clone()).or_insert_with(|| InterProEntry {
-                kind: *kind, name: name.clone(), parents: Vec::new(), children: Vec::new(),
-            });
+            omm.interpro_entries
+                .entry(ipr.clone())
+                .or_insert_with(|| InterProEntry {
+                    kind: *kind,
+                    name: name.clone(),
+                    parents: Vec::new(),
+                    children: Vec::new(),
+                });
         }
         if let Some(tree) = parent_child_tree {
-            let reader = BufReader::new(File::open(tree).with_context(|| format!("opening {}", tree.display()))?);
+            let reader = BufReader::new(
+                File::open(tree).with_context(|| format!("opening {}", tree.display()))?,
+            );
             let mut stack: Vec<String> = Vec::new();
             for line in reader.lines() {
                 let line = line?;
-                if line.trim().is_empty() || line.starts_with('#') { continue; }
+                if line.trim().is_empty() || line.starts_with('#') {
+                    continue;
+                }
                 let mut depth = 0usize;
                 let bytes = line.as_bytes();
-                while bytes.get(depth * 2..depth * 2 + 2) == Some(b"--") { depth += 1; }
+                while bytes.get(depth * 2..depth * 2 + 2) == Some(b"--") {
+                    depth += 1;
+                }
                 let body = &line[depth * 2..];
-                let Some(ipr) = body.split("::").next().map(str::trim).filter(|x| x.starts_with("IPR")) else { continue; };
+                let Some(ipr) = body
+                    .split("::")
+                    .next()
+                    .map(str::trim)
+                    .filter(|x| x.starts_with("IPR"))
+                else {
+                    continue;
+                };
                 stack.truncate(depth);
                 if depth > 0 {
                     if let Some(parent) = stack.get(depth - 1).cloned() {
                         if let Some(entry) = omm.interpro_entries.get_mut(ipr) {
-                            if !entry.parents.contains(&parent) { entry.parents.push(parent.clone()); }
+                            if !entry.parents.contains(&parent) {
+                                entry.parents.push(parent.clone());
+                            }
                         }
                         if let Some(entry) = omm.interpro_entries.get_mut(&parent) {
-                            if !entry.children.iter().any(|x| x == ipr) { entry.children.push(ipr.to_owned()); }
+                            if !entry.children.iter().any(|x| x == ipr) {
+                                entry.children.push(ipr.to_owned());
+                            }
                         }
                     }
                 }
@@ -605,15 +841,25 @@ where
     let mut locations = HashMap::<String, Vec<(usize, usize)>>::new();
     for (oi, omm) in ommverses.iter().enumerate() {
         for (pi, protein) in omm.proteins.iter().enumerate() {
-            locations.entry(protein.accession.clone()).or_default().push((oi, pi));
+            locations
+                .entry(protein.accession.clone())
+                .or_default()
+                .push((oi, pi));
         }
     }
     let mut reports = vec![InterProImportReport::default(); ommverses.len()];
-    for report in &mut reports { report.entries_loaded = entries.len(); }
+    for report in &mut reports {
+        report.entries_loaded = entries.len();
+    }
 
-    let file = File::open(protein2ipr).with_context(|| format!("opening {}", protein2ipr.display()))?;
+    let file =
+        File::open(protein2ipr).with_context(|| format!("opening {}", protein2ipr.display()))?;
     let gz = protein2ipr.extension().is_some_and(|x| x == "gz");
-    let input: Box<dyn Read> = if gz { Box::new(MultiGzDecoder::new(file)) } else { Box::new(file) };
+    let input: Box<dyn Read> = if gz {
+        Box::new(MultiGzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
     let reader = BufReader::with_capacity(1024 * 1024, input);
     let mut streamed = 0usize;
     for line in reader.lines() {
@@ -621,30 +867,77 @@ where
         streamed += 1;
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() < 6 {
-            for r in &mut reports { r.malformed_records += 1; }
+            for r in &mut reports {
+                r.malformed_records += 1;
+            }
             continue;
         }
         let accession = f[0].trim();
         let Some(targets) = locations.get(accession) else {
-            if streamed % 1_000_000 == 0 { progress(streamed, &reports); }
+            if streamed % 1_000_000 == 0 {
+                progress(streamed, &reports);
+            }
             continue;
         };
         let ipr = f[1].trim();
         let signature = f[3].trim();
-        let start_1: u32 = match f[4].trim().parse() { Ok(v) if v > 0 => v, _ => { for &(oi, _) in targets { reports[oi].malformed_records += 1; } continue; } };
-        let end_1: u32 = match f[5].trim().parse() { Ok(v) if v >= start_1 => v, _ => { for &(oi, _) in targets { reports[oi].malformed_records += 1; } continue; } };
+        let start_1: u32 = match f[4].trim().parse() {
+            Ok(v) if v > 0 => v,
+            _ => {
+                for &(oi, _) in targets {
+                    reports[oi].malformed_records += 1;
+                }
+                continue;
+            }
+        };
+        let end_1: u32 = match f[5].trim().parse() {
+            Ok(v) if v >= start_1 => v,
+            _ => {
+                for &(oi, _) in targets {
+                    reports[oi].malformed_records += 1;
+                }
+                continue;
+            }
+        };
         let known = entries.get(ipr);
-        let (kind, entry_name) = known.cloned().unwrap_or_else(|| (ProteinFeatureKind::Other, f[2].trim().to_owned()));
-        let description = if signature.is_empty() { entry_name } else if entry_name.is_empty() { format!("member signature {signature}") } else { format!("{entry_name} [{signature}]") };
+        let (kind, entry_name) = known
+            .cloned()
+            .unwrap_or_else(|| (ProteinFeatureKind::Other, f[2].trim().to_owned()));
+        let description = if signature.is_empty() {
+            entry_name
+        } else if entry_name.is_empty() {
+            format!("member signature {signature}")
+        } else {
+            format!("{entry_name} [{signature}]")
+        };
         for &(oi, pi) in targets {
             let report = &mut reports[oi];
             report.records_streamed = streamed;
             report.matched_records += 1;
-            if known.is_none() { report.unknown_entries += 1; }
-            let feature = ProteinFeature { kind, protein_range: Some((start_1 - 1, end_1)), label: ipr.to_owned(), description: description.clone(), chromosome: String::new(), genomic_start: 0, genomic_end: 0, source_db: "InterPro".to_owned(), review_status: ReviewStatus::Other };
-            if !ommverses[oi].proteins[pi].features.contains(&feature) { ommverses[oi].proteins[pi].features.push(feature); report.features_added += 1; } else { report.duplicate_features += 1; }
+            if known.is_none() {
+                report.unknown_entries += 1;
+            }
+            let feature = ProteinFeature {
+                kind,
+                protein_range: Some((start_1 - 1, end_1)),
+                label: ipr.to_owned(),
+                description: description.clone(),
+                chromosome: String::new(),
+                genomic_start: 0,
+                genomic_end: 0,
+                source_db: "InterPro".to_owned(),
+                review_status: ReviewStatus::Other,
+            };
+            if !ommverses[oi].proteins[pi].features.contains(&feature) {
+                ommverses[oi].proteins[pi].features.push(feature);
+                report.features_added += 1;
+            } else {
+                report.duplicate_features += 1;
+            }
         }
-        if streamed % 1_000_000 == 0 { progress(streamed, &reports); }
+        if streamed % 1_000_000 == 0 {
+            progress(streamed, &reports);
+        }
     }
     for (omm, report) in ommverses.iter_mut().zip(reports.iter_mut()) {
         report.records_streamed = streamed;
@@ -681,46 +974,101 @@ impl Ommverse {
     fn ingest_fantom5_if_present(&mut self) -> Result<()> {
         use flate2::read::MultiGzDecoder;
         use std::io::{BufRead, BufReader};
-        let Some(url) = sources::fantom5::enhancer_url(&self.assembly) else { return Ok(()); };
-        let path = self.source_root.join("Chromatin").join("FANTOM5").join("F5.hg38.enhancers.bed.gz");
-        if !path.is_file() { return Ok(()); }
+        let Some(url) = sources::fantom5::enhancer_url(&self.assembly) else {
+            return Ok(());
+        };
+        let path = self
+            .source_root
+            .join("Chromatin")
+            .join("FANTOM5")
+            .join("F5.hg38.enhancers.bed.gz");
+        if !path.is_file() {
+            return Ok(());
+        }
         let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
         let reader = BufReader::new(MultiGzDecoder::new(file));
         for (line_no, line) in reader.lines().enumerate() {
             let line = line?;
-            if line.is_empty() || line.starts_with('#') { continue; }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
             let f: Vec<&str> = line.split('\t').collect();
-            if f.len() < 12 { bail!("{}:{}: expected BED12, got {} fields", path.display(), line_no + 1, f.len()); }
+            if f.len() < 12 {
+                bail!(
+                    "{}:{}: expected BED12, got {} fields",
+                    path.display(),
+                    line_no + 1,
+                    f.len()
+                );
+            }
             let start: u32 = f[1].parse()?;
             let end: u32 = f[2].parse()?;
-            if start >= end { bail!("{}:{}: invalid interval {start}-{end}", path.display(), line_no + 1); }
+            if start >= end {
+                bail!(
+                    "{}:{}: invalid interval {start}-{end}",
+                    path.display(),
+                    line_no + 1
+                );
+            }
             let block_count: usize = f[9].parse()?;
-            let sizes: Vec<u32> = f[10].trim_end_matches(',').split(',').map(str::parse).collect::<std::result::Result<_, _>>()?;
-            let starts: Vec<u32> = f[11].trim_end_matches(',').split(',').map(str::parse).collect::<std::result::Result<_, _>>()?;
+            let sizes: Vec<u32> = f[10]
+                .trim_end_matches(',')
+                .split(',')
+                .map(str::parse)
+                .collect::<std::result::Result<_, _>>()?;
+            let starts: Vec<u32> = f[11]
+                .trim_end_matches(',')
+                .split(',')
+                .map(str::parse)
+                .collect::<std::result::Result<_, _>>()?;
             if sizes.len() != block_count || starts.len() != block_count {
-                bail!("{}:{}: BED block count mismatch", path.display(), line_no + 1);
+                bail!(
+                    "{}:{}: BED block count mismatch",
+                    path.display(),
+                    line_no + 1
+                );
             }
             let mut blocks = Vec::with_capacity(block_count);
             for (&size, &offset) in sizes.iter().zip(&starts) {
-                let block_start = start.checked_add(offset).context("FANTOM5 block start overflow")?;
-                let block_end = block_start.checked_add(size).context("FANTOM5 block end overflow")?;
+                let block_start = start
+                    .checked_add(offset)
+                    .context("FANTOM5 block start overflow")?;
+                let block_end = block_start
+                    .checked_add(size)
+                    .context("FANTOM5 block end overflow")?;
                 if block_start < start || block_end > end || block_start >= block_end {
                     bail!("{}:{}: invalid BED block", path.display(), line_no + 1);
                 }
                 blocks.push(RefBlock::new(block_start, block_end));
             }
             self.chromatin.push(ChromatinElement {
-                chromosome: f[0].to_owned(), region: RefBlock::new(start, end), name: f[3].to_owned(),
-                score: f[4].parse().unwrap_or(0), blocks, source: "FANTOM5 enhancer".to_owned(), source_url: url.to_owned(),
+                chromosome: f[0].to_owned(),
+                region: RefBlock::new(start, end),
+                name: f[3].to_owned(),
+                score: f[4].parse().unwrap_or(0),
+                blocks,
+                source: "FANTOM5 enhancer".to_owned(),
+                source_url: url.to_owned(),
             });
         }
         Ok(())
     }
 
-    fn ingest_encode4_binding_if_present(&mut self, progress: &mut dyn FnMut(&str, usize)) -> Result<()> {
-        let Some(url) = sources::encode4::tf_rpeaks_url(&self.assembly) else { return Ok(()); };
-        let path = self.source_root.join("Chromatin").join("ENCODE4").join("TFrPeakClusters.bb");
-        if !path.is_file() { return Ok(()); }
+    fn ingest_encode4_binding_if_present(
+        &mut self,
+        progress: &mut dyn FnMut(&str, usize),
+    ) -> Result<()> {
+        let Some(url) = sources::encode4::tf_rpeaks_url(&self.assembly) else {
+            return Ok(());
+        };
+        let path = self
+            .source_root
+            .join("Chromatin")
+            .join("ENCODE4")
+            .join("TFrPeakClusters.bb");
+        if !path.is_file() {
+            return Ok(());
+        }
 
         // The bigBed is coordinate sorted.  Collapse all overlapping/touching
         // rPeaks while streaming, so memory scales with the union rather than
@@ -732,37 +1080,287 @@ impl Ommverse {
             ..ProteinBindingUnion::default()
         };
         let mut current: Option<ProteinBindingRegion> = None;
+        let mut ctcf_current: Option<CtcfAnchor> = None;
+        let mut ctcf_anchors = Vec::<CtcfAnchor>::new();
+        let mut ctcf_source_peaks = 0usize;
         let mut imported = 0usize;
 
-        read_all_bigbed(&path, |chrom, start, end, _rest| {
-            let chromosome_id = if let Some(&id) = chromosome_ids.get(chrom) { id } else {
-                let id = u16::try_from(index.chromosomes.len()).context("too many ENCODE chromosomes")?;
+        read_all_bigbed(&path, |chrom, start, end, rest| {
+            let chromosome_id = if let Some(&id) = chromosome_ids.get(chrom) {
+                id
+            } else {
+                let id = u16::try_from(index.chromosomes.len())
+                    .context("too many ENCODE chromosomes")?;
                 index.chromosomes.push(chrom.to_owned());
                 chromosome_ids.insert(chrom.to_owned(), id);
                 id
             };
             let next = RefBlock::new(start, end);
             match current.as_mut() {
-                Some(region) if region.chromosome_id == chromosome_id && next.start <= region.region.end => {
+                Some(region)
+                    if region.chromosome_id == chromosome_id && next.start <= region.region.end =>
+                {
                     region.region.end = region.region.end.max(next.end);
                     region.source_peak_count = region.source_peak_count.saturating_add(1);
                 }
                 _ => {
-                    if let Some(region) = current.take() { index.regions.push(region); }
-                    current = Some(ProteinBindingRegion { chromosome_id, region: next, source_peak_count: 1 });
+                    if let Some(region) = current.take() {
+                        index.regions.push(region);
+                    }
+                    current = Some(ProteinBindingRegion {
+                        chromosome_id,
+                        region: next,
+                        source_peak_count: 1,
+                    });
                 }
             }
+            // Do not depend on a hard-coded rPeak column number: the source
+            // record carries CTCF as its own tab-delimited factor value. If the
+            // upstream schema changes so this no longer works, the zero-anchor
+            // guard below makes the build fail loudly.
+            if rest
+                .split('\t')
+                .any(|field| field.trim().eq_ignore_ascii_case("CTCF"))
+            {
+                ctcf_source_peaks += 1;
+                match ctcf_current.as_mut() {
+                    Some(anchor)
+                        if anchor.chromosome_id == chromosome_id
+                            && next.start <= anchor.region.end =>
+                    {
+                        anchor.region.end = anchor.region.end.max(next.end);
+                        anchor.source_peak_count = anchor.source_peak_count.saturating_add(1);
+                    }
+                    _ => {
+                        if let Some(anchor) = ctcf_current.take() {
+                            ctcf_anchors.push(anchor);
+                        }
+                        ctcf_current = Some(CtcfAnchor {
+                            chromosome_id,
+                            region: next,
+                            source_peak_count: 1,
+                        });
+                    }
+                }
+            }
+
             imported += 1;
             if imported % 1_000_000 == 0 {
-                eprintln!("[ommverse] ENCODE4 TF rPeaks: {imported} scanned, {} union regions", index.regions.len());
+                eprintln!(
+                    "[ommverse] ENCODE4 TF rPeaks: {imported} scanned, {} union regions",
+                    index.regions.len()
+                );
                 progress("building ENCODE4 binding union", imported);
             }
             Ok(())
         })?;
-        if let Some(region) = current.take() { index.regions.push(region); }
+        if let Some(region) = current.take() {
+            index.regions.push(region);
+        }
+        if let Some(anchor) = ctcf_current.take() {
+            ctcf_anchors.push(anchor);
+        }
         index.source_peak_count = imported;
         self.protein_binding = index;
+
+        if imported > 0 && ctcf_anchors.is_empty() {
+            bail!(
+                "ENCODE4 rPeaks were present but no CTCF factor records were recognized; refusing to build an empty CTCF architecture"
+            );
+        }
+        let mut domains = Vec::<CtcfDomain>::new();
+        for (left_idx, pair) in ctcf_anchors.windows(2).enumerate() {
+            let left = pair[0];
+            let right = pair[1];
+            if left.chromosome_id != right.chromosome_id {
+                continue;
+            }
+            let start = left.region.start + (left.region.end - left.region.start) / 2;
+            let end = right.region.start + (right.region.end - right.region.start) / 2;
+            if start >= end {
+                continue;
+            }
+            domains.push(CtcfDomain {
+                chromosome_id: left.chromosome_id,
+                region: RefBlock::new(start, end),
+                left_anchor: left_idx as u32,
+                right_anchor: (left_idx + 1) as u32,
+            });
+        }
+        eprintln!(
+            "[ommverse] CTCF architecture: {ctcf_source_peaks} source rPeaks -> {} anchors -> {} adjacent domains",
+            ctcf_anchors.len(),
+            domains.len()
+        );
+        self.ctcf = CtcfArchitecture {
+            chromosomes: self.protein_binding.chromosomes.clone(),
+            anchors: ctcf_anchors,
+            domains,
+            source_peak_count: ctcf_source_peaks,
+            source: "ENCODE4 CTCF rPeaks; adjacent-anchor candidate domains".to_owned(),
+            source_url: url.to_owned(),
+        };
+        progress("building ENCODE4 CTCF architecture", ctcf_source_peaks);
         progress("building ENCODE4 binding union", imported);
+        Ok(())
+    }
+
+    /// Import compact recurrence from raw Loop Catalog loop files.
+    ///
+    /// Cache layout:
+    ///   Chromatin/LoopCatalog/experiments.tsv
+    /// Each non-comment row is: EXPERIMENT_ID<TAB>RELATIVE_LOOP_FILE.
+    /// Repeating EXPERIMENT_ID across callers/resolutions is intentional: all
+    /// calls are unioned first, so that experiment contributes at most one vote
+    /// to an anchor or loop. Loop files may be plain text or .gz and only need
+    /// BEDPE-like chromosome/start/end/chromosome/start/end as their first six
+    /// columns.
+    fn ingest_loop_catalog_if_present(
+        &mut self,
+        progress: &mut dyn FnMut(&str, usize),
+    ) -> Result<()> {
+        use flate2::read::MultiGzDecoder;
+        use std::io::{BufRead, BufReader};
+        const BIN: u32 = 25_000;
+        let root = self.source_root.join("Chromatin").join("LoopCatalog");
+        let manifest = root.join("experiments.tsv");
+        if !manifest.is_file() {
+            return Ok(());
+        }
+
+        let mut experiment_files = HashMap::<String, Vec<PathBuf>>::new();
+        for line in BufReader::new(File::open(&manifest)?).lines() {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut fields = line.split('\t');
+            let experiment = fields.next().unwrap_or("").trim();
+            let relative = fields.next().unwrap_or("").trim();
+            if experiment.is_empty() || relative.is_empty() {
+                bail!(
+                    "invalid Loop Catalog manifest row {line:?}; expected experiment_id<TAB>relative_file"
+                );
+            }
+            experiment_files
+                .entry(experiment.to_owned())
+                .or_default()
+                .push(root.join(relative));
+        }
+
+        type Endpoint = (String, u32);
+        type LoopKey = (Endpoint, Endpoint);
+        let mut anchor_support = HashMap::<Endpoint, u32>::new();
+        let mut loop_support = HashMap::<LoopKey, u32>::new();
+        let mut source_loop_count = 0usize;
+
+        for (experiment_idx, (_experiment, files)) in experiment_files.iter().enumerate() {
+            let mut experiment_loops = HashSet::<LoopKey>::new();
+            for path in files {
+                let file = File::open(path)
+                    .with_context(|| format!("opening Loop Catalog calls {}", path.display()))?;
+                let input: Box<dyn Read> = if path.extension().is_some_and(|x| x == "gz") {
+                    Box::new(MultiGzDecoder::new(file))
+                } else {
+                    Box::new(file)
+                };
+                for line in BufReader::with_capacity(1024 * 1024, input).lines() {
+                    let line = line?;
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    let f = line.split_whitespace().collect::<Vec<_>>();
+                    if f.len() < 6 {
+                        continue;
+                    }
+                    let (Ok(s1), Ok(e1), Ok(s2), Ok(e2)) = (
+                        f[1].parse::<u32>(),
+                        f[2].parse::<u32>(),
+                        f[4].parse::<u32>(),
+                        f[5].parse::<u32>(),
+                    ) else {
+                        continue;
+                    };
+                    let midpoint1 = s1.saturating_add(e1.saturating_sub(s1) / 2);
+                    let midpoint2 = s2.saturating_add(e2.saturating_sub(s2) / 2);
+                    let a = (f[0].to_owned(), midpoint1 / BIN);
+                    let b = (f[3].to_owned(), midpoint2 / BIN);
+                    let key = if a <= b { (a, b) } else { (b, a) };
+                    experiment_loops.insert(key);
+                    source_loop_count += 1;
+                }
+            }
+            let mut experiment_anchors = HashSet::<Endpoint>::new();
+            for (a, b) in &experiment_loops {
+                experiment_anchors.insert(a.clone());
+                experiment_anchors.insert(b.clone());
+            }
+            for anchor in experiment_anchors {
+                *anchor_support.entry(anchor).or_default() += 1;
+            }
+            for loop_key in experiment_loops {
+                *loop_support.entry(loop_key).or_default() += 1;
+            }
+            if (experiment_idx + 1) % 25 == 0 {
+                progress("importing experimental loop recurrence", experiment_idx + 1);
+            }
+        }
+
+        let mut chromosomes = anchor_support
+            .keys()
+            .map(|x| x.0.clone())
+            .collect::<Vec<_>>();
+        chromosomes.sort();
+        chromosomes.dedup();
+        let chromosome_ids = chromosomes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.clone(), i as u16))
+            .collect::<HashMap<_, _>>();
+        let mut endpoint_keys = anchor_support.keys().cloned().collect::<Vec<_>>();
+        endpoint_keys.sort();
+        let mut endpoint_to_anchor = HashMap::<Endpoint, u32>::new();
+        let mut anchors = Vec::with_capacity(endpoint_keys.len());
+        for endpoint in endpoint_keys {
+            let id = anchors.len() as u32;
+            let start = endpoint.1.saturating_mul(BIN);
+            anchors.push(ExperimentalLoopAnchor {
+                chromosome_id: chromosome_ids[&endpoint.0],
+                region: RefBlock::new(start, start.saturating_add(BIN)),
+                experiment_count: anchor_support[&endpoint],
+            });
+            endpoint_to_anchor.insert(endpoint, id);
+        }
+        let mut loops = loop_support
+            .into_iter()
+            .map(|((a, b), experiment_count)| ExperimentalLoop {
+                left_anchor: endpoint_to_anchor[&a],
+                right_anchor: endpoint_to_anchor[&b],
+                experiment_count,
+            })
+            .collect::<Vec<_>>();
+        loops.sort_by_key(|x| (x.left_anchor, x.right_anchor));
+        eprintln!(
+            "[ommverse] experimental loops: {} experiments, {source_loop_count} source calls -> {} recurrent anchor bins -> {} distinct loops",
+            experiment_files.len(),
+            anchors.len(),
+            loops.len()
+        );
+        self.experimental_loops = ExperimentalLoopArchitecture {
+            chromosomes,
+            anchors,
+            loops,
+            experiment_count: experiment_files.len(),
+            source_loop_count,
+            anchor_bin_size: BIN,
+            source: "Loop Catalog experimental loop recurrence".to_owned(),
+            source_url: "https://loopcatalog.lji.org/".to_owned(),
+        };
+        progress(
+            "importing experimental loop recurrence",
+            experiment_files.len(),
+        );
         Ok(())
     }
 
@@ -774,7 +1372,10 @@ impl Ommverse {
 
     /// Build from UCSC and optionally report a bounded sample of feature records
     /// that could not be attached to a mapped protein.
-    pub fn build_ucsc_with_debug(root: impl AsRef<Path>, debug_failed_mappings: bool) -> Result<Self> {
+    pub fn build_ucsc_with_debug(
+        root: impl AsRef<Path>,
+        debug_failed_mappings: bool,
+    ) -> Result<Self> {
         Self::build_ucsc_with_debug_and_progress(root, debug_failed_mappings, |_, _| {})
     }
 
@@ -783,23 +1384,41 @@ impl Ommverse {
         debug_failed_mappings: bool,
         mut progress: impl FnMut(&str, usize),
     ) -> Result<Self> {
-        let root = root.as_ref().canonicalize().with_context(|| format!("reference root {}", root.as_ref().display()))?;
-        let assembly = root.file_name().and_then(|x| x.to_str()).context("reference root has no assembly name")?.to_owned();
+        let root = root
+            .as_ref()
+            .canonicalize()
+            .with_context(|| format!("reference root {}", root.as_ref().display()))?;
+        let assembly = root
+            .file_name()
+            .and_then(|x| x.to_str())
+            .context("reference root has no assembly name")?
+            .to_owned();
         let genes_dir = root.join("Genes");
         let gtf = find_gtf(&genes_dir)?;
         let twobit = root.join("Genome").join(format!("{assembly}.2bit"));
         let protein_dir = root.join("Protein");
         for required in [&twobit, &protein_dir] {
-            if !required.exists() { bail!("required UCSC reference component missing: {}", required.display()); }
+            if !required.exists() {
+                bail!(
+                    "required UCSC reference component missing: {}",
+                    required.display()
+                );
+            }
         }
 
-        progress("building transcript index", 0);
+        let gtf_name = gtf
+            .file_name()
+            .and_then(|x| x.to_str())
+            .unwrap_or("annotation.gtf");
+        progress(&format!("building transcript index ({gtf_name})"), 0);
         let splice = SpliceIndex::from_path(&gtf, 100_000, IdNameKeys::default())
             .with_context(|| format!("building splice index from {}", gtf.display()))?;
         let mut tx_by_stable = HashMap::<String, TranscriptId>::new();
         for tx in &splice.transcripts {
             for name in &tx.names {
-                tx_by_stable.entry(strip_version(name).to_owned()).or_insert(tx.id);
+                tx_by_stable
+                    .entry(strip_version(name).to_owned())
+                    .or_insert(tx.id);
             }
         }
 
@@ -818,18 +1437,24 @@ impl Ommverse {
             // cross-reference fields normally live at the end of these records.
             // Only exact GTF-known identifiers (with an optional numeric version
             // stripped) are accepted.
-            if f.is_empty() { return Ok(()); }
+            if f.is_empty() {
+                return Ok(());
+            }
             // ensGene_*.swissprot.bb is a transcript mapping table, while
             // unipAliSwissprot.bb is a bigPsl protein-to-genome alignment.  In
             // bigPsl the BED name (rest field 0) is the UniProt accession; the
             // later fields are alignment statistics, not UniProt metadata.
             let accession = f[0].trim();
-            if accession.is_empty() { return Ok(()); }
+            if accession.is_empty() {
+                return Ok(());
+            }
 
             let tx_id = if mapping_schema == MappingSchema::EnsGene {
                 let Some(tx_id) = f.iter().rev().find_map(|value| {
                     value
-                        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-'))
+                        .split(|c: char| {
+                            !(c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
+                        })
                         .rev()
                         .filter(|candidate| !candidate.is_empty())
                         .find_map(|candidate| tx_by_stable.get(strip_version(candidate)).copied())
@@ -847,24 +1472,59 @@ impl Ommverse {
                 None
             };
 
-            let idx = *protein_by_accession.entry(accession.to_owned()).or_insert_with(|| {
-                let idx = proteins.len();
-                proteins.push(Protein {
-                    accession: accession.to_owned(),
-                    entry_name: if mapping_schema == MappingSchema::EnsGene { f.get(22).copied().unwrap_or("").to_owned() } else { String::new() },
-                    review_status: if mapping_schema == MappingSchema::EnsGene { review_status(f.get(23).copied().unwrap_or("")) } else { ReviewStatus::SwissProt },
-                    name: if mapping_schema == MappingSchema::EnsGene { f.get(26).copied().unwrap_or("").to_owned() } else { String::new() },
-                    gene_symbol: if mapping_schema == MappingSchema::EnsGene { f.get(27).copied().unwrap_or("").to_owned() } else { String::new() },
-                    aliases: if mapping_schema == MappingSchema::EnsGene { parse_aliases(f.get(30).copied().unwrap_or(""), f.get(31).copied().unwrap_or("")) } else { Vec::new() },
-                    ensembl_gene: if mapping_schema == MappingSchema::EnsGene { nonempty(f.get(f.len().saturating_sub(3)).copied().unwrap_or("")) } else { None },
-                    ensembl_protein: if mapping_schema == MappingSchema::EnsGene { nonempty(f.get(f.len().saturating_sub(2)).copied().unwrap_or("")) } else { None },
-                    transcript_ids: Vec::new(),
-                    features: Vec::new(),
+            let idx = *protein_by_accession
+                .entry(accession.to_owned())
+                .or_insert_with(|| {
+                    let idx = proteins.len();
+                    proteins.push(Protein {
+                        accession: accession.to_owned(),
+                        entry_name: if mapping_schema == MappingSchema::EnsGene {
+                            f.get(22).copied().unwrap_or("").to_owned()
+                        } else {
+                            String::new()
+                        },
+                        review_status: if mapping_schema == MappingSchema::EnsGene {
+                            review_status(f.get(23).copied().unwrap_or(""))
+                        } else {
+                            ReviewStatus::SwissProt
+                        },
+                        name: if mapping_schema == MappingSchema::EnsGene {
+                            f.get(26).copied().unwrap_or("").to_owned()
+                        } else {
+                            String::new()
+                        },
+                        gene_symbol: if mapping_schema == MappingSchema::EnsGene {
+                            f.get(27).copied().unwrap_or("").to_owned()
+                        } else {
+                            String::new()
+                        },
+                        aliases: if mapping_schema == MappingSchema::EnsGene {
+                            parse_aliases(
+                                f.get(30).copied().unwrap_or(""),
+                                f.get(31).copied().unwrap_or(""),
+                            )
+                        } else {
+                            Vec::new()
+                        },
+                        ensembl_gene: if mapping_schema == MappingSchema::EnsGene {
+                            nonempty(f.get(f.len().saturating_sub(3)).copied().unwrap_or(""))
+                        } else {
+                            None
+                        },
+                        ensembl_protein: if mapping_schema == MappingSchema::EnsGene {
+                            nonempty(f.get(f.len().saturating_sub(2)).copied().unwrap_or(""))
+                        } else {
+                            None
+                        },
+                        transcript_ids: Vec::new(),
+                        features: Vec::new(),
+                    });
+                    idx
                 });
-                idx
-            });
             if let Some(tx_id) = tx_id {
-                if !proteins[idx].transcript_ids.contains(&tx_id) { proteins[idx].transcript_ids.push(tx_id); }
+                if !proteins[idx].transcript_ids.contains(&tx_id) {
+                    proteins[idx].transcript_ids.push(tx_id);
+                }
             }
             Ok(())
         })?;
@@ -887,14 +1547,20 @@ impl Ommverse {
             let text = fs::read_to_string(&prot_map_info)
                 .with_context(|| format!("reading {}", prot_map_info.display()))?;
             for line in text.lines() {
-                if line.trim().is_empty() || line.starts_with('#') { continue; }
+                if line.trim().is_empty() || line.starts_with('#') {
+                    continue;
+                }
                 let f: Vec<&str> = line.split('\t').collect();
                 let accession = f.first().copied().unwrap_or("").trim();
-                if accession.is_empty() { continue; }
+                if accession.is_empty() {
+                    continue;
+                }
 
                 let Some(tx_id) = f.iter().rev().find_map(|value| {
                     value
-                        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-'))
+                        .split(|c: char| {
+                            !(c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
+                        })
                         .rev()
                         .filter(|candidate| !candidate.is_empty())
                         .find_map(|candidate| tx_by_stable.get(strip_version(candidate)).copied())
@@ -903,22 +1569,24 @@ impl Ommverse {
                 };
 
                 linked.insert(tx_id);
-                let idx = *protein_by_accession.entry(accession.to_owned()).or_insert_with(|| {
-                    let idx = proteins.len();
-                    proteins.push(Protein {
-                        accession: accession.to_owned(),
-                        entry_name: String::new(),
-                        name: String::new(),
-                        gene_symbol: String::new(),
-                        aliases: Vec::new(),
-                        ensembl_gene: None,
-                        ensembl_protein: None,
-                        transcript_ids: Vec::new(),
-                        review_status: review_status(f.get(1).copied().unwrap_or("")),
-                        features: Vec::new(),
+                let idx = *protein_by_accession
+                    .entry(accession.to_owned())
+                    .or_insert_with(|| {
+                        let idx = proteins.len();
+                        proteins.push(Protein {
+                            accession: accession.to_owned(),
+                            entry_name: String::new(),
+                            name: String::new(),
+                            gene_symbol: String::new(),
+                            aliases: Vec::new(),
+                            ensembl_gene: None,
+                            ensembl_protein: None,
+                            transcript_ids: Vec::new(),
+                            review_status: review_status(f.get(1).copied().unwrap_or("")),
+                            features: Vec::new(),
+                        });
+                        idx
                     });
-                    idx
-                });
                 if !proteins[idx].transcript_ids.contains(&tx_id) {
                     proteins[idx].transcript_ids.push(tx_id);
                 }
@@ -946,11 +1614,16 @@ impl Ommverse {
         let mut warnings = Vec::new();
         for (file, kind) in feature_tracks {
             let path = protein_dir.join(file);
-            if !path.exists() { warnings.push(format!("optional protein track missing: {file}")); continue; }
+            if !path.exists() {
+                warnings.push(format!("optional protein track missing: {file}"));
+                continue;
+            }
             let mut failed_debug_printed = 0usize;
             read_all_bigbed(&path, |chrom, start, end, rest| {
                 let f: Vec<&str> = rest.split('\t').collect();
-                if f.is_empty() { return Ok(()); }
+                if f.is_empty() {
+                    return Ok(());
+                }
 
                 // UCSC UniProt feature bigBeds are BED12+14 after BigBed's BED3
                 // prefix.  The explicit UniProt accession is therefore f[24].
@@ -962,7 +1635,10 @@ impl Ommverse {
                 let identity_consistent = !accession.is_empty()
                     && described_accession.map_or(true, |described| described == accession);
 
-                let Some(&idx) = identity_consistent.then(|| protein_by_accession.get(accession)).flatten() else {
+                let Some(&idx) = identity_consistent
+                    .then(|| protein_by_accession.get(accession))
+                    .flatten()
+                else {
                     orphan_features += 1;
                     if debug_failed_mappings && failed_debug_printed < 10 {
                         eprintln!(
@@ -983,31 +1659,88 @@ impl Ommverse {
                 // canonical bigPsl alignment deliberately does not.  Use it to
                 // enrich canonical protein records without changing identity.
                 let protein = &mut proteins[idx];
-                if protein.gene_symbol.is_empty() { protein.gene_symbol = f.get(14).copied().unwrap_or("").to_owned(); }
-                if protein.name.is_empty() { protein.name = f.get(20).copied().unwrap_or("").to_owned(); }
-                if protein.aliases.is_empty() { protein.aliases = parse_aliases(f.get(21).copied().unwrap_or(""), ""); }
+                if protein.gene_symbol.is_empty() {
+                    protein.gene_symbol = f.get(14).copied().unwrap_or("").to_owned();
+                }
+                if protein.name.is_empty() {
+                    protein.name = f.get(20).copied().unwrap_or("").to_owned();
+                }
+                if protein.aliases.is_empty() {
+                    protein.aliases = parse_aliases(f.get(21).copied().unwrap_or(""), "");
+                }
                 protein.features.push(ProteinFeature {
-                    kind, protein_range: parse_amino_acid_range(aa_text), label, description,
-                    chromosome: chrom.to_owned(), genomic_start: start, genomic_end: end,
-                    source_db, review_status: review_status(status_text),
+                    kind,
+                    protein_range: parse_amino_acid_range(aa_text),
+                    label,
+                    description,
+                    chromosome: chrom.to_owned(),
+                    genomic_start: start,
+                    genomic_end: end,
+                    source_db,
+                    review_status: review_status(status_text),
                 });
                 feature_records += 1;
                 Ok(())
             })?;
         }
 
+        // Protein sources carry additional gene namespaces (HGNC-style symbol,
+        // aliases and, where available, Ensembl gene accession).  Attach those
+        // names to the gene already established by the exact transcript link.
+        // Protein accessions themselves remain protein identifiers; the
+        // transcript relation provides the typed bridge back to the gene.
+        let mut splice = splice;
+        for protein in &proteins {
+            for &tx_id in &protein.transcript_ids {
+                let Some(tx) = splice.transcripts.get(tx_id) else {
+                    continue;
+                };
+                let Some(gene) = splice.genes.get_mut(tx.gene_id) else {
+                    continue;
+                };
+                gene.add_name(&protein.gene_symbol);
+                for alias in &protein.aliases {
+                    gene.add_name(alias);
+                }
+                if let Some(accession) = &protein.ensembl_gene {
+                    gene.add_name(accession);
+                }
+            }
+        }
+
         let report = BuildReport {
-            transcripts: splice.transcripts.len(), mapped_proteins: proteins.len(), linked_transcripts: linked.len(),
-            feature_records, unlinked_mapping_records, feature_records_without_protein: orphan_features, warnings,
+            transcripts: splice.transcripts.len(),
+            mapped_proteins: proteins.len(),
+            linked_transcripts: linked.len(),
+            feature_records,
+            unlinked_mapping_records,
+            feature_records_without_protein: orphan_features,
+            warnings,
         };
-        let mut out = Self { assembly, source_root: root, genome_twobit: twobit, splice, proteins, report,
-            interpro_entries: HashMap::new(), chromatin: Vec::new(), protein_binding: ProteinBindingUnion::default(), protein_by_accession: HashMap::new(), proteins_by_gene: HashMap::new() };
+        let mut out = Self {
+            assembly,
+            source_root: root,
+            genome_twobit: twobit,
+            splice,
+            proteins,
+            report,
+            interpro_entries: HashMap::new(),
+            chromatin: Vec::new(),
+            protein_binding: ProteinBindingUnion::default(),
+            ctcf: CtcfArchitecture::default(),
+            experimental_loops: ExperimentalLoopArchitecture::default(),
+            protein_by_accession: HashMap::new(),
+            proteins_by_gene: HashMap::new(),
+            gene_by_name: HashMap::new(),
+        };
         progress("building lookup indexes", 0);
         out.reindex();
         progress("importing FANTOM5 chromatin", 0);
         out.ingest_fantom5_if_present()?;
         progress("importing ENCODE4 TF rPeaks", 0);
         out.ingest_encode4_binding_if_present(&mut progress)?;
+        progress("importing experimental loop recurrence", 0);
+        out.ingest_loop_catalog_if_present(&mut progress)?;
         progress("build complete", out.protein_binding.regions.len());
         Ok(out)
     }
@@ -1031,40 +1764,67 @@ impl Ommverse {
 
         let entry_list = entry_list.as_ref();
         let mut entries = HashMap::<String, (ProteinFeatureKind, String)>::new();
-        let reader = BufReader::new(File::open(entry_list)
-            .with_context(|| format!("opening {}", entry_list.display()))?);
+        let reader = BufReader::new(
+            File::open(entry_list).with_context(|| format!("opening {}", entry_list.display()))?,
+        );
         for line in reader.lines() {
             let line = line?;
-            if line.trim().is_empty() || line.starts_with('#') { continue; }
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
             let mut f = line.split('\t');
-            let Some(ipr) = f.next().map(str::trim).filter(|x| !x.is_empty()) else { continue; };
+            let Some(ipr) = f.next().map(str::trim).filter(|x| !x.is_empty()) else {
+                continue;
+            };
             let kind_text = f.next().unwrap_or("").trim();
             let name = f.next().unwrap_or("").trim();
             let kind = interpro_feature_kind(kind_text);
             entries.insert(ipr.to_owned(), (kind, name.to_owned()));
-            self.interpro_entries.entry(ipr.to_owned()).or_insert_with(|| InterProEntry {
-                kind, name: name.to_owned(), parents: Vec::new(), children: Vec::new(),
-            });
+            self.interpro_entries
+                .entry(ipr.to_owned())
+                .or_insert_with(|| InterProEntry {
+                    kind,
+                    name: name.to_owned(),
+                    parents: Vec::new(),
+                    children: Vec::new(),
+                });
         }
         if let Some(tree) = parent_child_tree {
-            let reader = BufReader::new(File::open(tree).with_context(|| format!("opening {}", tree.display()))?);
+            let reader = BufReader::new(
+                File::open(tree).with_context(|| format!("opening {}", tree.display()))?,
+            );
             let mut stack: Vec<String> = Vec::new();
             for line in reader.lines() {
                 let line = line?;
-                if line.trim().is_empty() || line.starts_with('#') { continue; }
+                if line.trim().is_empty() || line.starts_with('#') {
+                    continue;
+                }
                 let mut depth = 0usize;
                 let bytes = line.as_bytes();
-                while bytes.get(depth * 2..depth * 2 + 2) == Some(b"--") { depth += 1; }
+                while bytes.get(depth * 2..depth * 2 + 2) == Some(b"--") {
+                    depth += 1;
+                }
                 let body = &line[depth * 2..];
-                let Some(ipr) = body.split("::").next().map(str::trim).filter(|x| x.starts_with("IPR")) else { continue; };
+                let Some(ipr) = body
+                    .split("::")
+                    .next()
+                    .map(str::trim)
+                    .filter(|x| x.starts_with("IPR"))
+                else {
+                    continue;
+                };
                 stack.truncate(depth);
                 if depth > 0 {
                     if let Some(parent) = stack.get(depth - 1).cloned() {
                         if let Some(entry) = self.interpro_entries.get_mut(ipr) {
-                            if !entry.parents.contains(&parent) { entry.parents.push(parent.clone()); }
+                            if !entry.parents.contains(&parent) {
+                                entry.parents.push(parent.clone());
+                            }
                         }
                         if let Some(entry) = self.interpro_entries.get_mut(&parent) {
-                            if !entry.children.iter().any(|x| x == ipr) { entry.children.push(ipr.to_owned()); }
+                            if !entry.children.iter().any(|x| x == ipr) {
+                                entry.children.push(ipr.to_owned());
+                            }
                         }
                     }
                 }
@@ -1072,30 +1832,57 @@ impl Ommverse {
             }
         }
 
-        let mut report = InterProImportReport { entries_loaded: entries.len(), ..Default::default() };
+        let mut report = InterProImportReport {
+            entries_loaded: entries.len(),
+            ..Default::default()
+        };
         let path = protein2ipr.as_ref();
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
         let gz = path.extension().is_some_and(|x| x == "gz");
-        let input: Box<dyn Read> = if gz { Box::new(MultiGzDecoder::new(file)) } else { Box::new(file) };
+        let input: Box<dyn Read> = if gz {
+            Box::new(MultiGzDecoder::new(file))
+        } else {
+            Box::new(file)
+        };
         let reader = BufReader::with_capacity(1024 * 1024, input);
 
         for line in reader.lines() {
             let line = line?;
             report.records_streamed += 1;
             let f: Vec<&str> = line.split('\t').collect();
-            if f.len() < 6 { report.malformed_records += 1; continue; }
+            if f.len() < 6 {
+                report.malformed_records += 1;
+                continue;
+            }
             let accession = f[0].trim();
-            let Some(&idx) = self.protein_by_accession.get(accession) else { continue; };
+            let Some(&idx) = self.protein_by_accession.get(accession) else {
+                continue;
+            };
             report.matched_records += 1;
 
             let ipr = f[1].trim();
             let signature = f[3].trim();
-            let start_1: u32 = match f[4].trim().parse() { Ok(v) if v > 0 => v, _ => { report.malformed_records += 1; continue; } };
-            let end_1: u32 = match f[5].trim().parse() { Ok(v) if v >= start_1 => v, _ => { report.malformed_records += 1; continue; } };
-            let (kind, entry_name) = entries.get(ipr)
+            let start_1: u32 = match f[4].trim().parse() {
+                Ok(v) if v > 0 => v,
+                _ => {
+                    report.malformed_records += 1;
+                    continue;
+                }
+            };
+            let end_1: u32 = match f[5].trim().parse() {
+                Ok(v) if v >= start_1 => v,
+                _ => {
+                    report.malformed_records += 1;
+                    continue;
+                }
+            };
+            let (kind, entry_name) = entries
+                .get(ipr)
                 .cloned()
                 .unwrap_or_else(|| (ProteinFeatureKind::Other, f[2].trim().to_owned()));
-            if !entries.contains_key(ipr) { report.unknown_entries += 1; }
+            if !entries.contains_key(ipr) {
+                report.unknown_entries += 1;
+            }
 
             let description = if signature.is_empty() {
                 entry_name
@@ -1127,44 +1914,103 @@ impl Ommverse {
     }
 
     pub fn protein(&self, accession: &str) -> Option<&Protein> {
-        self.protein_by_accession.get(accession).map(|&i| &self.proteins[i])
+        self.protein_by_accession
+            .get(accession)
+            .map(|&i| &self.proteins[i])
     }
 
-    pub fn proteins_for_gene(&self, symbol: &str) -> impl Iterator<Item=&Protein> {
-        self.proteins_by_gene.get(&symbol.to_ascii_lowercase()).into_iter().flatten().map(|&i| &self.proteins[i])
+    /// Resolve a gene by any retained symbol, alias or stable accession.
+    pub fn gene(&self, name_or_accession: &str) -> Option<&Gene> {
+        self.gene_by_name
+            .get(&name_or_accession.trim().to_ascii_lowercase())
+            .and_then(|&id| self.splice.genes.get(id))
     }
 
-    pub fn proteins_with_feature(&self, kind: ProteinFeatureKind) -> impl Iterator<Item=&Protein> {
-        self.proteins.iter().filter(move |p| p.features.iter().any(|f| f.kind == kind))
+    /// Resolve a transcript using the splice index's retained transcript names/accessions.
+    pub fn transcript(&self, name_or_accession: &str) -> Option<&Transcript> {
+        self.splice.transcript_by_name(name_or_accession).ok()
+    }
+
+    /// Follow a typed protein -> transcript -> gene relationship.
+    pub fn gene_for_protein(&self, accession: &str) -> Option<&Gene> {
+        let protein = self.protein(accession)?;
+        let tx_id = *protein.transcript_ids.first()?;
+        let tx = self.splice.transcripts.get(tx_id)?;
+        self.splice.genes.get(tx.gene_id)
+    }
+
+    pub fn proteins_for_gene(&self, symbol: &str) -> impl Iterator<Item = &Protein> {
+        self.proteins_by_gene
+            .get(&symbol.to_ascii_lowercase())
+            .into_iter()
+            .flatten()
+            .map(|&i| &self.proteins[i])
+    }
+
+    pub fn proteins_with_feature(
+        &self,
+        kind: ProteinFeatureKind,
+    ) -> impl Iterator<Item = &Protein> {
+        self.proteins
+            .iter()
+            .filter(move |p| p.features.iter().any(|f| f.kind == kind))
     }
 
     /// Reconstruct the protein sequence from the UCSC twoBit genome and the
     /// linked GTF transcript. Protein sequence is deliberately not persisted.
     pub fn protein_sequence(&self, accession: &str) -> Result<IntToProt> {
-        let protein = self.protein(accession).with_context(|| format!("unknown protein {accession}"))?;
+        let protein = self
+            .protein(accession)
+            .with_context(|| format!("unknown protein {accession}"))?;
         let mut genome = TwoBitReader::open(&self.genome_twobit)?;
         self.protein_sequence_with_reader(protein, &mut genome)
     }
 
-    fn protein_sequence_with_reader(&self, protein: &Protein, genome: &mut TwoBitReader) -> Result<IntToProt> {
-        let &tx_id = protein.transcript_ids.first().context("protein has no linked transcript")?;
+    fn protein_sequence_with_reader(
+        &self,
+        protein: &Protein,
+        genome: &mut TwoBitReader,
+    ) -> Result<IntToProt> {
+        let &tx_id = protein
+            .transcript_ids
+            .first()
+            .context("protein has no linked transcript")?;
         let tx = &self.splice.transcripts[tx_id];
-        let chr = self.splice.chr_names.get(tx.chr_id).context("transcript chromosome missing")?;
+        let chr = self
+            .splice
+            .chr_names
+            .get(tx.chr_id)
+            .context("transcript chromosome missing")?;
         let mut cdna = Vec::<u8>::with_capacity(tx.transcript_len());
         match tx.strand {
-            Strand::Plus | Strand::Unknown => for exon in tx.exons() {
-                let dna = genome.sequence(chr, exon.start, exon.end)?;
-                cdna.extend_from_slice(dna.to_string(exon.len() as usize).as_bytes());
-            },
-            Strand::Minus => for exon in tx.exons().iter().rev() {
-                let dna = genome.sequence(chr, exon.start, exon.end)?;
-                let s = dna.to_string(exon.len() as usize);
-                cdna.extend(s.bytes().rev().map(complement));
-            },
+            Strand::Plus | Strand::Unknown => {
+                for exon in tx.exons() {
+                    let dna = genome.sequence(chr, exon.start, exon.end)?;
+                    cdna.extend_from_slice(dna.to_string(exon.len() as usize).as_bytes());
+                }
+            }
+            Strand::Minus => {
+                for exon in tx.exons().iter().rev() {
+                    let dna = genome.sequence(chr, exon.start, exon.end)?;
+                    let s = dna.to_string(exon.len() as usize);
+                    cdna.extend(s.bytes().rev().map(complement));
+                }
+            }
         }
-        let (start, end) = tx.cds_transcript_span().context("transcript has no usable CDS")?;
-        if end > cdna.len() { bail!("CDS {}..{} exceeds reconstructed cDNA length {}", start, end, cdna.len()); }
-        Ok(IntToDna::try_new(&cdna[start..end]).map_err(anyhow::Error::msg)?.translate())
+        let (start, end) = tx
+            .cds_transcript_span()
+            .context("transcript has no usable CDS")?;
+        if end > cdna.len() {
+            bail!(
+                "CDS {}..{} exceeds reconstructed cDNA length {}",
+                start,
+                end,
+                cdna.len()
+            );
+        }
+        Ok(IntToDna::try_new(&cdna[start..end])
+            .map_err(anyhow::Error::msg)?
+            .translate())
     }
 
     /// Build a validated residue-level corpus for one curated protein feature.
@@ -1175,9 +2021,17 @@ impl Ommverse {
 
     /// As `training_corpus`, while also describing how often two context windows
     /// of `flank_width` residues would collide between adjacent features.
-    pub fn training_corpus_with_flank_diagnostic(&self, feature: ProteinFeatureKind, flank_width: usize) -> Result<ProteinTrainingCorpus> {
+    pub fn training_corpus_with_flank_diagnostic(
+        &self,
+        feature: ProteinFeatureKind,
+        flank_width: usize,
+    ) -> Result<ProteinTrainingCorpus> {
         let candidates: Vec<&Protein> = self.proteins_with_feature(feature).collect();
-        let mut report = TrainingCorpusReport { candidate_proteins: candidates.len(), diagnostic_flank_width: flank_width, ..Default::default() };
+        let mut report = TrainingCorpusReport {
+            candidate_proteins: candidates.len(),
+            diagnostic_flank_width: flank_width,
+            ..Default::default()
+        };
         let mut feature_lengths = Vec::<usize>::new();
         let mut inter_feature_gaps = Vec::<usize>::new();
         let mut genome = TwoBitReader::open(&self.genome_twobit)?;
@@ -1186,19 +2040,31 @@ impl Ommverse {
         for protein in candidates {
             let sequence = match self.protein_sequence_with_reader(protein, &mut genome) {
                 Ok(sequence) => sequence,
-                Err(_) => { report.rejected_sequence += 1; continue; }
+                Err(_) => {
+                    report.rejected_sequence += 1;
+                    continue;
+                }
             };
-            let mut ranges: Vec<(u32, u32)> = protein.features.iter()
+            let mut ranges: Vec<(u32, u32)> = protein
+                .features
+                .iter()
                 .filter(|f| f.kind == feature)
                 .filter_map(|f| f.protein_range)
                 .collect();
             ranges.sort_unstable();
-            let selected_features = protein.features.iter().filter(|f| f.kind == feature).count();
+            let selected_features = protein
+                .features
+                .iter()
+                .filter(|f| f.kind == feature)
+                .count();
             if ranges.len() != selected_features {
                 report.rejected_missing_range += 1;
                 continue;
             }
-            if ranges.iter().any(|&(start, end)| start >= end || end as usize > sequence.len()) {
+            if ranges
+                .iter()
+                .any(|&(start, end)| start >= end || end as usize > sequence.len())
+            {
                 report.rejected_out_of_bounds += 1;
                 continue;
             }
@@ -1213,7 +2079,9 @@ impl Ommverse {
             for pair in ranges.windows(2) {
                 let gap = pair[1].0.saturating_sub(pair[0].1) as usize;
                 inter_feature_gaps.push(gap);
-                if gap < flank_width.saturating_mul(2) { report.overlapping_flank_pairs += 1; }
+                if gap < flank_width.saturating_mul(2) {
+                    report.overlapping_flank_pairs += 1;
+                }
             }
             report.reconstructed_proteins += 1;
             report.total_residues += sequence.len();
@@ -1235,9 +2103,18 @@ impl Ommverse {
         let mut train = Vec::with_capacity((examples.len() + 1) / 2);
         let mut test = Vec::with_capacity(examples.len() / 2);
         for (i, example) in examples.into_iter().enumerate() {
-            if i % 2 == 0 { train.push(example); } else { test.push(example); }
+            if i % 2 == 0 {
+                train.push(example);
+            } else {
+                test.push(example);
+            }
         }
-        Ok(ProteinTrainingCorpus { feature, train, test, report })
+        Ok(ProteinTrainingCorpus {
+            feature,
+            train,
+            test,
+            report,
+        })
     }
 
     /// Train a supervised four-state exact-amino-acid feature HMM.
@@ -1245,8 +2122,14 @@ impl Ommverse {
     /// States are BACKGROUND, PRE_FEATURE, FEATURE and POST_FEATURE. PRE/POST
     /// are learned from residues immediately outside curated feature intervals.
     /// The held-out corpus is never consulted here.
-    pub fn train_exact_aa_feature_model(&self, corpus: &ProteinTrainingCorpus, flank_width: usize) -> Result<ExactAaFeatureModel> {
-        if flank_width == 0 { bail!("flank width must be greater than zero"); }
+    pub fn train_exact_aa_feature_model(
+        &self,
+        corpus: &ProteinTrainingCorpus,
+        flank_width: usize,
+    ) -> Result<ExactAaFeatureModel> {
+        if flank_width == 0 {
+            bail!("flank width must be greater than zero");
+        }
         let mut initial = [1.0f64; 4];
         let mut transition = [0.0f64; 16];
         let mut emission = [[1.0f64; 32]; 4];
@@ -1254,29 +2137,58 @@ impl Ommverse {
         // Only biologically meaningful transitions receive a pseudocount.
         // POST->PRE permits two nearby features separated by a short loop.
         for (src, dst) in [
-            (0,0),(0,1), (1,1),(1,2), (2,2),(2,3),
-            (3,3),(3,0),(3,1),
-        ] { transition[src * 4 + dst] = 1.0; }
+            (0, 0),
+            (0, 1),
+            (1, 1),
+            (1, 2),
+            (2, 2),
+            (2, 3),
+            (3, 3),
+            (3, 0),
+            (3, 1),
+        ] {
+            transition[src * 4 + dst] = 1.0;
+        }
 
         for example in &corpus.train {
-            if example.sequence.is_empty() { continue; }
+            if example.sequence.is_empty() {
+                continue;
+            }
             let states = feature_context_states(&example.truth, flank_width);
             initial[states[0]] += 1.0;
             for pos in 0..example.sequence.len() {
                 let state = states[pos];
-                let code = example.sequence.get(pos).context("protein sequence position disappeared")?.code() as usize;
+                let code = example
+                    .sequence
+                    .get(pos)
+                    .context("protein sequence position disappeared")?
+                    .code() as usize;
                 emission[state][code] += 1.0;
-                if pos > 0 { transition[states[pos - 1] * 4 + state] += 1.0; }
+                if pos > 0 {
+                    transition[states[pos - 1] * 4 + state] += 1.0;
+                }
             }
         }
         normalize_array(&mut initial);
         for row in 0..4 {
             let sum: f64 = transition[row * 4..row * 4 + 4].iter().sum();
-            if sum == 0.0 { bail!("feature HMM state {row} has no outgoing transitions"); }
-            for col in 0..4 { transition[row * 4 + col] /= sum; }
+            if sum == 0.0 {
+                bail!("feature HMM state {row} has no outgoing transitions");
+            }
+            for col in 0..4 {
+                transition[row * 4 + col] /= sum;
+            }
         }
-        for row in &mut emission { normalize_array(row); }
-        Ok(ExactAaFeatureModel { feature: corpus.feature, flank_width, initial, transition, emission })
+        for row in &mut emission {
+            normalize_array(row);
+        }
+        Ok(ExactAaFeatureModel {
+            feature: corpus.feature,
+            flank_width,
+            initial,
+            transition,
+            emission,
+        })
     }
 
     pub fn evaluate_exact_aa_feature_model(
@@ -1285,29 +2197,47 @@ impl Ommverse {
         examples: &[ProteinTrainingExample],
     ) -> Result<FeatureEvaluation> {
         let hmm = model.hmm()?;
-        let partials: Result<Vec<FeatureEvaluation>> = examples.par_iter().map(|example| {
-            let observations = aa_observations(&example.sequence)?;
-            let predicted: Vec<bool> = hmm.infer(&observations)?.viterbi().iter().map(|s| s.0 == 2).collect();
-            let mut report = FeatureEvaluation::default();
-            accumulate_evaluation(&mut report, &predicted, example);
-            Ok(report)
-        }).collect();
-        Ok(partials?.into_iter().fold(FeatureEvaluation::default(), merge_feature_evaluation))
+        let partials: Result<Vec<FeatureEvaluation>> = examples
+            .par_iter()
+            .map(|example| {
+                let observations = aa_observations(&example.sequence)?;
+                let predicted: Vec<bool> = hmm
+                    .infer(&observations)?
+                    .viterbi()
+                    .iter()
+                    .map(|s| s.0 == 2)
+                    .collect();
+                let mut report = FeatureEvaluation::default();
+                accumulate_evaluation(&mut report, &predicted, example);
+                Ok(report)
+            })
+            .collect();
+        Ok(partials?
+            .into_iter()
+            .fold(FeatureEvaluation::default(), merge_feature_evaluation))
     }
 
     /// Apply a frozen model to every reconstructable protein that has no curated
     /// annotation of this feature. This is inference only; these proteins never
     /// contribute to model fitting.
-    pub fn scan_unannotated_exact_aa(&self, model: &ExactAaFeatureModel) -> Result<UnannotatedScanReport> {
+    pub fn scan_unannotated_exact_aa(
+        &self,
+        model: &ExactAaFeatureModel,
+    ) -> Result<UnannotatedScanReport> {
         let hmm = model.hmm()?;
         let mut genome = TwoBitReader::open(&self.genome_twobit)?;
         let mut report = UnannotatedScanReport::default();
         for protein in &self.proteins {
-            if protein.features.iter().any(|f| f.kind == model.feature) { continue; }
+            if protein.features.iter().any(|f| f.kind == model.feature) {
+                continue;
+            }
             report.candidate_proteins += 1;
             let sequence = match self.protein_sequence_with_reader(protein, &mut genome) {
                 Ok(x) if !x.is_empty() => x,
-                _ => { report.rejected_sequence += 1; continue; }
+                _ => {
+                    report.rejected_sequence += 1;
+                    continue;
+                }
             };
             report.reconstructed_proteins += 1;
             let observations = aa_observations(&sequence)?;
@@ -1323,57 +2253,114 @@ impl Ommverse {
         Ok(report)
     }
 
-    pub fn train_chemistry_feature_model(&self, corpus: &ProteinTrainingCorpus, flank_width: usize) -> Result<ChemistryFeatureModel> {
-        if flank_width == 0 { bail!("flank width must be greater than zero"); }
+    pub fn train_chemistry_feature_model(
+        &self,
+        corpus: &ProteinTrainingCorpus,
+        flank_width: usize,
+    ) -> Result<ChemistryFeatureModel> {
+        if flank_width == 0 {
+            bail!("flank width must be greater than zero");
+        }
         let mut categories = Vec::<u16>::new();
         for example in &corpus.train {
             for pos in 0..example.sequence.len() {
-                let bits = example.sequence.get(pos).context("protein sequence position disappeared")?.chemistry();
+                let bits = example
+                    .sequence
+                    .get(pos)
+                    .context("protein sequence position disappeared")?
+                    .chemistry();
                 categories.push(bits);
             }
         }
         categories.sort_unstable();
         categories.dedup();
-        if categories.is_empty() { bail!("chemistry model has no training observations"); }
+        if categories.is_empty() {
+            bail!("chemistry model has no training observations");
+        }
         let unknown = categories.len();
         let mut initial = [1.0f64; 4];
         let mut transition = [0.0f64; 16];
         let mut emission = vec![vec![1.0f64; categories.len() + 1]; 4];
-        for (src, dst) in [(0,0),(0,1),(1,1),(1,2),(2,2),(2,3),(3,3),(3,0),(3,1)] {
+        for (src, dst) in [
+            (0, 0),
+            (0, 1),
+            (1, 1),
+            (1, 2),
+            (2, 2),
+            (2, 3),
+            (3, 3),
+            (3, 0),
+            (3, 1),
+        ] {
             transition[src * 4 + dst] = 1.0;
         }
         for example in &corpus.train {
-            if example.sequence.is_empty() { continue; }
+            if example.sequence.is_empty() {
+                continue;
+            }
             let states = feature_context_states(&example.truth, flank_width);
             initial[states[0]] += 1.0;
             for pos in 0..example.sequence.len() {
                 let state = states[pos];
-                let bits = example.sequence.get(pos).context("protein sequence position disappeared")?.chemistry();
+                let bits = example
+                    .sequence
+                    .get(pos)
+                    .context("protein sequence position disappeared")?
+                    .chemistry();
                 let category = categories.binary_search(&bits).unwrap_or(unknown);
                 emission[state][category] += 1.0;
-                if pos > 0 { transition[states[pos - 1] * 4 + state] += 1.0; }
+                if pos > 0 {
+                    transition[states[pos - 1] * 4 + state] += 1.0;
+                }
             }
         }
         normalize_array(&mut initial);
         for row in 0..4 {
             let sum: f64 = transition[row * 4..row * 4 + 4].iter().sum();
-            if sum == 0.0 { bail!("feature HMM state {row} has no outgoing transitions"); }
-            for col in 0..4 { transition[row * 4 + col] /= sum; }
+            if sum == 0.0 {
+                bail!("feature HMM state {row} has no outgoing transitions");
+            }
+            for col in 0..4 {
+                transition[row * 4 + col] /= sum;
+            }
         }
-        for row in &mut emission { normalize_slice(row); }
-        Ok(ChemistryFeatureModel { feature: corpus.feature, flank_width, initial, transition, categories, emission })
+        for row in &mut emission {
+            normalize_slice(row);
+        }
+        Ok(ChemistryFeatureModel {
+            feature: corpus.feature,
+            flank_width,
+            initial,
+            transition,
+            categories,
+            emission,
+        })
     }
 
-    pub fn evaluate_chemistry_feature_model(&self, model: &ChemistryFeatureModel, examples: &[ProteinTrainingExample]) -> Result<FeatureEvaluation> {
+    pub fn evaluate_chemistry_feature_model(
+        &self,
+        model: &ChemistryFeatureModel,
+        examples: &[ProteinTrainingExample],
+    ) -> Result<FeatureEvaluation> {
         let hmm = model.hmm()?;
-        let partials: Result<Vec<FeatureEvaluation>> = examples.par_iter().map(|example| {
-            let observations = chemistry_observations(&example.sequence, &model.categories)?;
-            let predicted: Vec<bool> = hmm.infer(&observations)?.viterbi().iter().map(|s| s.0 == 2).collect();
-            let mut report = FeatureEvaluation::default();
-            accumulate_evaluation(&mut report, &predicted, example);
-            Ok(report)
-        }).collect();
-        Ok(partials?.into_iter().fold(FeatureEvaluation::default(), merge_feature_evaluation))
+        let partials: Result<Vec<FeatureEvaluation>> = examples
+            .par_iter()
+            .map(|example| {
+                let observations = chemistry_observations(&example.sequence, &model.categories)?;
+                let predicted: Vec<bool> = hmm
+                    .infer(&observations)?
+                    .viterbi()
+                    .iter()
+                    .map(|s| s.0 == 2)
+                    .collect();
+                let mut report = FeatureEvaluation::default();
+                accumulate_evaluation(&mut report, &predicted, example);
+                Ok(report)
+            })
+            .collect();
+        Ok(partials?
+            .into_iter()
+            .fold(FeatureEvaluation::default(), merge_feature_evaluation))
     }
 
     /// Build a supervised membrane-architecture corpus.
@@ -1387,16 +2374,22 @@ impl Ommverse {
         // than compete at every residue of the membrane-architecture HMM.
         let kinds = [
             ProteinFeatureKind::Transmembrane,
-            ProteinFeatureKind::Cytoplasmic, ProteinFeatureKind::Extracellular,
+            ProteinFeatureKind::Cytoplasmic,
+            ProteinFeatureKind::Extracellular,
         ];
         let mut report = TopologyTrainingReport::default();
         let mut genome = TwoBitReader::open(&self.genome_twobit)?;
         let mut examples = Vec::new();
 
         for protein in &self.proteins {
-            let selected: Vec<&ProteinFeature> = protein.features.iter()
-                .filter(|f| kinds.contains(&f.kind)).collect();
-            if selected.is_empty() { continue; }
+            let selected: Vec<&ProteinFeature> = protein
+                .features
+                .iter()
+                .filter(|f| kinds.contains(&f.kind))
+                .collect();
+            if selected.is_empty() {
+                continue;
+            }
             report.candidate_proteins += 1;
             if selected.iter().any(|f| f.protein_range.is_none()) {
                 report.rejected_missing_range += 1;
@@ -1404,7 +2397,10 @@ impl Ommverse {
             }
             let sequence = match self.protein_sequence_with_reader(protein, &mut genome) {
                 Ok(sequence) if !sequence.is_empty() => sequence,
-                _ => { report.rejected_sequence += 1; continue; }
+                _ => {
+                    report.rejected_sequence += 1;
+                    continue;
+                }
             };
             if selected.iter().any(|f| {
                 let (start, end) = f.protein_range.unwrap();
@@ -1421,12 +2417,22 @@ impl Ommverse {
                 let (start, end) = feature.protein_range.unwrap();
                 let state = match feature.kind {
                     ProteinFeatureKind::Transmembrane => TopologyState::Transmembrane,
-                    ProteinFeatureKind::Cytoplasmic | ProteinFeatureKind::Extracellular =>
-                        TopologyState::region_state(feature.kind, start as usize, end as usize, sequence.len()),
+                    ProteinFeatureKind::Cytoplasmic | ProteinFeatureKind::Extracellular => {
+                        TopologyState::region_state(
+                            feature.kind,
+                            start as usize,
+                            end as usize,
+                            sequence.len(),
+                        )
+                    }
                     _ => unreachable!(),
                 };
                 // Membrane crossings outrank broad sidedness annotations.
-                let p = if state == TopologyState::Transmembrane { 2 } else { 1 };
+                let p = if state == TopologyState::Transmembrane {
+                    2
+                } else {
+                    1
+                };
                 for pos in start as usize..end as usize {
                     if p > priority[pos] {
                         truth[pos] = state.index();
@@ -1437,22 +2443,37 @@ impl Ommverse {
                     }
                 }
             }
-            if conflict { continue; }
+            if conflict {
+                continue;
+            }
             report.reconstructed_proteins += 1;
             examples.push(TopologyTrainingExample {
-                accession: protein.accession.clone(), sequence, truth,
+                accession: protein.accession.clone(),
+                sequence,
+                truth,
             });
         }
         examples.sort_by(|a, b| a.accession.cmp(&b.accession));
         let mut train = Vec::with_capacity((examples.len() + 1) / 2);
         let mut test = Vec::with_capacity(examples.len() / 2);
         for (i, example) in examples.into_iter().enumerate() {
-            if i % 2 == 0 { train.push(example); } else { test.push(example); }
+            if i % 2 == 0 {
+                train.push(example);
+            } else {
+                test.push(example);
+            }
         }
-        Ok(TopologyTrainingCorpus { train, test, report })
+        Ok(TopologyTrainingCorpus {
+            train,
+            test,
+            report,
+        })
     }
 
-    pub fn train_exact_aa_topology_model(&self, corpus: &TopologyTrainingCorpus) -> Result<ExactAaTopologyModel> {
+    pub fn train_exact_aa_topology_model(
+        &self,
+        corpus: &TopologyTrainingCorpus,
+    ) -> Result<ExactAaTopologyModel> {
         let n = TopologyState::COUNT;
         let mut initial = vec![1.0f64; n];
         // Small pseudocount everywhere: observed biology dominates, but a transition
@@ -1460,94 +2481,187 @@ impl Ommverse {
         let mut transition = vec![0.1f64; n * n];
         let mut emission = vec![vec![1.0f64; 32]; n];
         for example in &corpus.train {
-            if example.sequence.is_empty() { continue; }
+            if example.sequence.is_empty() {
+                continue;
+            }
             initial[example.truth[0]] += 1.0;
             for pos in 0..example.sequence.len() {
                 let state = example.truth[pos];
-                let code = example.sequence.get(pos).context("protein sequence position disappeared")?.code() as usize;
+                let code = example
+                    .sequence
+                    .get(pos)
+                    .context("protein sequence position disappeared")?
+                    .code() as usize;
                 emission[state][code] += 1.0;
-                if pos > 0 { transition[example.truth[pos - 1] * n + state] += 1.0; }
+                if pos > 0 {
+                    transition[example.truth[pos - 1] * n + state] += 1.0;
+                }
             }
         }
         normalize_slice(&mut initial);
-        for row in 0..n { normalize_slice(&mut transition[row*n..(row+1)*n]); }
-        for row in &mut emission { normalize_slice(row); }
-        Ok(ExactAaTopologyModel { initial, transition, emission })
+        for row in 0..n {
+            normalize_slice(&mut transition[row * n..(row + 1) * n]);
+        }
+        for row in &mut emission {
+            normalize_slice(row);
+        }
+        Ok(ExactAaTopologyModel {
+            initial,
+            transition,
+            emission,
+        })
     }
 
-    pub fn train_chemistry_topology_model(&self, corpus: &TopologyTrainingCorpus) -> Result<ChemistryTopologyModel> {
+    pub fn train_chemistry_topology_model(
+        &self,
+        corpus: &TopologyTrainingCorpus,
+    ) -> Result<ChemistryTopologyModel> {
         let n = TopologyState::COUNT;
         let mut categories = Vec::<u16>::new();
         for example in &corpus.train {
             for pos in 0..example.sequence.len() {
-                categories.push(example.sequence.get(pos).context("protein sequence position disappeared")?.chemistry());
+                categories.push(
+                    example
+                        .sequence
+                        .get(pos)
+                        .context("protein sequence position disappeared")?
+                        .chemistry(),
+                );
             }
         }
-        categories.sort_unstable(); categories.dedup();
-        if categories.is_empty() { bail!("topology chemistry model has no training observations"); }
+        categories.sort_unstable();
+        categories.dedup();
+        if categories.is_empty() {
+            bail!("topology chemistry model has no training observations");
+        }
         let unknown = categories.len();
         let mut initial = vec![1.0f64; n];
-        let mut transition = vec![0.1f64; n*n];
-        let mut emission = vec![vec![1.0f64; categories.len()+1]; n];
+        let mut transition = vec![0.1f64; n * n];
+        let mut emission = vec![vec![1.0f64; categories.len() + 1]; n];
         for example in &corpus.train {
-            if example.sequence.is_empty() { continue; }
+            if example.sequence.is_empty() {
+                continue;
+            }
             initial[example.truth[0]] += 1.0;
             for pos in 0..example.sequence.len() {
                 let state = example.truth[pos];
-                let bits = example.sequence.get(pos).context("protein sequence position disappeared")?.chemistry();
+                let bits = example
+                    .sequence
+                    .get(pos)
+                    .context("protein sequence position disappeared")?
+                    .chemistry();
                 let obs = categories.binary_search(&bits).unwrap_or(unknown);
                 emission[state][obs] += 1.0;
-                if pos > 0 { transition[example.truth[pos-1]*n + state] += 1.0; }
+                if pos > 0 {
+                    transition[example.truth[pos - 1] * n + state] += 1.0;
+                }
             }
         }
         normalize_slice(&mut initial);
-        for row in 0..n { normalize_slice(&mut transition[row*n..(row+1)*n]); }
-        for row in &mut emission { normalize_slice(row); }
-        Ok(ChemistryTopologyModel { categories, initial, transition, emission })
-    }
-
-    pub fn evaluate_exact_aa_topology_model(&self, model: &ExactAaTopologyModel, examples: &[TopologyTrainingExample]) -> Result<TopologyEvaluation> {
-        let hmm = model.hmm()?;
-        evaluate_topology(examples, |example| {
-            let observations = aa_observations(&example.sequence)?;
-            Ok(hmm.infer(&observations)?.viterbi().iter().map(|s| s.0).collect())
+        for row in 0..n {
+            normalize_slice(&mut transition[row * n..(row + 1) * n]);
+        }
+        for row in &mut emission {
+            normalize_slice(row);
+        }
+        Ok(ChemistryTopologyModel {
+            categories,
+            initial,
+            transition,
+            emission,
         })
     }
 
-    pub fn evaluate_chemistry_topology_model(&self, model: &ChemistryTopologyModel, examples: &[TopologyTrainingExample]) -> Result<TopologyEvaluation> {
+    pub fn evaluate_exact_aa_topology_model(
+        &self,
+        model: &ExactAaTopologyModel,
+        examples: &[TopologyTrainingExample],
+    ) -> Result<TopologyEvaluation> {
+        let hmm = model.hmm()?;
+        evaluate_topology(examples, |example| {
+            let observations = aa_observations(&example.sequence)?;
+            Ok(hmm
+                .infer(&observations)?
+                .viterbi()
+                .iter()
+                .map(|s| s.0)
+                .collect())
+        })
+    }
+
+    pub fn evaluate_chemistry_topology_model(
+        &self,
+        model: &ChemistryTopologyModel,
+        examples: &[TopologyTrainingExample],
+    ) -> Result<TopologyEvaluation> {
         let hmm = model.hmm()?;
         evaluate_topology(examples, |example| {
             let observations = chemistry_observations(&example.sequence, &model.categories)?;
-            Ok(hmm.infer(&observations)?.viterbi().iter().map(|s| s.0).collect())
+            Ok(hmm
+                .infer(&observations)?
+                .viterbi()
+                .iter()
+                .map(|s| s.0)
+                .collect())
         })
     }
 
     /// Train every currently supported observation model for every feature class
     /// with a non-empty deterministic train/test split. One bad/empty feature does
     /// not abort the vault; it is recorded in the report instead.
-    pub fn train_aa_model_vault(&self, flank_width: usize) -> Result<(AaModelVault, ModelVaultTrainingReport)> {
+    pub fn train_aa_model_vault(
+        &self,
+        flank_width: usize,
+    ) -> Result<(AaModelVault, ModelVaultTrainingReport)> {
         let mut models = Vec::new();
         let mut report = ModelVaultTrainingReport::default();
         for feature in ProteinFeatureKind::ALL {
             // Chain is effectively whole-protein coverage and Conflict is a
             // curation discrepancy, not a sequence feature. Neither belongs in
             // this biological feature-modelling experiment.
-            if matches!(feature, ProteinFeatureKind::Chain | ProteinFeatureKind::Conflict | ProteinFeatureKind::SignalPeptide) { continue; }
+            if matches!(
+                feature,
+                ProteinFeatureKind::Chain
+                    | ProteinFeatureKind::Conflict
+                    | ProteinFeatureKind::SignalPeptide
+            ) {
+                continue;
+            }
             report.feature_classes_considered += 1;
             let corpus = match self.training_corpus_with_flank_diagnostic(feature, flank_width) {
                 Ok(corpus) => corpus,
-                Err(err) => { report.skipped.push((feature, err.to_string())); continue; }
+                Err(err) => {
+                    report.skipped.push((feature, err.to_string()));
+                    continue;
+                }
             };
-            if corpus.train.is_empty() || corpus.test.is_empty() || corpus.report.feature_residues == 0 {
-                report.skipped.push((feature, format!("insufficient corpus: train {}, test {}, feature residues {}", corpus.train.len(), corpus.test.len(), corpus.report.feature_residues)));
+            if corpus.train.is_empty()
+                || corpus.test.is_empty()
+                || corpus.report.feature_residues == 0
+            {
+                report.skipped.push((
+                    feature,
+                    format!(
+                        "insufficient corpus: train {}, test {}, feature residues {}",
+                        corpus.train.len(),
+                        corpus.test.len(),
+                        corpus.report.feature_residues
+                    ),
+                ));
                 continue;
             }
             let exact = self.train_exact_aa_feature_model(&corpus, flank_width)?;
             let exact_eval = self.evaluate_exact_aa_feature_model(&exact, &corpus.test)?;
-            models.push(ProteinFeatureModel::ExactAa { model: exact, evaluation: exact_eval });
+            models.push(ProteinFeatureModel::ExactAa {
+                model: exact,
+                evaluation: exact_eval,
+            });
             let chemistry = self.train_chemistry_feature_model(&corpus, flank_width)?;
             let chemistry_eval = self.evaluate_chemistry_feature_model(&chemistry, &corpus.test)?;
-            models.push(ProteinFeatureModel::Chemistry { model: chemistry, evaluation: chemistry_eval });
+            models.push(ProteinFeatureModel::Chemistry {
+                model: chemistry,
+                evaluation: chemistry_eval,
+            });
             report.feature_classes_trained += 1;
             report.models_trained += 2;
         }
@@ -1562,10 +2676,17 @@ impl Ommverse {
         if !topology.train.is_empty() && !topology.test.is_empty() {
             let exact = self.train_exact_aa_topology_model(&topology)?;
             let exact_eval = self.evaluate_exact_aa_topology_model(&exact, &topology.test)?;
-            models.push(ProteinFeatureModel::TopologyExactAa { model: exact, evaluation: exact_eval });
+            models.push(ProteinFeatureModel::TopologyExactAa {
+                model: exact,
+                evaluation: exact_eval,
+            });
             let chemistry = self.train_chemistry_topology_model(&topology)?;
-            let chemistry_eval = self.evaluate_chemistry_topology_model(&chemistry, &topology.test)?;
-            models.push(ProteinFeatureModel::TopologyChemistry { model: chemistry, evaluation: chemistry_eval });
+            let chemistry_eval =
+                self.evaluate_chemistry_topology_model(&chemistry, &topology.test)?;
+            models.push(ProteinFeatureModel::TopologyChemistry {
+                model: chemistry,
+                evaluation: chemistry_eval,
+            });
             report.models_trained += 2;
         }
 
@@ -1592,38 +2713,130 @@ impl Ommverse {
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let mut file = File::open(path.as_ref())?;
-        let mut magic = [0u8; 4]; file.read_exact(&mut magic)?;
-        if &magic != MAGIC { bail!("not an Ommverse index"); }
-        let mut version = [0u8; 4]; file.read_exact(&mut version)?;
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic)?;
+        if &magic != MAGIC {
+            bail!("not an Ommverse index");
+        }
+        let mut version = [0u8; 4];
+        file.read_exact(&mut version)?;
         let version = u32::from_le_bytes(version);
         let mut out = match version {
             OMMVERSE_FORMAT_VERSION => bincode::deserialize_from(file)?,
+            6 => {
+                let old: OmmverseV6 = bincode::deserialize_from(file)?;
+                Self {
+                    assembly: old.assembly,
+                    source_root: old.source_root,
+                    genome_twobit: old.genome_twobit,
+                    splice: old.splice,
+                    proteins: old.proteins,
+                    report: old.report,
+                    interpro_entries: old.interpro_entries,
+                    chromatin: old.chromatin,
+                    protein_binding: old.protein_binding,
+                    ctcf: old.ctcf,
+                    experimental_loops: ExperimentalLoopArchitecture::default(),
+                    protein_by_accession: HashMap::new(),
+                    proteins_by_gene: HashMap::new(),
+                    gene_by_name: HashMap::new(),
+                }
+            }
+            5 => {
+                let old: OmmverseV5 = bincode::deserialize_from(file)?;
+                Self {
+                    assembly: old.assembly,
+                    source_root: old.source_root,
+                    genome_twobit: old.genome_twobit,
+                    splice: old.splice,
+                    proteins: old.proteins,
+                    report: old.report,
+                    interpro_entries: old.interpro_entries,
+                    chromatin: old.chromatin,
+                    protein_binding: old.protein_binding,
+                    ctcf: CtcfArchitecture::default(),
+                    experimental_loops: ExperimentalLoopArchitecture::default(),
+                    protein_by_accession: HashMap::new(),
+                    proteins_by_gene: HashMap::new(),
+                    gene_by_name: HashMap::new(),
+                }
+            }
             4 => {
                 let old: OmmverseV4 = bincode::deserialize_from(file)?;
                 // v4 embedded all rPeaks.  Drop that experiment-level payload on
                 // load; rebuilding v5 reconstructs the compact union from cache.
-                Self { assembly: old.assembly, source_root: old.source_root, genome_twobit: old.genome_twobit,
-                    splice: old.splice, proteins: old.proteins, report: old.report, interpro_entries: old.interpro_entries,
-                    chromatin: old.chromatin, protein_binding: ProteinBindingUnion::default(), protein_by_accession: HashMap::new(), proteins_by_gene: HashMap::new() }
+                Self {
+                    assembly: old.assembly,
+                    source_root: old.source_root,
+                    genome_twobit: old.genome_twobit,
+                    splice: old.splice,
+                    proteins: old.proteins,
+                    report: old.report,
+                    interpro_entries: old.interpro_entries,
+                    chromatin: old.chromatin,
+                    protein_binding: ProteinBindingUnion::default(),
+                    ctcf: CtcfArchitecture::default(),
+                    experimental_loops: ExperimentalLoopArchitecture::default(),
+                    protein_by_accession: HashMap::new(),
+                    proteins_by_gene: HashMap::new(),
+                    gene_by_name: HashMap::new(),
+                }
             }
             3 => {
                 let old: OmmverseV3 = bincode::deserialize_from(file)?;
-                Self { assembly: old.assembly, source_root: old.source_root, genome_twobit: old.genome_twobit,
-                    splice: old.splice, proteins: old.proteins, report: old.report, interpro_entries: old.interpro_entries,
-                    chromatin: old.chromatin, protein_binding: ProteinBindingUnion::default(), protein_by_accession: HashMap::new(), proteins_by_gene: HashMap::new() }
+                Self {
+                    assembly: old.assembly,
+                    source_root: old.source_root,
+                    genome_twobit: old.genome_twobit,
+                    splice: old.splice,
+                    proteins: old.proteins,
+                    report: old.report,
+                    interpro_entries: old.interpro_entries,
+                    chromatin: old.chromatin,
+                    protein_binding: ProteinBindingUnion::default(),
+                    ctcf: CtcfArchitecture::default(),
+                    experimental_loops: ExperimentalLoopArchitecture::default(),
+                    protein_by_accession: HashMap::new(),
+                    proteins_by_gene: HashMap::new(),
+                    gene_by_name: HashMap::new(),
+                }
             }
             2 => {
                 let old: OmmverseV2 = bincode::deserialize_from(file)?;
-                Self { assembly: old.assembly, source_root: old.source_root, genome_twobit: old.genome_twobit,
-                    splice: old.splice, proteins: old.proteins, report: old.report, interpro_entries: old.interpro_entries,
-                    chromatin: Vec::new(), protein_binding: ProteinBindingUnion::default(), protein_by_accession: HashMap::new(), proteins_by_gene: HashMap::new() }
+                Self {
+                    assembly: old.assembly,
+                    source_root: old.source_root,
+                    genome_twobit: old.genome_twobit,
+                    splice: old.splice,
+                    proteins: old.proteins,
+                    report: old.report,
+                    interpro_entries: old.interpro_entries,
+                    chromatin: Vec::new(),
+                    protein_binding: ProteinBindingUnion::default(),
+                    ctcf: CtcfArchitecture::default(),
+                    experimental_loops: ExperimentalLoopArchitecture::default(),
+                    protein_by_accession: HashMap::new(),
+                    proteins_by_gene: HashMap::new(),
+                    gene_by_name: HashMap::new(),
+                }
             }
             1 => {
                 let old: OmmverseV1 = bincode::deserialize_from(file)?;
                 Self {
-                    assembly: old.assembly, source_root: old.source_root, genome_twobit: old.genome_twobit,
-                    splice: old.splice, proteins: old.proteins, report: old.report, interpro_entries: HashMap::new(), chromatin: Vec::new(), protein_binding: ProteinBindingUnion::default(),
-                    protein_by_accession: HashMap::new(), proteins_by_gene: HashMap::new(),
+                    assembly: old.assembly,
+                    source_root: old.source_root,
+                    genome_twobit: old.genome_twobit,
+                    splice: old.splice,
+                    proteins: old.proteins,
+                    report: old.report,
+                    interpro_entries: HashMap::new(),
+                    chromatin: Vec::new(),
+                    protein_binding: ProteinBindingUnion::default(),
+                    ctcf: CtcfArchitecture::default(),
+                    experimental_loops: ExperimentalLoopArchitecture::default(),
+                    protein_by_accession: HashMap::new(),
+                    proteins_by_gene: HashMap::new(),
+                    gene_by_name: HashMap::new(),
                 }
             }
             _ => bail!("unsupported Ommverse format version {version}"),
@@ -1633,17 +2846,40 @@ impl Ommverse {
     }
 
     fn reindex(&mut self) {
-        self.protein_by_accession.clear(); self.proteins_by_gene.clear();
+        self.protein_by_accession.clear();
+        self.proteins_by_gene.clear();
+        self.gene_by_name.clear();
+        for gene in &self.splice.genes {
+            for name in &gene.names {
+                let key = name.trim().to_ascii_lowercase();
+                if !key.is_empty() {
+                    self.gene_by_name.entry(key).or_insert(gene.id);
+                }
+            }
+        }
         for (i, p) in self.proteins.iter().enumerate() {
             self.protein_by_accession.insert(p.accession.clone(), i);
-            if !p.gene_symbol.is_empty() { self.proteins_by_gene.entry(p.gene_symbol.to_ascii_lowercase()).or_default().push(i); }
+            if !p.gene_symbol.is_empty() {
+                self.proteins_by_gene
+                    .entry(p.gene_symbol.to_ascii_lowercase())
+                    .or_default()
+                    .push(i);
+            }
         }
     }
 }
 
-fn read_all_bigbed(path: &Path, mut visit: impl FnMut(&str, u32, u32, &str) -> Result<()>) -> Result<()> {
-    let mut bb = BigBedRead::open_file(path).with_context(|| format!("opening bigBed {}", path.display()))?;
-    let chroms: Vec<(String, u32)> = bb.chroms().iter().map(|c| (c.name.clone(), c.length)).collect();
+fn read_all_bigbed(
+    path: &Path,
+    mut visit: impl FnMut(&str, u32, u32, &str) -> Result<()>,
+) -> Result<()> {
+    let mut bb = BigBedRead::open_file(path)
+        .with_context(|| format!("opening bigBed {}", path.display()))?;
+    let chroms: Vec<(String, u32)> = bb
+        .chroms()
+        .iter()
+        .map(|c| (c.name.clone(), c.length))
+        .collect();
     for (chrom, len) in chroms {
         let entries = bb.get_interval(&chrom, 0, len)?;
         for entry in entries {
@@ -1655,7 +2891,10 @@ fn read_all_bigbed(path: &Path, mut visit: impl FnMut(&str, u32, u32, &str) -> R
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MappingSchema { EnsGene, UnipAliSwissprot }
+enum MappingSchema {
+    EnsGene,
+    UnipAliSwissprot,
+}
 
 fn find_swissprot_mapping_bigbed(dir: &Path) -> Result<(PathBuf, MappingSchema)> {
     // unipAliSwissprot.bb is the canonical Swiss-Prot alignment track exposed
@@ -1663,7 +2902,9 @@ fn find_swissprot_mapping_bigbed(dir: &Path) -> Result<(PathBuf, MappingSchema)>
     // auxiliary mapping products and multiple variants can coexist in one
     // UniProt release, so they must not override the canonical track.
     let canonical = dir.join("unipAliSwissprot.bb");
-    if canonical.is_file() { return Ok((canonical, MappingSchema::UnipAliSwissprot)); }
+    if canonical.is_file() {
+        return Ok((canonical, MappingSchema::UnipAliSwissprot));
+    }
 
     // Keep compatibility with older source trees that contain only one of the
     // historical ensGene mapping products.  Never guess when several exist.
@@ -1671,21 +2912,66 @@ fn find_swissprot_mapping_bigbed(dir: &Path) -> Result<(PathBuf, MappingSchema)>
     for e in fs::read_dir(dir)? {
         let p = e?.path();
         let name = p.file_name().and_then(|x| x.to_str()).unwrap_or("");
-        if name.starts_with("ensGene_") && name.ends_with(".swissprot.bb") { hits.push(p); }
+        if name.starts_with("ensGene_") && name.ends_with(".swissprot.bb") {
+            hits.push(p);
+        }
     }
     hits.sort();
     match hits.len() {
         1 => Ok((hits.remove(0), MappingSchema::EnsGene)),
-        n if n > 1 => bail!("multiple ensGene_*.swissprot.bb mapping bigBeds found in {} and canonical unipAliSwissprot.bb is absent; refusing to guess: {:?}", dir.display(), hits),
-        _ => bail!("no Swiss-Prot mapping bigBed found in {} (tried unipAliSwissprot.bb and ensGene_*.swissprot.bb)", dir.display()),
+        n if n > 1 => bail!(
+            "multiple ensGene_*.swissprot.bb mapping bigBeds found in {} and canonical unipAliSwissprot.bb is absent; refusing to guess: {:?}",
+            dir.display(),
+            hits
+        ),
+        _ => bail!(
+            "no Swiss-Prot mapping bigBed found in {} (tried unipAliSwissprot.bb and ensGene_*.swissprot.bb)",
+            dir.display()
+        ),
     }
 }
 
-fn strip_version(s: &str) -> &str { s.rsplit_once('.').filter(|(_, v)| v.chars().all(|c| c.is_ascii_digit())).map(|(a, _)| a).unwrap_or(s) }
-fn nonempty(s: &str) -> Option<String> { let s=s.trim(); (!s.is_empty()).then(|| s.to_owned()) }
-fn review_status(s: &str) -> ReviewStatus { if s.contains("Swiss-Prot") || s.eq_ignore_ascii_case("swissprot") { ReviewStatus::SwissProt } else if s.contains("TrEMBL") || s.eq_ignore_ascii_case("trembl") { ReviewStatus::Trembl } else { ReviewStatus::Other } }
-fn parse_aliases(a: &str, b: &str) -> Vec<String> { let mut v=Vec::new(); for x in a.split(|c:char| c==',' || c==';' || c.is_whitespace()).chain(b.split(|c:char| c==',' || c==';' || c.is_whitespace())) { let x=x.trim(); if !x.is_empty() && !v.iter().any(|y| y==x) { v.push(x.to_owned()); } } v }
-fn complement(b: u8) -> u8 { match b.to_ascii_uppercase() { b'A'=>b'T', b'C'=>b'G', b'G'=>b'C', b'T'=>b'A', x=>x } }
+fn strip_version(s: &str) -> &str {
+    s.rsplit_once('.')
+        .filter(|(_, v)| v.chars().all(|c| c.is_ascii_digit()))
+        .map(|(a, _)| a)
+        .unwrap_or(s)
+}
+fn nonempty(s: &str) -> Option<String> {
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_owned())
+}
+fn review_status(s: &str) -> ReviewStatus {
+    if s.contains("Swiss-Prot") || s.eq_ignore_ascii_case("swissprot") {
+        ReviewStatus::SwissProt
+    } else if s.contains("TrEMBL") || s.eq_ignore_ascii_case("trembl") {
+        ReviewStatus::Trembl
+    } else {
+        ReviewStatus::Other
+    }
+}
+fn parse_aliases(a: &str, b: &str) -> Vec<String> {
+    let mut v = Vec::new();
+    for x in a
+        .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .chain(b.split(|c: char| c == ',' || c == ';' || c.is_whitespace()))
+    {
+        let x = x.trim();
+        if !x.is_empty() && !v.iter().any(|y| y == x) {
+            v.push(x.to_owned());
+        }
+    }
+    v
+}
+fn complement(b: u8) -> u8 {
+    match b.to_ascii_uppercase() {
+        b'A' => b'T',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'T' => b'A',
+        x => x,
+    }
+}
 
 fn protein_accession_from_feature_text(text: &str) -> Option<&str> {
     text.rsplit_once(" on protein ")
@@ -1693,14 +2979,19 @@ fn protein_accession_from_feature_text(text: &str) -> Option<&str> {
         .filter(|accession| !accession.is_empty())
 }
 
-fn parse_amino_acid_range(text: &str) -> Option<(u32,u32)> {
-    let tail = text.strip_prefix("amino acids ").or_else(|| text.strip_prefix("amino acid "))?;
+fn parse_amino_acid_range(text: &str) -> Option<(u32, u32)> {
+    let tail = text
+        .strip_prefix("amino acids ")
+        .or_else(|| text.strip_prefix("amino acid "))?;
     let token = tail.split_whitespace().next()?;
-    let (a,b) = token.split_once('-').map(|(a,b)|(a,b)).unwrap_or((token,token));
-    let start: u32=a.parse().ok()?; let end:u32=b.parse().ok()?;
-    (start > 0 && end >= start).then_some((start-1,end))
+    let (a, b) = token
+        .split_once('-')
+        .map(|(a, b)| (a, b))
+        .unwrap_or((token, token));
+    let start: u32 = a.parse().ok()?;
+    let end: u32 = b.parse().ok()?;
+    (start > 0 && end >= start).then_some((start - 1, end))
 }
-
 
 impl AaModelVault {
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -1713,35 +3004,63 @@ impl AaModelVault {
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let mut file = File::open(path)?;
-        let mut magic = [0u8; 4]; file.read_exact(&mut magic)?;
-        if &magic != AA_MODEL_VAULT_MAGIC { bail!("not an Ommverse AA model vault"); }
-        let mut version = [0u8; 4]; file.read_exact(&mut version)?;
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic)?;
+        if &magic != AA_MODEL_VAULT_MAGIC {
+            bail!("not an Ommverse AA model vault");
+        }
+        let mut version = [0u8; 4];
+        file.read_exact(&mut version)?;
         let version = u32::from_le_bytes(version);
-        if version != AA_MODEL_VAULT_FORMAT_VERSION { bail!("unsupported AA model vault format version {version}"); }
+        if version != AA_MODEL_VAULT_FORMAT_VERSION {
+            bail!("unsupported AA model vault format version {version}");
+        }
         Ok(bincode::deserialize_from(file)?)
     }
 }
 
 impl ExactAaTopologyModel {
     fn hmm(&self) -> Result<Hmm<CategoricalEmission>> {
-        let emissions = self.emission.iter().map(|row| CategoricalEmission::new(row.clone()))
+        let emissions = self
+            .emission
+            .iter()
+            .map(|row| CategoricalEmission::new(row.clone()))
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(Hmm::new(self.initial.clone(), self.transition.clone(), emissions)?)
+        Ok(Hmm::new(
+            self.initial.clone(),
+            self.transition.clone(),
+            emissions,
+        )?)
     }
 }
 
 impl ChemistryTopologyModel {
     fn hmm(&self) -> Result<Hmm<CategoricalEmission>> {
-        let emissions = self.emission.iter().map(|row| CategoricalEmission::new(row.clone()))
+        let emissions = self
+            .emission
+            .iter()
+            .map(|row| CategoricalEmission::new(row.clone()))
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(Hmm::new(self.initial.clone(), self.transition.clone(), emissions)?)
+        Ok(Hmm::new(
+            self.initial.clone(),
+            self.transition.clone(),
+            emissions,
+        )?)
     }
 }
 
 impl ChemistryFeatureModel {
     fn hmm(&self) -> Result<Hmm<CategoricalEmission>> {
-        let emissions = self.emission.iter().map(|row| CategoricalEmission::new(row.clone())).collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(Hmm::new(self.initial.to_vec(), self.transition.to_vec(), emissions)?)
+        let emissions = self
+            .emission
+            .iter()
+            .map(|row| CategoricalEmission::new(row.clone()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(Hmm::new(
+            self.initial.to_vec(),
+            self.transition.to_vec(),
+            emissions,
+        )?)
     }
 }
 
@@ -1758,19 +3077,30 @@ impl ExactAaFeatureModel {
     }
 
     fn hmm(&self) -> Result<Hmm<CategoricalEmission>> {
-        let emissions = self.emission.iter()
+        let emissions = self
+            .emission
+            .iter()
             .map(|row| CategoricalEmission::new(row.to_vec()))
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(Hmm::new(self.initial.to_vec(), self.transition.to_vec(), emissions)?)
+        Ok(Hmm::new(
+            self.initial.to_vec(),
+            self.transition.to_vec(),
+            emissions,
+        )?)
     }
 }
 
 fn chemistry_observations(sequence: &IntToProt, categories: &[u16]) -> Result<Vec<usize>> {
     let unknown = categories.len();
-    (0..sequence.len()).map(|pos| {
-        let bits = sequence.get(pos).context("protein sequence position disappeared")?.chemistry();
-        Ok(categories.binary_search(&bits).unwrap_or(unknown))
-    }).collect()
+    (0..sequence.len())
+        .map(|pos| {
+            let bits = sequence
+                .get(pos)
+                .context("protein sequence position disappeared")?
+                .chemistry();
+            Ok(categories.binary_search(&bits).unwrap_or(unknown))
+        })
+        .collect()
 }
 
 fn topology_state_from_index(index: usize) -> Option<TopologyState> {
@@ -1791,40 +3121,75 @@ fn evaluate_topology(
     examples: &[TopologyTrainingExample],
     predict: impl Fn(&TopologyTrainingExample) -> Result<Vec<usize>> + Sync,
 ) -> Result<TopologyEvaluation> {
-    let partials: Result<Vec<TopologyEvaluation>> = examples.par_iter().map(|example| {
-        let predicted = predict(example)?;
-        if predicted.len() != example.truth.len() { bail!("topology prediction length mismatch"); }
-        let mut reports = vec![FeatureEvaluation::default(); TopologyState::BIOLOGICAL.len()];
-        let mut truth_residues = vec![0usize; TopologyState::COUNT];
-        let mut predicted_residues = vec![0usize; TopologyState::COUNT];
-        let mut confusion = vec![0usize; TopologyState::COUNT * TopologyState::COUNT];
-        for (&truth, &pred) in example.truth.iter().zip(&predicted) {
-            if truth < TopologyState::COUNT && pred < TopologyState::COUNT {
-                truth_residues[truth] += 1;
-                predicted_residues[pred] += 1;
-                confusion[truth * TopologyState::COUNT + pred] += 1;
+    let partials: Result<Vec<TopologyEvaluation>> = examples
+        .par_iter()
+        .map(|example| {
+            let predicted = predict(example)?;
+            if predicted.len() != example.truth.len() {
+                bail!("topology prediction length mismatch");
             }
-        }
-        for (i, feature) in TopologyState::BIOLOGICAL.iter().enumerate() {
-            let truth_mask: Vec<bool> = example.truth.iter().map(|&x| topology_state_from_index(x).and_then(TopologyState::feature) == Some(*feature)).collect();
-            let pred_mask: Vec<bool> = predicted.iter().map(|&x| topology_state_from_index(x).and_then(TopologyState::feature) == Some(*feature)).collect();
-            let r = &mut reports[i];
-            r.proteins += 1; r.residues += truth_mask.len();
-            for (&truth, &pred) in truth_mask.iter().zip(&pred_mask) {
-                match (truth, pred) {
-                    (true,true) => r.true_positive += 1, (false,true) => r.false_positive += 1,
-                    (false,false) => r.true_negative += 1, (true,false) => r.false_negative += 1,
+            let mut reports = vec![FeatureEvaluation::default(); TopologyState::BIOLOGICAL.len()];
+            let mut truth_residues = vec![0usize; TopologyState::COUNT];
+            let mut predicted_residues = vec![0usize; TopologyState::COUNT];
+            let mut confusion = vec![0usize; TopologyState::COUNT * TopologyState::COUNT];
+            for (&truth, &pred) in example.truth.iter().zip(&predicted) {
+                if truth < TopologyState::COUNT && pred < TopologyState::COUNT {
+                    truth_residues[truth] += 1;
+                    predicted_residues[pred] += 1;
+                    confusion[truth * TopologyState::COUNT + pred] += 1;
                 }
             }
-            let truth_segments = bool_segments(&truth_mask);
-            let pred_segments = bool_segments(&pred_mask);
-            r.truth_segments += truth_segments.len();
-            r.predicted_segments += pred_segments.len();
-            r.recovered_segments += truth_segments.iter().filter(|truth| pred_segments.iter().any(|pred| overlap_fraction(**truth, *pred) >= 0.5)).count();
-        }
-        Ok(TopologyEvaluation { states: reports, latent_truth_residues: truth_residues, latent_predicted_residues: predicted_residues, latent_confusion: confusion })
-    }).collect();
-    Ok(partials?.into_iter().fold(empty_topology_evaluation(), merge_topology_evaluation))
+            for (i, feature) in TopologyState::BIOLOGICAL.iter().enumerate() {
+                let truth_mask: Vec<bool> = example
+                    .truth
+                    .iter()
+                    .map(|&x| {
+                        topology_state_from_index(x).and_then(TopologyState::feature)
+                            == Some(*feature)
+                    })
+                    .collect();
+                let pred_mask: Vec<bool> = predicted
+                    .iter()
+                    .map(|&x| {
+                        topology_state_from_index(x).and_then(TopologyState::feature)
+                            == Some(*feature)
+                    })
+                    .collect();
+                let r = &mut reports[i];
+                r.proteins += 1;
+                r.residues += truth_mask.len();
+                for (&truth, &pred) in truth_mask.iter().zip(&pred_mask) {
+                    match (truth, pred) {
+                        (true, true) => r.true_positive += 1,
+                        (false, true) => r.false_positive += 1,
+                        (false, false) => r.true_negative += 1,
+                        (true, false) => r.false_negative += 1,
+                    }
+                }
+                let truth_segments = bool_segments(&truth_mask);
+                let pred_segments = bool_segments(&pred_mask);
+                r.truth_segments += truth_segments.len();
+                r.predicted_segments += pred_segments.len();
+                r.recovered_segments += truth_segments
+                    .iter()
+                    .filter(|truth| {
+                        pred_segments
+                            .iter()
+                            .any(|pred| overlap_fraction(**truth, *pred) >= 0.5)
+                    })
+                    .count();
+            }
+            Ok(TopologyEvaluation {
+                states: reports,
+                latent_truth_residues: truth_residues,
+                latent_predicted_residues: predicted_residues,
+                latent_confusion: confusion,
+            })
+        })
+        .collect();
+    Ok(partials?
+        .into_iter()
+        .fold(empty_topology_evaluation(), merge_topology_evaluation))
 }
 
 fn empty_topology_evaluation() -> TopologyEvaluation {
@@ -1836,24 +3201,51 @@ fn empty_topology_evaluation() -> TopologyEvaluation {
     }
 }
 
-fn merge_topology_evaluation(mut a: TopologyEvaluation, b: TopologyEvaluation) -> TopologyEvaluation {
-    for (dst, src) in a.states.iter_mut().zip(b.states) { *dst = merge_feature_evaluation(dst.clone(), src); }
-    for (dst, src) in a.latent_truth_residues.iter_mut().zip(b.latent_truth_residues) { *dst += src; }
-    for (dst, src) in a.latent_predicted_residues.iter_mut().zip(b.latent_predicted_residues) { *dst += src; }
-    for (dst, src) in a.latent_confusion.iter_mut().zip(b.latent_confusion) { *dst += src; }
+fn merge_topology_evaluation(
+    mut a: TopologyEvaluation,
+    b: TopologyEvaluation,
+) -> TopologyEvaluation {
+    for (dst, src) in a.states.iter_mut().zip(b.states) {
+        *dst = merge_feature_evaluation(dst.clone(), src);
+    }
+    for (dst, src) in a
+        .latent_truth_residues
+        .iter_mut()
+        .zip(b.latent_truth_residues)
+    {
+        *dst += src;
+    }
+    for (dst, src) in a
+        .latent_predicted_residues
+        .iter_mut()
+        .zip(b.latent_predicted_residues)
+    {
+        *dst += src;
+    }
+    for (dst, src) in a.latent_confusion.iter_mut().zip(b.latent_confusion) {
+        *dst += src;
+    }
     a
 }
 
 fn merge_feature_evaluation(mut a: FeatureEvaluation, b: FeatureEvaluation) -> FeatureEvaluation {
-    a.proteins += b.proteins; a.residues += b.residues;
-    a.true_positive += b.true_positive; a.false_positive += b.false_positive;
-    a.true_negative += b.true_negative; a.false_negative += b.false_negative;
-    a.truth_segments += b.truth_segments; a.predicted_segments += b.predicted_segments;
+    a.proteins += b.proteins;
+    a.residues += b.residues;
+    a.true_positive += b.true_positive;
+    a.false_positive += b.false_positive;
+    a.true_negative += b.true_negative;
+    a.false_negative += b.false_negative;
+    a.truth_segments += b.truth_segments;
+    a.predicted_segments += b.predicted_segments;
     a.recovered_segments += b.recovered_segments;
     a
 }
 
-fn accumulate_evaluation(report: &mut FeatureEvaluation, predicted: &[bool], example: &ProteinTrainingExample) {
+fn accumulate_evaluation(
+    report: &mut FeatureEvaluation,
+    predicted: &[bool],
+    example: &ProteinTrainingExample,
+) {
     report.proteins += 1;
     report.residues += predicted.len();
     for (&truth, &pred) in example.truth.iter().zip(predicted) {
@@ -1868,23 +3260,45 @@ fn accumulate_evaluation(report: &mut FeatureEvaluation, predicted: &[bool], exa
     let pred_segments = bool_segments(predicted);
     report.truth_segments += truth_segments.len();
     report.predicted_segments += pred_segments.len();
-    report.recovered_segments += truth_segments.iter().filter(|truth| pred_segments.iter().any(|pred| overlap_fraction(**truth, *pred) >= 0.5)).count();
+    report.recovered_segments += truth_segments
+        .iter()
+        .filter(|truth| {
+            pred_segments
+                .iter()
+                .any(|pred| overlap_fraction(**truth, *pred) >= 0.5)
+        })
+        .count();
 }
 
 fn normalize_slice(values: &mut [f64]) {
     let sum: f64 = values.iter().sum();
-    if sum > 0.0 { for value in values { *value /= sum; } }
+    if sum > 0.0 {
+        for value in values {
+            *value /= sum;
+        }
+    }
 }
 
 fn distribution_summary(values: &[usize]) -> DistributionSummary {
-    if values.is_empty() { return DistributionSummary::default(); }
+    if values.is_empty() {
+        return DistributionSummary::default();
+    }
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
     let count = sorted.len();
     let mean = sorted.iter().map(|&x| x as f64).sum::<f64>() / count as f64;
-    let variance = sorted.iter().map(|&x| { let d = x as f64 - mean; d * d }).sum::<f64>() / count as f64;
+    let variance = sorted
+        .iter()
+        .map(|&x| {
+            let d = x as f64 - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / count as f64;
     let percentile = |q: f64| -> f64 {
-        if count == 1 { return sorted[0] as f64; }
+        if count == 1 {
+            return sorted[0] as f64;
+        }
         let pos = q * (count - 1) as f64;
         let lo = pos.floor() as usize;
         let hi = pos.ceil() as usize;
@@ -1892,17 +3306,26 @@ fn distribution_summary(values: &[usize]) -> DistributionSummary {
         sorted[lo] as f64 * (1.0 - frac) + sorted[hi] as f64 * frac
     };
     DistributionSummary {
-        count, mean, median: percentile(0.5), sd: variance.sqrt(),
-        q1: percentile(0.25), q3: percentile(0.75),
-        min: sorted[0], max: sorted[count - 1],
+        count,
+        mean,
+        median: percentile(0.5),
+        sd: variance.sqrt(),
+        q1: percentile(0.25),
+        q3: percentile(0.75),
+        min: sorted[0],
+        max: sorted[count - 1],
     }
 }
 
 fn aa_observations(sequence: &IntToProt) -> Result<Vec<usize>> {
-    (0..sequence.len()).map(|pos| {
-        sequence.get(pos).map(|aa| aa.code() as usize)
-            .context("protein sequence position disappeared")
-    }).collect()
+    (0..sequence.len())
+        .map(|pos| {
+            sequence
+                .get(pos)
+                .map(|aa| aa.code() as usize)
+                .context("protein sequence position disappeared")
+        })
+        .collect()
 }
 
 /// Convert binary feature truth into four supervised states:
@@ -1914,15 +3337,33 @@ fn aa_observations(sequence: &IntToProt) -> Result<Vec<usize>> {
 fn feature_context_states(truth: &[bool], flank_width: usize) -> Vec<usize> {
     let segments = bool_segments(truth);
     let mut states = vec![0usize; truth.len()];
-    for &(start, end) in &segments { states[start..end].fill(2); }
+    for &(start, end) in &segments {
+        states[start..end].fill(2);
+    }
     for pos in 0..truth.len() {
-        if states[pos] == 2 { continue; }
-        let prev = segments.iter().filter(|(_, end)| *end <= pos).map(|(_, end)| pos + 1 - *end).min();
-        let next = segments.iter().filter(|(start, _)| *start > pos).map(|(start, _)| *start - pos).min();
+        if states[pos] == 2 {
+            continue;
+        }
+        let prev = segments
+            .iter()
+            .filter(|(_, end)| *end <= pos)
+            .map(|(_, end)| pos + 1 - *end)
+            .min();
+        let next = segments
+            .iter()
+            .filter(|(start, _)| *start > pos)
+            .map(|(start, _)| *start - pos)
+            .min();
         let prev = prev.filter(|&d| d <= flank_width);
         let next = next.filter(|&d| d <= flank_width);
         states[pos] = match (prev, next) {
-            (Some(a), Some(b)) => if b <= a { 1 } else { 3 },
+            (Some(a), Some(b)) => {
+                if b <= a {
+                    1
+                } else {
+                    3
+                }
+            }
             (None, Some(_)) => 1,
             (Some(_), None) => 3,
             (None, None) => 0,
@@ -1932,33 +3373,83 @@ fn feature_context_states(truth: &[bool], flank_width: usize) -> Vec<usize> {
 }
 
 fn bool_segments(values: &[bool]) -> Vec<(usize, usize)> {
-    let mut out = Vec::new(); let mut start = None;
+    let mut out = Vec::new();
+    let mut start = None;
     for (i, &value) in values.iter().enumerate() {
         match (start, value) {
             (None, true) => start = Some(i),
-            (Some(s), false) => { out.push((s, i)); start = None; }
+            (Some(s), false) => {
+                out.push((s, i));
+                start = None;
+            }
             _ => {}
         }
     }
-    if let Some(s) = start { out.push((s, values.len())); }
+    if let Some(s) = start {
+        out.push((s, values.len()));
+    }
     out
 }
 
 fn overlap_fraction(a: (usize, usize), b: (usize, usize)) -> f64 {
     let overlap = a.1.min(b.1).saturating_sub(a.0.max(b.0));
-    if overlap == 0 { 0.0 } else { overlap as f64 / (a.1 - a.0) as f64 }
+    if overlap == 0 {
+        0.0
+    } else {
+        overlap as f64 / (a.1 - a.0) as f64
+    }
 }
 
-fn ratio(num: usize, den: usize) -> f64 { if den == 0 { 0.0 } else { num as f64 / den as f64 } }
-fn normalize_array<const N: usize>(values: &mut [f64; N]) { let sum: f64 = values.iter().sum(); for x in values { *x /= sum; } }
+fn ratio(num: usize, den: usize) -> f64 {
+    if den == 0 {
+        0.0
+    } else {
+        num as f64 / den as f64
+    }
+}
+fn normalize_array<const N: usize>(values: &mut [f64; N]) {
+    let sum: f64 = values.iter().sum();
+    for x in values {
+        *x /= sum;
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn strips_only_numeric_versions() { assert_eq!(strip_version("ENSMUST1.5"), "ENSMUST1"); assert_eq!(strip_version("Q9EST3-1"), "Q9EST3-1"); }
-    #[test] fn parses_feature_protein_accession() { assert_eq!(protein_accession_from_feature_text("amino acids 485-507 on protein Q5GH67"), Some("Q5GH67")); assert_eq!(protein_accession_from_feature_text("not a protein range"), None); }
-    #[test] fn parses_ucsc_uniprot_coordinates() { assert_eq!(parse_amino_acid_range("amino acids 485-507 on protein Q5GH67"), Some((484,507))); assert_eq!(parse_amino_acid_range("amino acids 42 on protein X"), Some((41,42))); assert_eq!(parse_amino_acid_range("amino acid 197 on protein X"), Some((196,197))); }
-    #[test] fn summarizes_geometry_distribution() {
+    #[test]
+    fn strips_only_numeric_versions() {
+        assert_eq!(strip_version("ENSMUST1.5"), "ENSMUST1");
+        assert_eq!(strip_version("Q9EST3-1"), "Q9EST3-1");
+    }
+    #[test]
+    fn parses_feature_protein_accession() {
+        assert_eq!(
+            protein_accession_from_feature_text("amino acids 485-507 on protein Q5GH67"),
+            Some("Q5GH67")
+        );
+        assert_eq!(
+            protein_accession_from_feature_text("not a protein range"),
+            None
+        );
+    }
+    #[test]
+    fn parses_ucsc_uniprot_coordinates() {
+        assert_eq!(
+            parse_amino_acid_range("amino acids 485-507 on protein Q5GH67"),
+            Some((484, 507))
+        );
+        assert_eq!(
+            parse_amino_acid_range("amino acids 42 on protein X"),
+            Some((41, 42))
+        );
+        assert_eq!(
+            parse_amino_acid_range("amino acid 197 on protein X"),
+            Some((196, 197))
+        );
+    }
+    #[test]
+    fn summarizes_geometry_distribution() {
         let s = distribution_summary(&[1, 2, 3, 4, 5]);
         assert_eq!(s.count, 5);
         assert_eq!(s.mean, 3.0);
@@ -1969,12 +3460,20 @@ mod tests {
         assert_eq!(s.max, 5);
         assert!((s.sd - 2.0f64.sqrt()).abs() < 1e-12);
     }
-    #[test] fn builds_pre_and_post_feature_context() {
+    #[test]
+    fn builds_pre_and_post_feature_context() {
         let truth = [false, false, false, true, true, false, false, false];
-        assert_eq!(feature_context_states(&truth, 2), vec![0,1,1,2,2,3,3,0]);
+        assert_eq!(
+            feature_context_states(&truth, 2),
+            vec![0, 1, 1, 2, 2, 3, 3, 0]
+        );
     }
-    #[test] fn splits_short_inter_feature_gap_by_nearest_boundary() {
+    #[test]
+    fn splits_short_inter_feature_gap_by_nearest_boundary() {
         let truth = [false, true, true, false, false, false, true, true, false];
-        assert_eq!(feature_context_states(&truth, 3), vec![1,2,2,3,1,1,2,2,3]);
+        assert_eq!(
+            feature_context_states(&truth, 3),
+            vec![1, 2, 2, 3, 1, 1, 2, 2, 3]
+        );
     }
 }

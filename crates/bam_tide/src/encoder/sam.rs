@@ -138,7 +138,7 @@ impl SamEncoder {
 
                     truth.write(
                         path,
-                        self.config.min_cell_counts,
+                        self.config.min_umi_count,
                         &gtf_index,
                         Some(&self.snp_index),
                     )?;
@@ -149,7 +149,7 @@ impl SamEncoder {
 
                     truth.write(
                         path,
-                        self.config.min_cell_counts,
+                        self.config.min_umi_count,
                         &gtf_index,
                         Some(&self.snp_index),
                     )?;

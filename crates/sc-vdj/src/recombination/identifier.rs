@@ -124,14 +124,21 @@ impl RecombinationId {
     ) -> Result<DecodedNumericRecombinationId, String> {
         let chain = Chain::from_code(c.nibble()?).map_err(|e| e.to_string())?;
         if chain.has_d() != (self.role == ReceptorRole::Heavy) {
-            return Err(format!("{} prefix incompatible with {chain}", self.role.prefix()));
+            return Err(format!(
+                "{} prefix incompatible with {chain}",
+                self.role.prefix()
+            ));
         }
         let width = c.nibble()? as usize;
         if !(1..=4).contains(&width) {
             return Err(format!("invalid v3 segment-id width {width}"));
         }
         let v_id = c.hex(width)?;
-        let d_id = if chain.has_d() { Some(c.hex(width)?) } else { None };
+        let d_id = if chain.has_d() {
+            Some(c.hex(width)?)
+        } else {
+            None
+        };
         let j_id = c.hex(width)?;
         finish_numeric_decode(&mut c, Some(chain), v_id, d_id, j_id)
     }
@@ -202,14 +209,21 @@ impl RecombinationId {
     ) -> Result<DecodedRecombinationId, String> {
         let chain = Chain::from_code(c.nibble()?).map_err(|e| e.to_string())?;
         if chain.has_d() != (self.role == ReceptorRole::Heavy) {
-            return Err(format!("{} prefix incompatible with {chain}", self.role.prefix()));
+            return Err(format!(
+                "{} prefix incompatible with {chain}",
+                self.role.prefix()
+            ));
         }
         let width = c.nibble()? as usize;
         if !(1..=4).contains(&width) {
             return Err(format!("invalid v3 segment-id width {width}"));
         }
         let v_id = c.hex(width)?;
-        let d_id = if chain.has_d() { Some(c.hex(width)?) } else { None };
+        let d_id = if chain.has_d() {
+            Some(c.hex(width)?)
+        } else {
+            None
+        };
         let j_id = c.hex(width)?;
         let v = checked_global(index, v_id, chain, SegmentKind::V)?;
         let d = d_id
@@ -297,7 +311,11 @@ impl RecombinationId {
         let numeric = match version {
             1 => self.decode_v1_global_numeric(index, c)?,
             Self::LEGACY_V2 => self.decode_v2_global_numeric(index, c)?,
-            _ => return Err(format!("unsupported compact recombination id version {version}")),
+            _ => {
+                return Err(format!(
+                    "unsupported compact recombination id version {version}"
+                ))
+            }
         };
         Self::from_global_numeric(self.role, &numeric)
     }
@@ -308,12 +326,26 @@ impl RecombinationId {
         mut c: Cursor<'_>,
     ) -> Result<DecodedNumericRecombinationId, String> {
         let v_id = c.hex(3)?;
-        let d_id = if self.role == ReceptorRole::Heavy { Some(c.hex(3)?) } else { None };
+        let d_id = if self.role == ReceptorRole::Heavy {
+            Some(c.hex(3)?)
+        } else {
+            None
+        };
         let j_id = c.hex(3)?;
-        let v = checked_global(index, v_id, index.segment(v_id as u16).ok_or("V segment outside index")?.chain, SegmentKind::V)?;
+        let v = checked_global(
+            index,
+            v_id,
+            index
+                .segment(v_id as u16)
+                .ok_or("V segment outside index")?
+                .chain,
+            SegmentKind::V,
+        )?;
         let chain = v.chain;
         checked_global(index, j_id, chain, SegmentKind::J)?;
-        if let Some(id) = d_id { checked_global(index, id, chain, SegmentKind::D)?; }
+        if let Some(id) = d_id {
+            checked_global(index, id, chain, SegmentKind::D)?;
+        }
         finish_numeric_decode(&mut c, Some(chain), v_id, d_id, j_id)
     }
 
@@ -324,7 +356,10 @@ impl RecombinationId {
     ) -> Result<DecodedNumericRecombinationId, String> {
         let chain = Chain::from_code(c.nibble()?).map_err(|e| e.to_string())?;
         if chain.has_d() != (self.role == ReceptorRole::Heavy) {
-            return Err(format!("{} prefix incompatible with {chain}", self.role.prefix()));
+            return Err(format!(
+                "{} prefix incompatible with {chain}",
+                self.role.prefix()
+            ));
         }
         let v = read_local(&mut c, index, chain, SegmentKind::V)?.id as usize;
         let d = if chain.has_d() {
@@ -340,14 +375,22 @@ impl RecombinationId {
         role: ReceptorRole,
         d: &DecodedNumericRecombinationId,
     ) -> Result<Self, String> {
-        let chain = d.chain.ok_or("legacy identifier does not contain a chain")?;
+        let chain = d
+            .chain
+            .ok_or("legacy identifier does not contain a chain")?;
         let v = u16::try_from(d.v_id).map_err(|_| "V segment ID exceeds u16")?;
-        let dd = d.d_id.map(u16::try_from).transpose().map_err(|_| "D segment ID exceeds u16")?;
+        let dd = d
+            .d_id
+            .map(u16::try_from)
+            .transpose()
+            .map_err(|_| "D segment ID exceeds u16")?;
         let j = u16::try_from(d.j_id).map_err(|_| "J segment ID exceeds u16")?;
         let width = global_id_width(v, dd, j);
         let mut p = format!("{:X}{:X}{:X}", Self::VERSION, chain.code(), width);
         push_global(&mut p, v, width);
-        if let Some(dd) = dd { push_global(&mut p, dd, width); }
+        if let Some(dd) = dd {
+            push_global(&mut p, dd, width);
+        }
         push_global(&mut p, j, width);
         push_measurement(&mut p, d.v_del_3);
         push_measurement(&mut p, d.p_v3_len);
@@ -546,7 +589,15 @@ fn finish_decode(
 
 fn global_id_width(v: u16, d: Option<u16>, j: u16) -> usize {
     let max_id = d.map_or(v.max(j), |d| v.max(d).max(j));
-    if max_id <= 0xF { 1 } else if max_id <= 0xFF { 2 } else if max_id <= 0xFFF { 3 } else { 4 }
+    if max_id <= 0xF {
+        1
+    } else if max_id <= 0xFF {
+        2
+    } else if max_id <= 0xFFF {
+        3
+    } else {
+        4
+    }
 }
 
 fn push_global(out: &mut String, id: u16, width: usize) {
@@ -560,9 +611,14 @@ fn checked_global<'a>(
     kind: SegmentKind,
 ) -> Result<&'a crate::index::VdjSegment, String> {
     let id = u16::try_from(id).map_err(|_| format!("segment ID {id} exceeds u16"))?;
-    let segment = index.segment(id).ok_or_else(|| format!("segment ID {id} outside index"))?;
+    let segment = index
+        .segment(id)
+        .ok_or_else(|| format!("segment ID {id} outside index"))?;
     if segment.chain != chain || segment.kind != kind {
-        return Err(format!("segment ID {id} is {} {:?}, expected {chain} {kind:?}", segment.chain, segment.kind));
+        return Err(format!(
+            "segment ID {id} is {} {:?}, expected {chain} {kind:?}",
+            segment.chain, segment.kind
+        ));
     }
     Ok(segment)
 }

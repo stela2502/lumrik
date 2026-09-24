@@ -1,7 +1,7 @@
+use int_to_prot::IntToProt;
 use onehot_dna::{OneHot, OneHotError, OneHotSequence};
 use std::collections::BTreeMap;
 use std::fmt;
-use int_to_prot::IntToProt;
 //use crate::errors::SeqError;
 //use crate::traits::BinaryMatcher;
 
@@ -163,7 +163,11 @@ impl IntToDna {
     /// This is primarily useful for binary genome-format adapters that have
     /// already converted their alphabet/layout into IntToDna representation.
     pub fn from_packed_2bit(u8_encoded: Vec<u8>, size: usize) -> Self {
-        assert_eq!(u8_encoded.len(), size.div_ceil(4), "packed byte count does not match sequence size");
+        assert_eq!(
+            u8_encoded.len(),
+            size.div_ceil(4),
+            "packed byte count does not match sequence size"
+        );
         Self {
             u8_encoded,
             lost: 0,
@@ -726,10 +730,22 @@ mod tests {
     fn packed_u8_at_reads_unaligned_four_base_windows() {
         let encoded = IntToDna::new(b"AACGTTGCA");
 
-        assert_eq!(encoded.packed_u8_at(0), Some(IntToDna::new(b"AACG").first_u8()));
-        assert_eq!(encoded.packed_u8_at(1), Some(IntToDna::new(b"ACGT").first_u8()));
-        assert_eq!(encoded.packed_u8_at(4), Some(IntToDna::new(b"TTGC").first_u8()));
-        assert_eq!(encoded.packed_u8_at(5), Some(IntToDna::new(b"TGCA").first_u8()));
+        assert_eq!(
+            encoded.packed_u8_at(0),
+            Some(IntToDna::new(b"AACG").first_u8())
+        );
+        assert_eq!(
+            encoded.packed_u8_at(1),
+            Some(IntToDna::new(b"ACGT").first_u8())
+        );
+        assert_eq!(
+            encoded.packed_u8_at(4),
+            Some(IntToDna::new(b"TTGC").first_u8())
+        );
+        assert_eq!(
+            encoded.packed_u8_at(5),
+            Some(IntToDna::new(b"TGCA").first_u8())
+        );
         assert_eq!(encoded.packed_u8_at(6), None);
     }
 
@@ -737,14 +753,26 @@ mod tests {
     fn packed_external_search_covers_all_frames_and_returns_anchor_position() {
         let encoded = IntToDna::new(b"TTACGTTGCAGGAACC");
         let pattern = IntToDna::new(b"ACGTTGCAGGAA");
-        let external = [pattern.packed_u8_at(0).unwrap(), pattern.packed_u8_at(4).unwrap()];
+        let external = [
+            pattern.packed_u8_at(0).unwrap(),
+            pattern.packed_u8_at(4).unwrap(),
+        ];
         let lookup = pattern.packed_u8_at(8).unwrap();
 
-        assert_eq!(encoded.find_with_external_before(lookup, &external), Some(10));
+        assert_eq!(
+            encoded.find_with_external_before(lookup, &external),
+            Some(10)
+        );
 
-        let after_external = [pattern.packed_u8_at(4).unwrap(), pattern.packed_u8_at(8).unwrap()];
+        let after_external = [
+            pattern.packed_u8_at(4).unwrap(),
+            pattern.packed_u8_at(8).unwrap(),
+        ];
         let first = pattern.packed_u8_at(0).unwrap();
-        assert_eq!(encoded.find_with_external_after(first, &after_external), Some(2));
+        assert_eq!(
+            encoded.find_with_external_after(first, &after_external),
+            Some(2)
+        );
     }
 
     #[test]

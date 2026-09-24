@@ -113,7 +113,7 @@ fn run(args: QuantCli) -> Result<()> {
 
             data.write(
                 &args.outpath,
-                args.min_cell_counts,
+                args.min_umi_count,
                 &features,
                 snp.as_ref().map(|s| &s.index),
             )
@@ -126,7 +126,7 @@ fn run(args: QuantCli) -> Result<()> {
 
             data.write(
                 &args.outpath,
-                args.min_cell_counts,
+                args.min_umi_count,
                 &features,
                 snp.as_ref().map(|s| &s.index),
             )

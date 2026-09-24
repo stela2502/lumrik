@@ -16,8 +16,13 @@ pub enum MatchClass {
     /// Read’s splice junction chain exactly equals the transcript’s junction chain.
     ExactJunctionChain,
 
-    /// Read overlaps transcript span but places sequence in intronic regions.
+    /// Read has positive overlap with an annotated intronic interval.
     Intronic,
+
+    /// Read overlaps the transcript span but cannot be explained by this transcript model.
+    /// This is deliberately distinct from `Intronic`: failure to fit exons is not
+    /// evidence that a read is intronic.
+    Incompatible,
 
     /// Read overlaps transcript span but contains junctions not in the transcript.
     JunctionMismatch,
@@ -38,6 +43,7 @@ impl fmt::Display for MatchClass {
             MatchClass::Compatible => "Compatible",
             MatchClass::ExactJunctionChain => "ExactJunctionChain",
             MatchClass::Intronic => "Intronic",
+            MatchClass::Incompatible => "Incompatible",
             MatchClass::JunctionMismatch => "JunctionMismatch",
             MatchClass::OverhangTooLarge => "OverhangTooLarge",
             MatchClass::NoOverlap => "NoOverlap",
@@ -94,6 +100,7 @@ impl MatchClass {
             MatchClass::Compatible => 5,
             MatchClass::JunctionMismatch => 3,
             MatchClass::Intronic => 2,
+            MatchClass::Incompatible => 1,
             MatchClass::OverhangTooLarge => 1,
             MatchClass::StrandMismatch => 0,
             MatchClass::NoOverlap => 0,
@@ -180,8 +187,8 @@ impl Default for MatchOptions {
         Self {
             require_strand: true,
             require_exact_junction_chain: false,
-            max_5p_overhang_bp: 0,
-            max_3p_overhang_bp: 0,
+            max_5p_overhang_bp: 100,
+            max_3p_overhang_bp: 100,
             allowed_intronic_gap_size: 0,
         }
     }

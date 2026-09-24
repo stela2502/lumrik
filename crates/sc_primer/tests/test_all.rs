@@ -1073,7 +1073,6 @@ fn multiple_chemistries_prefer_fast_fixed_anchor_but_detect_both_bd_structures()
     assert_eq!(dt_hit.chemistry_name, "bd-v2-384");
 }
 
-
 #[test]
 fn grammar_type_can_be_declared_in_structure() {
     let gex = Grammar::parse("gex", "TYPE:GEX+CELL:4+UMI:4").unwrap();

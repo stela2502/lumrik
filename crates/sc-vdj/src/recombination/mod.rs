@@ -1007,7 +1007,13 @@ mod tests {
         // Coding frame starts at nucleotide 1: a one-base 5' UTR prefix must not
         // make an otherwise productive V-J sequence appear out of frame.
         let observed = b"AAAATGTGCCAAATGGGGTAAAGGTGCC";
-        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), Some(0), b"TGGGGTAAAGGTGCC");
+        let p = assess_productivity(
+            observed,
+            aln(1, 10),
+            aln(13, 28),
+            Some(0),
+            b"TGGGGTAAAGGTGCC",
+        );
         assert!(p.productive);
         assert!(p.in_frame);
         assert!(!p.stop_codon);
@@ -1017,7 +1023,13 @@ mod tests {
     #[test]
     fn productivity_reports_stop_in_selected_vj_frame() {
         let observed = b"AAAATGTGCCTAATGGGGTAAAGGTGCC";
-        let p = assess_productivity(observed, aln(1, 10), aln(13, 28), Some(0), b"TGGGGTAAAGGTGCC");
+        let p = assess_productivity(
+            observed,
+            aln(1, 10),
+            aln(13, 28),
+            Some(0),
+            b"TGGGGTAAAGGTGCC",
+        );
         assert!(!p.productive);
         assert!(p.in_frame);
         assert!(p.stop_codon);

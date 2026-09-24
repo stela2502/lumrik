@@ -4,7 +4,10 @@ use reference_curator::{CandidateFilter, ReferenceCurator};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "reference-curator", about = "Inspect and export Lumrik's persistent reference curation store")]
+#[command(
+    name = "reference-curator",
+    about = "Inspect and export Lumrik's persistent reference curation store"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -12,10 +15,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Inspect { #[arg(long)] store: PathBuf },
+    Inspect {
+        #[arg(long)]
+        store: PathBuf,
+    },
     ExportFasta {
-        #[arg(long)] store: PathBuf,
-        #[arg(long)] out: PathBuf,
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
         #[arg(long, conflicts_with = "unresolved_only")]
         resolved_only: bool,
         #[arg(long, conflicts_with = "resolved_only")]
@@ -31,7 +39,12 @@ fn main() -> Result<()> {
             println!("resolved\t{}", curator.resolved().count());
             println!("unresolved\t{}", curator.unresolved().count());
         }
-        Command::ExportFasta { store, out, resolved_only, unresolved_only } => {
+        Command::ExportFasta {
+            store,
+            out,
+            resolved_only,
+            unresolved_only,
+        } => {
             let filter = if unresolved_only {
                 CandidateFilter::UnresolvedOnly
             } else if resolved_only {

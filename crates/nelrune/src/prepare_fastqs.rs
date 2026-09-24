@@ -64,18 +64,34 @@ pub fn run() -> Result<()> {
     let shards = normalizer.prepare_fastqs_sharded(&inputs, &shard_dir, |_| {})?;
 
     let feature_path = args.outpath.join("feature_observations.bin");
-    normalizer.take_feature_tag_counts().save_observations(&feature_path)?;
+    normalizer
+        .take_feature_tag_counts()
+        .save_observations(&feature_path)?;
 
-    fs::write(args.outpath.join("prepare-report.txt"), normalizer.stats().to_string())?;
-    let mut manifest = format!("format\tnelrune-prepare-v1\ncell_barcode_len\t{cell_barcode_len}\nfeature_observations\t{}\n", feature_path.display());
+    fs::write(
+        args.outpath.join("prepare-report.txt"),
+        normalizer.stats().to_string(),
+    )?;
+    let mut manifest = format!(
+        "format\tnelrune-prepare-v1\ncell_barcode_len\t{cell_barcode_len}\nfeature_observations\t{}\n",
+        feature_path.display()
+    );
     for grammar in primer.grammars() {
-        manifest.push_str(&format!("grammar\t{}\t{}\n", grammar.name, grammar.grammar_type.code()));
+        manifest.push_str(&format!(
+            "grammar\t{}\t{}\n",
+            grammar.name,
+            grammar.grammar_type.code()
+        ));
     }
     for shard in &shards {
         manifest.push_str(&format!("fastq\t{}\n", shard.display()));
     }
     fs::write(args.outpath.join("prepare-manifest.tsv"), manifest)?;
 
-    eprintln!("[nelrune prepare-fastqs] wrote {} FASTQ shards to {}", shards.len(), shard_dir.display());
+    eprintln!(
+        "[nelrune prepare-fastqs] wrote {} FASTQ shards to {}",
+        shards.len(),
+        shard_dir.display()
+    );
     Ok(())
 }

@@ -21,7 +21,7 @@ pub struct EncoderConfig {
     pub cell_barcodes: Vec<String>,
 
     pub truth_path: Option<std::path::PathBuf>,
-    pub min_cell_counts: usize,
+    pub min_umi_count: usize,
     pub genes_per_cell: usize,
     pub truth_feature_mode: TruthFeatureMode,
 }
@@ -42,7 +42,7 @@ impl Default for EncoderConfig {
 
             seed: 1,
             cell_barcodes: vec!["CELL000001-1".to_string()],
-            min_cell_counts: 1,
+            min_umi_count: 1,
             genes_per_cell: 1,
             truth_path: None,
 

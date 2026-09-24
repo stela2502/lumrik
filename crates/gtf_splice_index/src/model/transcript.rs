@@ -1,6 +1,8 @@
 use crate::model::types::{MatchClass, MatchHit, MatchOptions, TranscriptId};
 use crate::types::{RefBlock, SplicedRead, Strand};
 use serde::{Deserialize, Serialize};
+
+const MIN_TRANSCRIPT_END_OVERHANG_BP: u32 = 100;
 use int_to_dna::IntToDna;
 use int_to_prot::IntToProt;
 
@@ -160,7 +162,12 @@ impl Transcript {
                     let start = exon.start as usize;
                     let end = exon.end as usize;
                     let bases = chromosome.get(start..end).ok_or_else(|| {
-                        format!("exon {}..{} exceeds reference length {}", start, end, chromosome.len())
+                        format!(
+                            "exon {}..{} exceeds reference length {}",
+                            start,
+                            end,
+                            chromosome.len()
+                        )
                     })?;
                     seq.extend(bases.iter().rev().map(|&b| complement(b)));
                 }
@@ -227,6 +234,47 @@ impl Transcript {
 
     pub fn junctions(&self) -> Vec<(u32, u32)> {
         RefBlock::junctions_from_blocks(&self.exons, 0)
+    }
+
+    /// For every observed read junction that is not an exact annotated junction,
+    /// return the signed donor and acceptor displacement from the nearest
+    /// annotated junction of this transcript. Coordinates are the native
+    /// 0-based half-open block boundaries used by both the BAM-derived read and
+    /// the splice index. Positive means the observed boundary is at a larger
+    /// genomic coordinate than the annotation.
+    pub fn junction_mismatch_offsets(
+        &self,
+        read: &SplicedRead,
+        allowed_gap_size: u32,
+    ) -> Vec<(i32, i32)> {
+        read.assert_finalized();
+        let read_junctions = RefBlock::junctions_from_blocks(&read.blocks, allowed_gap_size);
+        let tx_junctions = self.junctions();
+        if tx_junctions.is_empty() {
+            return Vec::new();
+        }
+
+        read_junctions
+            .into_iter()
+            .filter(|junction| !tx_junctions.contains(junction))
+            .filter_map(|(read_donor, read_acceptor)| {
+                tx_junctions
+                    .iter()
+                    .min_by_key(|&&(tx_donor, tx_acceptor)| {
+                        read_donor.abs_diff(tx_donor) as u64
+                            + read_acceptor.abs_diff(tx_acceptor) as u64
+                    })
+                    .map(|&(tx_donor, tx_acceptor)| {
+                        (
+                            read_donor as i64 - tx_donor as i64,
+                            read_acceptor as i64 - tx_acceptor as i64,
+                        )
+                    })
+                    .and_then(|(donor, acceptor)| {
+                        Some((i32::try_from(donor).ok()?, i32::try_from(acceptor).ok()?))
+                    })
+            })
+            .collect()
     }
 
     pub fn match_spliced_read(&self, read: &SplicedRead, opts: MatchOptions) -> MatchHit {
@@ -316,7 +364,13 @@ impl Transcript {
         // ------------------------------------------------------------
         // 3) Transcript boundary overhang check
         // ------------------------------------------------------------
-        if over5 > opts.max_5p_overhang_bp || over3 > opts.max_3p_overhang_bp {
+        // Transcript ends, especially annotated 3-prime/poly(A) ends, are not
+        // exact biological boundaries. Never make the matcher stricter than
+        // 100 bp even when an older caller explicitly passes zero. Larger user
+        // tolerances remain honored.
+        let max_5p_overhang_bp = opts.max_5p_overhang_bp.max(MIN_TRANSCRIPT_END_OVERHANG_BP);
+        let max_3p_overhang_bp = opts.max_3p_overhang_bp.max(MIN_TRANSCRIPT_END_OVERHANG_BP);
+        if over5 > max_5p_overhang_bp || over3 > max_3p_overhang_bp {
             return MatchHit::new(MatchClass::OverhangTooLarge, over5, over3);
         }
 
@@ -336,7 +390,15 @@ impl Transcript {
         // Without this guard, an unspliced read with no junctions can be incorrectly
         // classified as Compatible because an empty iterator satisfies `.all(...)`.
         if !self.blocks_fit_exons_allowing_end_overhang(read_blocks, 10) {
-            return MatchHit::new(MatchClass::Intronic, over5, over3);
+            // Failing exon compatibility is NOT sufficient evidence for an
+            // intronic molecule. Only route to Intronic when aligned sequence
+            // positively overlaps an annotated intron of this transcript.
+            let class = if self.blocks_overlap_introns(read_blocks) {
+                MatchClass::Intronic
+            } else {
+                MatchClass::Incompatible
+            };
+            return MatchHit::new(class, over5, over3);
         }
 
         // ------------------------------------------------------------
@@ -409,6 +471,22 @@ impl Transcript {
         }
     }
 
+    fn blocks_overlap_introns(&self, read_blocks: &[RefBlock]) -> bool {
+        if self.exons.len() < 2 {
+            return false;
+        }
+
+        self.exons.windows(2).any(|pair| {
+            let left = pair[0];
+            let right = pair[1];
+            if left.end >= right.start {
+                return false;
+            }
+            let intron = RefBlock::new(left.end, right.start);
+            read_blocks.iter().any(|block| block.overlaps(intron))
+        })
+    }
+
     fn blocks_fit_exons_allowing_end_overhang(
         &self,
         read_blocks: &[RefBlock],
@@ -441,22 +519,19 @@ impl Transcript {
             let is_first_block = block_idx == 0;
             let is_last_block = block_idx + 1 == num_blocks;
 
-            // For ANY block: it must not have intronic sequence on the "wrong side".
-            // If it's the first block: allow 5' overhang, but NOT intronic 3' extension past exon end.
-            // If it's the last block: allow 3' overhang, but NOT intronic 5' extension before exon start.
-            // If it's an interior block: must be fully contained (you already do that).
-            if is_first_block {
-                if read_block.end > exon.end {
-                    return false; // would include intronic bases after exon end
-                }
+            // Sequence outside an exon is allowed only at the OUTER transcript
+            // boundaries. This is genomic-coordinate based, so it works for both
+            // strands and also for single-exon transcripts. The actual tolerance
+            // was already enforced by compute_overhangs_strand_aware() above.
+            let is_first_exon = exon_idx == 0;
+            let is_last_exon = exon_idx + 1 == self.exons.len();
+            let allow_left_overhang = is_first_block && is_first_exon;
+            let allow_right_overhang = is_last_block && is_last_exon;
+
+            if read_block.start < exon.start && !allow_left_overhang {
+                return false;
             }
-            if is_last_block {
-                if read_block.start < exon.start {
-                    return false; // would include intronic bases before exon start
-                }
-            }
-            // Interior blocks must be fully inside the exon (no end-overhang allowed there).
-            if !is_first_block && !is_last_block && !exon.contains(read_block) {
+            if read_block.end > exon.end && !allow_right_overhang {
                 return false;
             }
 
@@ -495,12 +570,20 @@ impl Transcript {
     }
 }
 
-
-fn append_reference_block(out: &mut Vec<u8>, chromosome: &[u8], block: RefBlock) -> Result<(), String> {
+fn append_reference_block(
+    out: &mut Vec<u8>,
+    chromosome: &[u8],
+    block: RefBlock,
+) -> Result<(), String> {
     let start = block.start as usize;
     let end = block.end as usize;
     let bases = chromosome.get(start..end).ok_or_else(|| {
-        format!("exon {}..{} exceeds reference length {}", start, end, chromosome.len())
+        format!(
+            "exon {}..{} exceeds reference length {}",
+            start,
+            end,
+            chromosome.len()
+        )
     })?;
     out.extend_from_slice(bases);
     Ok(())
@@ -806,13 +889,19 @@ mod tests {
         tx.finalize();
 
         let chromosome = b"ATGGCTNNNNGAATTTTAA";
-        assert_eq!(tx.cdna(chromosome).unwrap().to_string(15), "ATGGCTGAATTTTAA");
+        assert_eq!(
+            tx.cdna(chromosome).unwrap().to_string(15),
+            "ATGGCTGAATTTTAA"
+        );
         assert_eq!(tx.cds_transcript_span(), Some((0, 15)));
         assert_eq!(
             tx.coding_dna(chromosome).unwrap().unwrap().to_string(15),
             "ATGGCTGAATTTTAA"
         );
-        assert_eq!(tx.protein(chromosome).unwrap().unwrap().to_string(), "MAEF*");
+        assert_eq!(
+            tx.protein(chromosome).unwrap().unwrap().to_string(),
+            "MAEF*"
+        );
         assert_eq!(tx.transcript_position_of_genomic(10), Some(6));
         assert_eq!(tx.genomic_position_of_transcript(6), Some(10));
     }
@@ -829,9 +918,15 @@ mod tests {
         // reverse-complement(exon 12..18) + reverse-complement(exon 0..9)
         // = ATGGCT + GAATTTTAA
         let chromosome = b"TTAAAATTCNNNAGCCAT";
-        assert_eq!(tx.cdna(chromosome).unwrap().to_string(15), "ATGGCTGAATTTTAA");
+        assert_eq!(
+            tx.cdna(chromosome).unwrap().to_string(15),
+            "ATGGCTGAATTTTAA"
+        );
         assert_eq!(tx.cds_transcript_span(), Some((0, 15)));
-        assert_eq!(tx.protein(chromosome).unwrap().unwrap().to_string(), "MAEF*");
+        assert_eq!(
+            tx.protein(chromosome).unwrap().unwrap().to_string(),
+            "MAEF*"
+        );
         assert_eq!(tx.transcript_position_of_genomic(17), Some(0));
         assert_eq!(tx.genomic_position_of_transcript(0), Some(17));
     }
@@ -846,9 +941,135 @@ mod tests {
         tx.finalize();
 
         let chromosome = b"CCCATGGCTNNNGAATTTTAAGGG";
-        assert_eq!(tx.cdna(chromosome).unwrap().to_string(21), "CCCATGGCTGAATTTTAAGGG");
+        assert_eq!(
+            tx.cdna(chromosome).unwrap().to_string(21),
+            "CCCATGGCTGAATTTTAAGGG"
+        );
         assert_eq!(tx.cds_transcript_span(), Some((3, 18)));
-        assert_eq!(tx.protein(chromosome).unwrap().unwrap().to_string(), "MAEF*");
+        assert_eq!(
+            tx.protein(chromosome).unwrap().unwrap().to_string(),
+            "MAEF*"
+        );
     }
 
+    #[test]
+    fn exon_fit_failure_without_intron_overlap_is_not_intronic() {
+        let tx = tx_two_exons(1, Strand::Plus);
+        let read = read(1, Strand::Plus, vec![RefBlock::new(90, 160)]);
+        let mut o = opts();
+        o.max_5p_overhang_bp = 100;
+        o.max_3p_overhang_bp = 100;
+        let hit = tx.match_spliced_read(&read, o);
+        assert_eq!(
+            hit.class,
+            MatchClass::Intronic,
+            "block entering the annotated intron is positive intronic evidence"
+        );
+
+        let mut single = Transcript::new(0, 0, "single", 1, Strand::Plus);
+        single.add_exon(RefBlock::new(100, 150));
+        single.finalize();
+        let read = read(1, Strand::Plus, vec![RefBlock::new(90, 160)]);
+        let hit = single.match_spliced_read(&read, o);
+        assert_eq!(
+            hit.class,
+            MatchClass::Compatible,
+            "terminal overhang within tolerance remains exonic-compatible"
+        );
+    }
+
+    #[test]
+    fn default_match_options_allow_100bp_transcript_end_overhang() {
+        let mut tx = Transcript::new(0, 0, "single", 1, Strand::Plus);
+        tx.add_exon(RefBlock::new(100, 150));
+        tx.finalize();
+
+        let left = read(1, Strand::Plus, vec![RefBlock::new(1, 150)]);
+        let right = read(1, Strand::Plus, vec![RefBlock::new(100, 249)]);
+        assert_eq!(
+            tx.match_spliced_read(&left, MatchOptions::default()).class,
+            MatchClass::Compatible
+        );
+        assert_eq!(
+            tx.match_spliced_read(&right, MatchOptions::default()).class,
+            MatchClass::Compatible
+        );
+
+        let too_far = read(1, Strand::Plus, vec![RefBlock::new(100, 251)]);
+        assert_eq!(
+            tx.match_spliced_read(&too_far, MatchOptions::default())
+                .class,
+            MatchClass::OverhangTooLarge
+        );
+
+        let legacy_zero = MatchOptions {
+            max_5p_overhang_bp: 0,
+            max_3p_overhang_bp: 0,
+            ..MatchOptions::default()
+        };
+        assert_eq!(
+            tx.match_spliced_read(&right, legacy_zero).class,
+            MatchClass::Compatible
+        );
+    }
+
+    #[test]
+    fn junction_mismatch_offsets_report_signed_one_base_shifts() {
+        let mut tx = Transcript::new(0, 0, "T", 0, Strand::Plus);
+        tx.add_exon(RefBlock::new(100, 150));
+        tx.add_exon(RefBlock::new(200, 250));
+        tx.finalize();
+
+        let mut exact = SplicedRead::new(
+            0,
+            Strand::Plus,
+            vec![RefBlock::new(110, 150), RefBlock::new(200, 240)],
+        );
+        exact.finalize();
+        assert!(tx.junction_mismatch_offsets(&exact, 0).is_empty());
+
+        let mut donor_plus_one = SplicedRead::new(
+            0,
+            Strand::Plus,
+            vec![RefBlock::new(110, 151), RefBlock::new(200, 240)],
+        );
+        donor_plus_one.finalize();
+        assert_eq!(
+            tx.junction_mismatch_offsets(&donor_plus_one, 0),
+            vec![(1, 0)]
+        );
+
+        let mut acceptor_minus_one = SplicedRead::new(
+            0,
+            Strand::Plus,
+            vec![RefBlock::new(110, 150), RefBlock::new(199, 240)],
+        );
+        acceptor_minus_one.finalize();
+        assert_eq!(
+            tx.junction_mismatch_offsets(&acceptor_minus_one, 0),
+            vec![(0, -1)]
+        );
+    }
+
+    #[test]
+    fn exact_junction_coordinates_are_zero_based_half_open() {
+        let mut tx = Transcript::new(0, 0, "T", 0, Strand::Plus);
+        tx.add_exon(RefBlock::new(100, 150));
+        tx.add_exon(RefBlock::new(200, 250));
+        tx.finalize();
+
+        assert_eq!(tx.junctions(), vec![(150, 200)]);
+
+        let mut read = SplicedRead::new(
+            0,
+            Strand::Plus,
+            vec![RefBlock::new(120, 150), RefBlock::new(200, 230)],
+        );
+        read.finalize();
+        assert_eq!(read.junctions(), vec![(150, 200)]);
+        assert_eq!(
+            tx.match_spliced_read(&read, MatchOptions::default()).class,
+            MatchClass::ExactJunctionChain
+        );
+    }
 }

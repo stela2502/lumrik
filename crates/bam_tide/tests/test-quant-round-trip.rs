@@ -72,7 +72,7 @@ fn quant_round_trip_artificial_genome_gene_mode() -> Result<()> {
         genes_per_cell: 100,
 
         truth_path: Some(truth_out.clone()),
-        min_cell_counts: 90,
+        min_umi_count: 90,
         truth_feature_mode: TruthFeatureMode::Gene,
     };
     let mut encoder = SamEncoder::new(cli).map_err(anyhow::Error::msg)?;
@@ -108,7 +108,7 @@ fn quant_round_trip_artificial_genome_gene_mode() -> Result<()> {
             vcf,
             "--outpath",
             quant_out.to_str().context("quant path is not UTF-8")?,
-            "--min-cell-counts",
+            "--min-umi-count",
             "1",
             "--quant-mode",
             "gene",

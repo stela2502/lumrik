@@ -15,7 +15,9 @@ pub fn tf_rpeaks_url(assembly: &str) -> Option<&'static str> {
 }
 
 pub fn fetch(assembly: &str, root: &Path) -> Result<Option<PathBuf>> {
-    let Some(url) = tf_rpeaks_url(assembly) else { return Ok(None); };
+    let Some(url) = tf_rpeaks_url(assembly) else {
+        return Ok(None);
+    };
     let dir = root.join("Chromatin").join("ENCODE4");
     std::fs::create_dir_all(&dir)?;
     let out = dir.join("TFrPeakClusters.bb");
@@ -23,9 +25,13 @@ pub fn fetch(assembly: &str, root: &Path) -> Result<Option<PathBuf>> {
         eprintln!("[ommverse] fetch {url}");
         let status = Command::new("wget")
             .args(["--continue", "--output-document"])
-            .arg(&out).arg(url).status()
+            .arg(&out)
+            .arg(url)
+            .status()
             .with_context(|| format!("starting wget for {url}"))?;
-        if !status.success() { anyhow::bail!("wget failed for {url}"); }
+        if !status.success() {
+            anyhow::bail!("wget failed for {url}");
+        }
     }
     Ok(Some(out))
 }

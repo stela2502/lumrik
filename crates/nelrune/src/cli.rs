@@ -61,9 +61,10 @@ pub struct Cli {
     #[arg(long, default_value_t = 20)]
     pub min_transcript_len: usize,
 
-    /// Optional fixed cell UMI cutoff. When supplied, this overrides sc-beacon cell calling.
+    /// Minimum unique exonic gene-associated UMIs required to call a barcode a cell.
+    /// When omitted, sc-beacon barcode-rank cell calling is used.
     #[arg(long)]
-    pub min_cell_counts: Option<usize>,
+    pub min_umi_count: Option<usize>,
 
     /// Worker threads used by the normalizers / export helpers.
     #[arg(long, default_value_t = 0)]

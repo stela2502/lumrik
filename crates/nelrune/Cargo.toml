@@ -11,6 +11,7 @@ path = "src/main.rs"
 anyhow = "1"
 clap = { workspace = true }
 rayon = "1"
+flate2 = "1"
 
 bam_tide = { path = "../bam_tide" }
 gtf_splice_index = { path = "../gtf_splice_index" }

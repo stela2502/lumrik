@@ -52,7 +52,10 @@ impl TwoBitReader {
         } else if u32::from_le_bytes(signature) == TWO_BIT_SIGNATURE {
             ByteOrder::Little
         } else {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "not a UCSC twoBit file"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "not a UCSC twoBit file",
+            ));
         };
 
         let version = read_u32(&mut reader, order)?;
@@ -65,7 +68,10 @@ impl TwoBitReader {
         let sequence_count = read_u32(&mut reader, order)?;
         let reserved = read_u32(&mut reader, order)?;
         if reserved != 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "twoBit header reserved field is not zero"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "twoBit header reserved field is not zero",
+            ));
         }
 
         let mut index = HashMap::with_capacity(sequence_count as usize);
@@ -74,13 +80,22 @@ impl TwoBitReader {
             reader.read_exact(&mut name_len)?;
             let mut name = vec![0u8; name_len[0] as usize];
             reader.read_exact(&mut name)?;
-            let name = String::from_utf8(name)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "twoBit sequence name is not UTF-8"))?;
+            let name = String::from_utf8(name).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "twoBit sequence name is not UTF-8",
+                )
+            })?;
             let offset = read_u32(&mut reader, order)? as u64;
             index.insert(name, offset);
         }
 
-        Ok(Self { reader, order, index, records: HashMap::new() })
+        Ok(Self {
+            reader,
+            order,
+            index,
+            records: HashMap::new(),
+        })
     }
 
     pub fn sequence_names(&self) -> impl Iterator<Item = &str> {
@@ -101,7 +116,10 @@ impl TwoBitReader {
         if start > end || end > record.dna_size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("invalid interval {name}:{start}-{end}; sequence length is {}", record.dna_size),
+                format!(
+                    "invalid interval {name}:{start}-{end}; sequence length is {}",
+                    record.dna_size
+                ),
             ));
         }
         if start == end {
@@ -111,7 +129,8 @@ impl TwoBitReader {
         let first_byte = start / 4;
         let last_byte = end.div_ceil(4);
         let mut packed = vec![0u8; (last_byte - first_byte) as usize];
-        self.reader.seek(SeekFrom::Start(record.packed_offset + first_byte as u64))?;
+        self.reader
+            .seek(SeekFrom::Start(record.packed_offset + first_byte as u64))?;
         self.reader.read_exact(&mut packed)?;
 
         // Convert complete UCSC bytes to IntToDna bytes first. Boundary bases
@@ -148,26 +167,45 @@ impl TwoBitReader {
     fn record(&mut self, name: &str) -> io::Result<&SequenceRecord> {
         if !self.records.contains_key(name) {
             let offset = *self.index.get(name).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, format!("sequence {name:?} not present in twoBit file"))
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("sequence {name:?} not present in twoBit file"),
+                )
             })?;
             self.reader.seek(SeekFrom::Start(offset))?;
             let dna_size = read_u32(&mut self.reader, self.order)?;
             let n_count = read_u32(&mut self.reader, self.order)? as usize;
             let mut n_starts = Vec::with_capacity(n_count);
-            for _ in 0..n_count { n_starts.push(read_u32(&mut self.reader, self.order)?); }
+            for _ in 0..n_count {
+                n_starts.push(read_u32(&mut self.reader, self.order)?);
+            }
             let mut n_sizes = Vec::with_capacity(n_count);
-            for _ in 0..n_count { n_sizes.push(read_u32(&mut self.reader, self.order)?); }
+            for _ in 0..n_count {
+                n_sizes.push(read_u32(&mut self.reader, self.order)?);
+            }
             let n_blocks = n_starts.into_iter().zip(n_sizes).collect();
 
             let mask_count = read_u32(&mut self.reader, self.order)? as u64;
-            self.reader.seek(SeekFrom::Current((mask_count * 4) as i64))?; // mask starts
-            self.reader.seek(SeekFrom::Current((mask_count * 4) as i64))?; // mask sizes
+            self.reader
+                .seek(SeekFrom::Current((mask_count * 4) as i64))?; // mask starts
+            self.reader
+                .seek(SeekFrom::Current((mask_count * 4) as i64))?; // mask sizes
             let reserved = read_u32(&mut self.reader, self.order)?;
             if reserved != 0 {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "twoBit sequence reserved field is not zero"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "twoBit sequence reserved field is not zero",
+                ));
             }
             let packed_offset = self.reader.stream_position()?;
-            self.records.insert(name.to_owned(), SequenceRecord { dna_size, n_blocks, packed_offset });
+            self.records.insert(
+                name.to_owned(),
+                SequenceRecord {
+                    dna_size,
+                    n_blocks,
+                    packed_offset,
+                },
+            );
         }
         Ok(self.records.get(name).expect("record was inserted"))
     }
@@ -213,7 +251,9 @@ fn ucsc_byte_to_int_to_dna(byte: u8) -> u8 {
 #[inline]
 fn set_packed_base(out: &mut Vec<u8>, position: usize, base: u8) {
     let byte = position / 4;
-    if byte == out.len() { out.push(0); }
+    if byte == out.len() {
+        out.push(0);
+    }
     out[byte] |= base << (2 * (position % 4));
 }
 
@@ -231,7 +271,11 @@ mod tests {
     use std::io::Write;
 
     fn write_u32(out: &mut Vec<u8>, value: u32, little: bool) {
-        let bytes = if little { value.to_le_bytes() } else { value.to_be_bytes() };
+        let bytes = if little {
+            value.to_le_bytes()
+        } else {
+            value.to_be_bytes()
+        };
         out.extend_from_slice(&bytes);
     }
 
@@ -256,7 +300,7 @@ mod tests {
         write_u32(&mut data, 2, little); // N size
         write_u32(&mut data, 0, little); // mask blocks
         write_u32(&mut data, 0, little); // reserved
-        // A C G T | T T G T | A in UCSC encoding, high pair first.
+                                         // A C G T | T T G T | A in UCSC encoding, high pair first.
         data.extend_from_slice(&[0b10_01_11_00, 0b00_00_11_00, 0b10_00_00_00]);
 
         let mut file = File::create(path).unwrap();
@@ -266,7 +310,10 @@ mod tests {
     #[test]
     fn ucsc_byte_conversion_matches_int_to_dna_layout() {
         let converted = ucsc_byte_to_int_to_dna(0b10_01_11_00); // ACGT
-        assert_eq!(IntToDna::from_packed_2bit(vec![converted], 4).to_string(4), "ACGT");
+        assert_eq!(
+            IntToDna::from_packed_2bit(vec![converted], 4).to_string(4),
+            "ACGT"
+        );
     }
 
     #[test]
@@ -275,8 +322,14 @@ mod tests {
         tiny_two_bit(&path, false);
         let mut reader = TwoBitReader::open(&path).unwrap();
         assert_eq!(reader.sequence_len("chrTest").unwrap(), 9);
-        assert_eq!(reader.sequence("chrTest", 0, 9).unwrap().to_string(9), "ACGTAAGTA");
-        assert_eq!(reader.sequence("chrTest", 1, 8).unwrap().to_string(7), "CGTAAGT");
+        assert_eq!(
+            reader.sequence("chrTest", 0, 9).unwrap().to_string(9),
+            "ACGTAAGTA"
+        );
+        assert_eq!(
+            reader.sequence("chrTest", 1, 8).unwrap().to_string(7),
+            "CGTAAGT"
+        );
         assert!(reader.sequence("chrTest", 0, 10).is_err());
         fs::remove_file(path).ok();
     }
@@ -286,7 +339,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!("int-to-dna-le-{}.2bit", std::process::id()));
         tiny_two_bit(&path, true);
         let mut reader = TwoBitReader::open(&path).unwrap();
-        assert_eq!(reader.sequence("chrTest", 0, 4).unwrap().to_string(4), "ACGT");
+        assert_eq!(
+            reader.sequence("chrTest", 0, 4).unwrap().to_string(4),
+            "ACGT"
+        );
         fs::remove_file(path).ok();
     }
 }

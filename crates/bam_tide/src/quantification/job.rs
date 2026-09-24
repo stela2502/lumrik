@@ -211,9 +211,7 @@ impl<'a> JobBuilder<'a> {
         let chr_id = match self.fuzzy_chr_id(chr_name) {
             Some(id) => id,
             None => {
-                report.report(&format!(
-                    "contig absent from splice index: {chr_name}"
-                ));
+                report.report(&format!("contig absent from splice index: {chr_name}"));
                 return Ok(None);
             }
         };

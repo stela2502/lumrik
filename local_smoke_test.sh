@@ -175,7 +175,7 @@ if (( MAX_READS > 0 )); then
         --max-reads "$MAX_READS"
     )
     OPTIONAL_ARGS+=(
-        --min-cell-counts 10
+        --min-umi-count 10
     )
 
 fi

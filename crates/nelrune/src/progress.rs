@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use lumrik_status::{ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status, snapshot_html};
+use lumrik_status::{
+    ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status, snapshot_html,
+};
 use mapping_info::MappingInfo;
 
 #[derive(Debug)]
@@ -62,6 +64,18 @@ pub struct RunStatus {
     pub compatible_bam_records: usize,
     pub unmapped_bam_records: usize,
     pub retained_cells: Option<usize>,
+    pub observed_exonic_cells: usize,
+    pub observed_intronic_cells: usize,
+    pub observed_exonic_genes: usize,
+    pub observed_intronic_genes: usize,
+    pub exonic_umis: usize,
+    pub intronic_umis: usize,
+    pub match_exact_junction_chain: usize,
+    pub match_compatible: usize,
+    pub match_intronic: usize,
+    pub match_incompatible: usize,
+    pub match_junction_mismatch: usize,
+    pub match_overhang_too_large: usize,
     pub process_rss_mib: f64,
     pub process_peak_rss_mib: f64,
     pub system_available_mib: f64,
@@ -109,6 +123,18 @@ impl Default for RunStatus {
             compatible_bam_records: 0,
             unmapped_bam_records: 0,
             retained_cells: None,
+            observed_exonic_cells: 0,
+            observed_intronic_cells: 0,
+            observed_exonic_genes: 0,
+            observed_intronic_genes: 0,
+            exonic_umis: 0,
+            intronic_umis: 0,
+            match_exact_junction_chain: 0,
+            match_compatible: 0,
+            match_intronic: 0,
+            match_incompatible: 0,
+            match_junction_mismatch: 0,
+            match_overhang_too_large: 0,
             process_rss_mib: 0.0,
             process_peak_rss_mib: 0.0,
             system_available_mib: 0.0,
@@ -351,6 +377,52 @@ impl RunProgress {
         self.reads_seen.saturating_sub(self.processing_start_reads) as f64 / elapsed
     }
 
+    /// Publish a live quantification snapshot after a BAM chunk has been processed.
+    pub fn update_quantification_live(&self, data: &bam_tide::results::QuantData) {
+        let memory = memory_status();
+        if let Ok(mut state) = self.state.write() {
+            state.bam_records_seen = data.report.get_issue_count("bam_records_seen");
+            // During BAM-only quantification the normal FASTQ-side
+            // `candidate_pairs` counter is unused. Reuse the existing server
+            // slot to expose the biologically useful denominator: records
+            // carrying explicit GEX (`|G|`) provenance. Do not include legacy
+            // records or VDJ/custom-capture (`|V|`) records here.
+            state.candidate_pairs = data.report.get_issue_count("primer provenance GEX");
+            state.quantified_bam_records = data.report.get_issue_count("quantified_bam_records");
+            state.compatible_bam_records = data.report.get_issue_count("compatible");
+            state.unmapped_bam_records = data.report.get_issue_count("unmapped");
+            state.observed_exonic_cells = data.gene.cell_ids().len();
+            state.observed_intronic_cells = data.intron.cell_ids().len();
+            state.observed_exonic_genes = data.gene.observed_feature_ids().len();
+            state.observed_intronic_genes = data.intron.observed_feature_ids().len();
+            state.exonic_umis = data.gene.total_umis();
+            state.intronic_umis = data.intron.total_umis();
+            // QuantData::merge records UMI collisions in its MappingInfo.
+            // Surface those post-quantification PCR duplicates through the
+            // same server counter used during FASTQ processing.
+            state.duplicates = data.report.pcr_duplicates;
+            state.match_exact_junction_chain = data.report.get_issue_count("ExactJunctionChain");
+            state.match_compatible = data.report.get_issue_count("Compatible");
+            state.match_intronic = data.report.get_issue_count("Intronic");
+            state.match_incompatible = data.report.get_issue_count("Incompatible");
+            state.match_junction_mismatch = data.report.get_issue_count("JunctionMismatch");
+            state.match_overhang_too_large = data.report.get_issue_count("OverhangTooLarge");
+            state.process_rss_mib = memory.process_rss_mib;
+            state.process_peak_rss_mib = memory.process_peak_rss_mib;
+            state.system_available_mib = memory.system_available_mib;
+        }
+    }
+
+    /// Refresh memory while a non-streaming quant stage is running.
+    pub fn update_memory(&self) {
+        let memory = memory_status();
+        if let Ok(mut state) = self.state.write() {
+            state.process_rss_mib = memory.process_rss_mib;
+            state.process_peak_rss_mib = memory.process_peak_rss_mib;
+            state.system_available_mib = memory.system_available_mib;
+        }
+    }
+
     pub fn set_quantification_summary(
         &self,
         bam_records_seen: usize,
@@ -395,13 +467,20 @@ impl RunProgress {
 
     /// Persist the final health-server state so completed runs remain inspectable.
     pub fn write_final_status(&self, outdir: &Path) -> Result<()> {
-        let state = self.state.read().map_err(|_| anyhow::anyhow!("Nelrune status lock poisoned"))?.clone();
+        let state = self
+            .state
+            .read()
+            .map_err(|_| anyhow::anyhow!("Nelrune status lock poisoned"))?
+            .clone();
         let mut yaml = File::create(outdir.join("nelrune-run-summary.yaml"))
             .context("creating nelrune-run-summary.yaml")?;
         writeln!(yaml, "schema: lumrik-nelrune-run-summary-v1")?;
         writeln!(yaml, "stage: {:?}", state.stage)?;
         writeln!(yaml, "started_unix_ms: {}", state.started_unix_ms)?;
-        match state.finished_unix_ms { Some(v) => writeln!(yaml, "finished_unix_ms: {v}")?, None => writeln!(yaml, "finished_unix_ms: null")? }
+        match state.finished_unix_ms {
+            Some(v) => writeln!(yaml, "finished_unix_ms: {v}")?,
+            None => writeln!(yaml, "finished_unix_ms: null")?,
+        }
         writeln!(yaml, "reads_processed: {}", state.reads_processed)?;
         writeln!(yaml, "mapper_reads: {}", state.mapper_reads)?;
         writeln!(yaml, "accepted_pairs: {}", state.accepted_pairs)?;
@@ -412,11 +491,66 @@ impl RunProgress {
         writeln!(yaml, "unique_genomic: {}", state.unique_genomic)?;
         writeln!(yaml, "unique_feature: {}", state.unique_feature)?;
         writeln!(yaml, "bam_records_seen: {}", state.bam_records_seen)?;
-        writeln!(yaml, "quantified_bam_records: {}", state.quantified_bam_records)?;
-        match state.retained_cells { Some(v) => writeln!(yaml, "retained_cells: {v}")?, None => writeln!(yaml, "retained_cells: null")? }
+        writeln!(
+            yaml,
+            "quantified_bam_records: {}",
+            state.quantified_bam_records
+        )?;
+        match state.retained_cells {
+            Some(v) => writeln!(yaml, "retained_cells: {v}")?,
+            None => writeln!(yaml, "retained_cells: null")?,
+        }
+        writeln!(
+            yaml,
+            "observed_exonic_cells: {}",
+            state.observed_exonic_cells
+        )?;
+        writeln!(
+            yaml,
+            "observed_intronic_cells: {}",
+            state.observed_intronic_cells
+        )?;
+        writeln!(
+            yaml,
+            "observed_exonic_genes: {}",
+            state.observed_exonic_genes
+        )?;
+        writeln!(
+            yaml,
+            "observed_intronic_genes: {}",
+            state.observed_intronic_genes
+        )?;
+        writeln!(yaml, "exonic_umis: {}", state.exonic_umis)?;
+        writeln!(yaml, "intronic_umis: {}", state.intronic_umis)?;
+        writeln!(
+            yaml,
+            "match_exact_junction_chain: {}",
+            state.match_exact_junction_chain
+        )?;
+        writeln!(yaml, "match_compatible: {}", state.match_compatible)?;
+        writeln!(yaml, "match_intronic: {}", state.match_intronic)?;
+        writeln!(yaml, "match_incompatible: {}", state.match_incompatible)?;
+        writeln!(
+            yaml,
+            "match_junction_mismatch: {}",
+            state.match_junction_mismatch
+        )?;
+        writeln!(
+            yaml,
+            "match_overhang_too_large: {}",
+            state.match_overhang_too_large
+        )?;
         writeln!(yaml, "process_rss_mib: {:.3}", state.process_rss_mib)?;
-        writeln!(yaml, "process_peak_rss_mib: {:.3}", state.process_peak_rss_mib)?;
-        writeln!(yaml, "system_available_mib: {:.3}", state.system_available_mib)?;
+        writeln!(
+            yaml,
+            "process_peak_rss_mib: {:.3}",
+            state.process_peak_rss_mib
+        )?;
+        writeln!(
+            yaml,
+            "system_available_mib: {:.3}",
+            state.system_available_mib
+        )?;
         yaml.flush()?;
 
         let html = snapshot_html(&state.server_snapshot());
@@ -559,16 +693,43 @@ impl ServerContent for RunStatus {
                             format!(
                                 "{} ({:.2}%)",
                                 self.candidate_pairs,
-                                pct(self.candidate_pairs)
+                                if self.bam_records_seen > 0 && self.reads_processed == 0 {
+                                    bam_pct(self.candidate_pairs)
+                                } else {
+                                    pct(self.candidate_pairs)
+                                }
                             ),
                         ),
                         StatusMetric::new(
                             "Duplicates",
-                            format!("{} ({:.2}%)", self.duplicates, self.duplicate_pct),
+                            format!(
+                                "{} ({:.2}%)",
+                                self.duplicates,
+                                if self.bam_records_seen > 0
+                                    && self.reads_processed == 0
+                                    && self.candidate_pairs > 0
+                                {
+                                    100.0 * self.duplicates as f64 / self.candidate_pairs as f64
+                                } else {
+                                    self.duplicate_pct
+                                }
+                            ),
                         ),
                         StatusMetric::new(
                             "Unique molecule yield",
-                            format!("{:.2}%", self.unique_yield_pct),
+                            format!(
+                                "{:.2}%",
+                                if self.bam_records_seen > 0
+                                    && self.reads_processed == 0
+                                    && self.candidate_pairs > 0
+                                {
+                                    100.0
+                                        - 100.0 * self.duplicates as f64
+                                            / self.candidate_pairs as f64
+                                } else {
+                                    self.unique_yield_pct
+                                }
+                            ),
                         ),
                         StatusMetric::new(
                             "Paired R1 insert found",
@@ -625,6 +786,43 @@ impl ServerContent for RunStatus {
                             self.retained_cells
                                 .map(|n| n.to_string())
                                 .unwrap_or_else(|| "-".to_string()),
+                        ),
+                    ],
+                ),
+                StatusSection::new(
+                    "Observed expression",
+                    vec![
+                        StatusMetric::new("Exonic cells", self.observed_exonic_cells.to_string()),
+                        StatusMetric::new(
+                            "Intronic cells",
+                            self.observed_intronic_cells.to_string(),
+                        ),
+                        StatusMetric::new("Exonic genes", self.observed_exonic_genes.to_string()),
+                        StatusMetric::new(
+                            "Intronic genes",
+                            self.observed_intronic_genes.to_string(),
+                        ),
+                        StatusMetric::new("Unique exonic UMIs", self.exonic_umis.to_string()),
+                        StatusMetric::new("Unique intronic UMIs", self.intronic_umis.to_string()),
+                    ],
+                ),
+                StatusSection::new(
+                    "Transcript matching",
+                    vec![
+                        StatusMetric::new(
+                            "Exact junction chain",
+                            self.match_exact_junction_chain.to_string(),
+                        ),
+                        StatusMetric::new("Compatible", self.match_compatible.to_string()),
+                        StatusMetric::new("Positive intronic", self.match_intronic.to_string()),
+                        StatusMetric::new("Incompatible", self.match_incompatible.to_string()),
+                        StatusMetric::new(
+                            "Junction mismatch",
+                            self.match_junction_mismatch.to_string(),
+                        ),
+                        StatusMetric::new(
+                            "Overhang too large",
+                            self.match_overhang_too_large.to_string(),
                         ),
                     ],
                 ),

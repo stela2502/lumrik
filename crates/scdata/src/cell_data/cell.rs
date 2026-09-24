@@ -5,6 +5,7 @@ use crate::cell_data::GeneUmiHash;
 
 use core::fmt;
 use int_to_dna::int_to_dna::IntToDna;
+use mapping_info::MappingInfo;
 
 /// Struct describing multimapping reads.
 #[derive(Clone, Debug, Default)]
@@ -104,8 +105,19 @@ impl CellData {
     ///
     /// Only previously unseen `(feature_id, umi)` pairs are inserted.
     pub fn merge(&mut self, other: &CellData) {
+        let mut mapping = MappingInfo::new(None, 0.0, 0);
+        self.merge_with_mapping(other, &mut mapping);
+    }
+
+    /// Merge another cell while accounting accepted and duplicate UMIs.
+    ///
+    /// The decision is made exactly where the `(feature_id, umi)` pair is
+    /// inserted into `seen`: successful inserts are accepted, failed inserts
+    /// are UMI-level duplicates.
+    pub fn merge_with_mapping(&mut self, other: &CellData, mapping: &mut MappingInfo) {
         for gh in &other.seen {
             if !self.seen.insert(*gh) {
+                mapping.pcr_duplicates += 1;
                 #[cfg(debug_assertions)]
                 eprintln!(
                     "Warning: duplicate GeneUmiHash {:?} found during merge for cell {}",
@@ -114,6 +126,7 @@ impl CellData {
                 continue;
             }
 
+            mapping.ok_reads += 1;
             *self.total_reads.entry(gh.0).or_insert(0.0) += 1.0;
         }
     }

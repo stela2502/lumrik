@@ -15,9 +15,12 @@ mod reference_models;
 
 pub use clone_data::CloneData;
 pub use encoder::OneHotEncoder;
-pub use reference_models::{ReferenceModelEntry, ReferenceModels};
-pub use family::{align_fragment, AlignedCell, CellReceptor, Family, FamilyConfig, FamilyMutationReport, IndelEvent, LightClone, LightMember, MutationMeasurement, Receptor, SharedHcMutationReport};
+pub use family::{
+    AlignedCell, CellReceptor, Family, FamilyConfig, FamilyMutationReport, IndelEvent, LightClone,
+    LightMember, MutationMeasurement, Receptor, SharedHcMutationReport, align_fragment,
+};
 pub use pca::PcaModel;
+pub use reference_models::{ReferenceModelEntry, ReferenceModels};
 pub use tree::{MstTree, rooted_categorical_hex, rooted_continuous_hex};
 
 use ndarray::Array2;
@@ -131,10 +134,18 @@ impl ClonoMap {
         root_distance_cols: usize,
         k: usize,
     ) -> Result<Self, Box<dyn Error>> {
-        if row_labels.is_empty() || features.nrows() != row_labels.len() || groups.len() != row_labels.len() {
-            return Err("Grouped feature rows, labels and groups must be non-empty and row-aligned".into());
+        if row_labels.is_empty()
+            || features.nrows() != row_labels.len()
+            || groups.len() != row_labels.len()
+        {
+            return Err(
+                "Grouped feature rows, labels and groups must be non-empty and row-aligned".into(),
+            );
         }
-        if root_row >= features.nrows() || root_distance_cols == 0 || root_distance_cols > features.ncols() {
+        if root_row >= features.nrows()
+            || root_distance_cols == 0
+            || root_distance_cols > features.ncols()
+        {
             return Err("Invalid grouped-tree root or HC distance width".into());
         }
 
@@ -153,12 +164,32 @@ impl ClonoMap {
         let mut edges = Vec::with_capacity(features.nrows().saturating_sub(1));
         for rows in by_group.into_values() {
             edges.extend(MstTree::build_feature_rows(&features, &rows).edges);
-            let entry = rows.iter().copied().min_by(|&a, &b| {
-                let da = features.row(a).iter().take(root_distance_cols).map(|x| x * x).sum::<f32>();
-                let db = features.row(b).iter().take(root_distance_cols).map(|x| x * x).sum::<f32>();
-                da.total_cmp(&db).then_with(|| a.cmp(&b))
-            }).expect("non-empty grouped rows");
-            let root_distance = features.row(entry).iter().take(root_distance_cols).map(|x| x * x).sum::<f32>().sqrt();
+            let entry = rows
+                .iter()
+                .copied()
+                .min_by(|&a, &b| {
+                    let da = features
+                        .row(a)
+                        .iter()
+                        .take(root_distance_cols)
+                        .map(|x| x * x)
+                        .sum::<f32>();
+                    let db = features
+                        .row(b)
+                        .iter()
+                        .take(root_distance_cols)
+                        .map(|x| x * x)
+                        .sum::<f32>();
+                    da.total_cmp(&db).then_with(|| a.cmp(&b))
+                })
+                .expect("non-empty grouped rows");
+            let root_distance = features
+                .row(entry)
+                .iter()
+                .take(root_distance_cols)
+                .map(|x| x * x)
+                .sum::<f32>()
+                .sqrt();
             edges.push((root_row, entry, root_distance));
         }
         let tree = MstTree { edges };

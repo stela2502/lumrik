@@ -18,13 +18,12 @@ pub use cellrep::{
     EvidenceId, MapperEvidence, SequencePart,
 };
 pub use index::{
-    Chain, SegmentId, SegmentKind, Strand, VDJ_INDEX_FORMAT_VERSION, VdjIndex, VdjIndexBuilder,
-    VdjSegment,
+    Chain, SegmentId, SegmentKind, Strand, VdjIndex, VdjIndexBuilder, VdjSegment,
+    VDJ_INDEX_FORMAT_VERSION,
 };
 pub use recombination::{
-    ConstantRegionEvidence, DecodedNumericRecombinationId, DecodedRecombinationId, JunctionStructure,
-    ProductivityStatus,
-    ReceptorRole, Recombination, RecombinationId,
+    ConstantRegionEvidence, DecodedNumericRecombinationId, DecodedRecombinationId,
+    JunctionStructure, ProductivityStatus, ReceptorRole, Recombination, RecombinationId,
 };
 pub use runner::{
     BamIdentityResolver, BamIngestProgress, NelruneIdentityResolver, VdjRunner, VdjRunnerConfig,

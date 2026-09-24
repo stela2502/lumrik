@@ -239,7 +239,7 @@ fn run_clonomap_clone(seqs: &[String], outdir: &Path, args: &Args) -> anyhow::Re
         .map_err(|e| format!("Failed to write AA rows: {}", e))?;
 
     // === Optional plots ===
-        if args.plots {
+    if args.plots {
         model
             .pca
             .plot_2d_clusters(&model.tree, outdir.join("pca.svg").to_str().unwrap())

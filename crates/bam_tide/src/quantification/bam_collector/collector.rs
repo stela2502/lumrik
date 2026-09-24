@@ -134,6 +134,19 @@ impl BamCollector {
     }
 
     pub fn run_paths(self, paths: &[std::path::PathBuf]) -> Result<BamCollectorResult> {
+        self.run_paths_with_progress(paths, |_| {})
+    }
+
+    /// Collect BAM paths while publishing a snapshot after every processed chunk.
+    /// The callback runs on the collector thread and must stay cheap.
+    pub fn run_paths_with_progress<F>(
+        self,
+        paths: &[std::path::PathBuf],
+        mut progress: F,
+    ) -> Result<BamCollectorResult>
+    where
+        F: FnMut(&QuantData),
+    {
         let mut data = QuantData::new();
         let Some(first_path) = paths.first() else {
             anyhow::bail!("no BAM files supplied");
@@ -199,6 +212,7 @@ impl BamCollector {
                 &mut seen_unbarcoded,
                 read_tag_table.as_ref(),
                 (path_id as u64) + 1,
+                &mut progress,
             )
             .with_context(|| format!("collecting BAM {}", path.display()))?;
         }
@@ -224,6 +238,7 @@ impl BamCollector {
         let mut n_seen = 0usize;
         let mut seen_unbarcoded = HashSet::<(u64, u64)>::new();
 
+        let mut no_progress = |_: &QuantData| {};
         self.collect_reader(
             &mut reader,
             snp.as_ref(),
@@ -232,6 +247,7 @@ impl BamCollector {
             &mut seen_unbarcoded,
             None,
             1,
+            &mut no_progress,
         )?;
 
         Ok(BamCollectorResult { data, snp })
@@ -246,6 +262,7 @@ impl BamCollector {
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
         read_tag_table: Option<&ReadTagTable>,
         bulk_cell_id: u64,
+        progress: &mut dyn FnMut(&QuantData),
     ) -> Result<()> {
         let header = reader.header().clone();
 
@@ -292,6 +309,7 @@ impl BamCollector {
                     n_seen,
                     seen_unbarcoded,
                     bulk_cell_id,
+                    progress,
                 )? {
                     break;
                 }
@@ -312,11 +330,13 @@ impl BamCollector {
                     n_seen,
                     seen_unbarcoded,
                     bulk_cell_id,
+                    progress,
                 )?;
             }
         }
 
         self.flush_jobs(&processor, &mut jobs, data)?;
+        progress(data);
         Ok(())
     }
 
@@ -332,6 +352,7 @@ impl BamCollector {
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
         bulk_cell_id: u64,
+        progress: &mut dyn FnMut(&QuantData),
     ) -> Result<bool> {
         data.report
             .report_n("bam_records_seen", group.records().len());
@@ -359,7 +380,7 @@ impl BamCollector {
                     jobs,
                     n_seen,
                 );
-                if self.after_job(processor, jobs, data, *n_seen)? {
+                if self.after_job(processor, jobs, data, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -376,10 +397,12 @@ impl BamCollector {
                 sc_primer::GrammarType::Vdj => "primer provenance VDJ",
                 sc_primer::GrammarType::Other => "primer provenance Other",
             };
-            data.report.report_n(provenance_label, group.records().len());
+            data.report
+                .report_n(provenance_label, group.records().len());
 
             if !self.config.grammar_type.accepts(read_tag.grammar_type) {
-                data.report.report_n("primer provenance filtered", group.records().len());
+                data.report
+                    .report_n("primer provenance filtered", group.records().len());
                 return Ok(false);
             }
 
@@ -397,7 +420,7 @@ impl BamCollector {
                 record.push_aux(b"UY", Aux::String(umi_qual))?;
 
                 self.push_job(job_builder.build(record, &mut data.report)?, jobs, n_seen);
-                if self.after_job(processor, jobs, data, *n_seen)? {
+                if self.after_job(processor, jobs, data, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -407,9 +430,15 @@ impl BamCollector {
         // BAMs without Lumrik provenance predate GrammarType (or come from an
         // external CB/UB source). Preserve historical behaviour by treating
         // those records as GEX.
-        data.report.report_n("primer provenance GEX (legacy)", group.records().len());
-        if !self.config.grammar_type.accepts(sc_primer::GrammarType::Gex) {
-            data.report.report_n("primer provenance filtered", group.records().len());
+        data.report
+            .report_n("primer provenance GEX (legacy)", group.records().len());
+        if !self
+            .config
+            .grammar_type
+            .accepts(sc_primer::GrammarType::Gex)
+        {
+            data.report
+                .report_n("primer provenance filtered", group.records().len());
             return Ok(false);
         }
 
@@ -442,7 +471,7 @@ impl BamCollector {
                     jobs,
                     n_seen,
                 );
-                if self.after_job(processor, jobs, data, *n_seen)? {
+                if self.after_job(processor, jobs, data, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -454,7 +483,7 @@ impl BamCollector {
         // record-for-record identical to the previous JobBuilder path.
         for record in group.records() {
             self.push_job(job_builder.build(record, &mut data.report)?, jobs, n_seen);
-            if self.after_job(processor, jobs, data, *n_seen)? {
+            if self.after_job(processor, jobs, data, *n_seen, progress)? {
                 return Ok(true);
             }
         }
@@ -475,9 +504,11 @@ impl BamCollector {
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
         n_seen: usize,
+        progress: &mut dyn FnMut(&QuantData),
     ) -> Result<bool> {
         if jobs.len() >= CHUNK {
             self.flush_jobs(processor, jobs, data)?;
+            progress(data);
         }
         Ok(self.config.max_reads.is_some_and(|max| n_seen >= max))
     }

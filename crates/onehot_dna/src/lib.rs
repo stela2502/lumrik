@@ -224,10 +224,18 @@ impl OneHotSequence {
             let lo = IUPAC_LUT[seq[i] as usize];
             let hi = IUPAC_LUT[seq[i + 1] as usize];
             if lo == INVALID_IUPAC {
-                anyhow::bail!("invalid IUPAC base {:?} at sequence position {}", seq[i] as char, i);
+                anyhow::bail!(
+                    "invalid IUPAC base {:?} at sequence position {}",
+                    seq[i] as char,
+                    i
+                );
             }
             if hi == INVALID_IUPAC {
-                anyhow::bail!("invalid IUPAC base {:?} at sequence position {}", seq[i + 1] as char, i + 1);
+                anyhow::bail!(
+                    "invalid IUPAC base {:?} at sequence position {}",
+                    seq[i + 1] as char,
+                    i + 1
+                );
             }
             packed.push(lo | (hi << 4));
             i += 2;
@@ -235,11 +243,18 @@ impl OneHotSequence {
         if i < seq.len() {
             let lo = IUPAC_LUT[seq[i] as usize];
             if lo == INVALID_IUPAC {
-                anyhow::bail!("invalid IUPAC base {:?} at sequence position {}", seq[i] as char, i);
+                anyhow::bail!(
+                    "invalid IUPAC base {:?} at sequence position {}",
+                    seq[i] as char,
+                    i
+                );
             }
             packed.push(lo);
         }
-        Ok(Self { packed, len: seq.len() })
+        Ok(Self {
+            packed,
+            len: seq.len(),
+        })
     }
 
     /// Build directly from four-bit biological possibility masks.
@@ -249,7 +264,10 @@ impl OneHotSequence {
             let shift = (i & 1) * 4;
             packed[i >> 1] |= (mask & 0x0f) << shift;
         }
-        Self { packed, len: masks.len() }
+        Self {
+            packed,
+            len: masks.len(),
+        }
     }
 
     /// Expand an existing four-bases-per-byte 2-bit sequence directly into the
@@ -264,25 +282,35 @@ impl OneHotSequence {
         }
         packed.truncate(len.div_ceil(Self::BASES_PER_BYTE));
         if len & 1 != 0 {
-            if let Some(last) = packed.last_mut() { *last &= 0x0f; }
+            if let Some(last) = packed.last_mut() {
+                *last &= 0x0f;
+            }
         }
         Self { packed, len }
     }
 
     #[inline]
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 
     #[inline]
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 
     /// Expose the two-bases-per-byte packed storage.
     #[inline]
-    pub fn packed_bytes(&self) -> &[u8] { &self.packed }
+    pub fn packed_bytes(&self) -> &[u8] {
+        &self.packed
+    }
 
     /// Return the four-bit IUPAC possibility mask at one base position.
     #[inline(always)]
     pub fn mask_at(&self, pos: usize) -> Option<OneHotNibble> {
-        if pos >= self.len { return None; }
+        if pos >= self.len {
+            return None;
+        }
         let byte = self.packed[pos >> 1];
         Some(if pos & 1 == 0 { byte & 0x0f } else { byte >> 4 })
     }
@@ -291,7 +319,9 @@ impl OneHotSequence {
     /// base is in the low nibble. At the final odd base the high nibble is zero.
     #[inline(always)]
     pub fn packed_pair_at(&self, pos: usize) -> Option<u8> {
-        if pos >= self.len { return None; }
+        if pos >= self.len {
+            return None;
+        }
         if pos & 1 == 0 {
             return self.packed.get(pos >> 1).copied();
         }
@@ -320,12 +350,18 @@ impl OneHotSequence {
         external: &[OneHotNibble],
         from: usize,
     ) -> Option<usize> {
-        if lookup == 0 || external.is_empty() { return None; }
+        if lookup == 0 || external.is_empty() {
+            return None;
+        }
         let width = 1usize.checked_add(external.len())?;
         let last = self.len.checked_sub(width)?;
-        if from > last { return None; }
+        if from > last {
+            return None;
+        }
         'candidate: for pos in from..=last {
-            if !compatible_masks(self.mask_at(pos)?, lookup) { continue; }
+            if !compatible_masks(self.mask_at(pos)?, lookup) {
+                continue;
+            }
             for (i, &expected) in external.iter().enumerate() {
                 if expected == 0 || !compatible_masks(self.mask_at(pos + 1 + i)?, expected) {
                     continue 'candidate;
@@ -338,7 +374,9 @@ impl OneHotSequence {
 
     #[inline]
     pub fn find_with_external_after(
-        &self, lookup: OneHotNibble, external: &[OneHotNibble],
+        &self,
+        lookup: OneHotNibble,
+        external: &[OneHotNibble],
     ) -> Option<usize> {
         self.find_next_with_external_after(lookup, external, 0)
     }
@@ -351,11 +389,17 @@ impl OneHotSequence {
         external: &[OneHotNibble],
         from: usize,
     ) -> Option<usize> {
-        if lookup == 0 || external.is_empty() { return None; }
+        if lookup == 0 || external.is_empty() {
+            return None;
+        }
         let first = from.max(external.len());
-        if first >= self.len { return None; }
+        if first >= self.len {
+            return None;
+        }
         'candidate: for pos in first..self.len {
-            if !compatible_masks(self.mask_at(pos)?, lookup) { continue; }
+            if !compatible_masks(self.mask_at(pos)?, lookup) {
+                continue;
+            }
             let start = pos - external.len();
             for (i, &expected) in external.iter().enumerate() {
                 if expected == 0 || !compatible_masks(self.mask_at(start + i)?, expected) {
@@ -369,7 +413,9 @@ impl OneHotSequence {
 
     #[inline]
     pub fn find_with_external_before(
-        &self, lookup: OneHotNibble, external: &[OneHotNibble],
+        &self,
+        lookup: OneHotNibble,
+        external: &[OneHotNibble],
     ) -> Option<usize> {
         self.find_next_with_external_before(lookup, external, external.len())
     }
@@ -396,9 +442,13 @@ impl OneHotSequence {
         seed_len: usize,
         max_mismatches: usize,
     ) -> Option<usize> {
-        if pattern.is_empty() || seed_len == 0 || seed_len > pattern.len() { return None; }
+        if pattern.is_empty() || seed_len == 0 || seed_len > pattern.len() {
+            return None;
+        }
         let last = self.len.checked_sub(pattern.len())?;
-        if from > last { return None; }
+        if from > last {
+            return None;
+        }
 
         'candidate: for pos in from..=last {
             let mut done = 0usize;
@@ -427,7 +477,11 @@ impl OneHotSequence {
     /// Two bases are consumed per iteration using a single packed byte from
     /// each sequence, including arbitrary odd starts.
     pub fn compatibility_counts(
-        &self, start: usize, other: &Self, other_start: usize, len: usize,
+        &self,
+        start: usize,
+        other: &Self,
+        other_start: usize,
+        len: usize,
     ) -> Option<(usize, usize)> {
         if start.checked_add(len)? > self.len || other_start.checked_add(len)? > other.len {
             return None;
@@ -444,7 +498,9 @@ impl OneHotSequence {
                 let bm = (b >> shift) & 0x0f;
                 if am != 0 && bm != 0 {
                     informative += 1;
-                    if compatible_masks(am, bm) { compatible += 1; }
+                    if compatible_masks(am, bm) {
+                        compatible += 1;
+                    }
                 }
             }
             done += take;
@@ -462,11 +518,20 @@ impl OneHotSequence {
     #[inline]
     pub fn window<const N: usize>(&self, start: usize) -> Result<OneHot<N>, OneHotError> {
         if N > OneHot::<N>::MAX_LEN {
-            return Err(OneHotError::TooLong { max: OneHot::<N>::MAX_LEN, observed: N });
+            return Err(OneHotError::TooLong {
+                max: OneHot::<N>::MAX_LEN,
+                observed: N,
+            });
         }
-        let end = start.checked_add(N).ok_or(OneHotError::WrongLength { expected: N, observed: 0 })?;
+        let end = start.checked_add(N).ok_or(OneHotError::WrongLength {
+            expected: N,
+            observed: 0,
+        })?;
         if end > self.len {
-            return Err(OneHotError::WrongLength { expected: N, observed: self.len.saturating_sub(start) });
+            return Err(OneHotError::WrongLength {
+                expected: N,
+                observed: self.len.saturating_sub(start),
+            });
         }
         let mut bits = 0u128;
         for i in 0..N {
@@ -476,23 +541,42 @@ impl OneHotSequence {
     }
 
     #[inline]
-    pub fn reverse_complement_window<const N: usize>(&self, start: usize) -> Result<OneHot<N>, OneHotError> {
-        let end = start.checked_add(N).ok_or(OneHotError::WrongLength { expected: N, observed: 0 })?;
+    pub fn reverse_complement_window<const N: usize>(
+        &self,
+        start: usize,
+    ) -> Result<OneHot<N>, OneHotError> {
+        let end = start.checked_add(N).ok_or(OneHotError::WrongLength {
+            expected: N,
+            observed: 0,
+        })?;
         if end > self.len {
-            return Err(OneHotError::WrongLength { expected: N, observed: self.len.saturating_sub(start) });
+            return Err(OneHotError::WrongLength {
+                expected: N,
+                observed: self.len.saturating_sub(start),
+            });
         }
         let forward_start = self.len - end;
         Ok(self.window::<N>(forward_start)?.reverse_complement())
     }
 
     #[inline]
-    pub fn mismatches_at<const N: usize>(&self, start: usize, target: OneHot<N>) -> Result<u32, OneHotError> {
+    pub fn mismatches_at<const N: usize>(
+        &self,
+        start: usize,
+        target: OneHot<N>,
+    ) -> Result<u32, OneHotError> {
         Ok(self.window::<N>(start)?.mismatches(target))
     }
 
     #[inline]
-    pub fn reverse_complement_mismatches_at<const N: usize>(&self, start: usize, target: OneHot<N>) -> Result<u32, OneHotError> {
-        Ok(self.reverse_complement_window::<N>(start)?.mismatches(target))
+    pub fn reverse_complement_mismatches_at<const N: usize>(
+        &self,
+        start: usize,
+        target: OneHot<N>,
+    ) -> Result<u32, OneHotError> {
+        Ok(self
+            .reverse_complement_window::<N>(start)?
+            .mismatches(target))
     }
 
     pub fn to_dna_string(&self) -> String {
@@ -552,22 +636,38 @@ const INVALID_IUPAC: u8 = 0xff;
 
 const fn build_iupac_lut() -> [u8; 256] {
     let mut lut = [INVALID_IUPAC; 256];
-    lut[b'A' as usize] = 0b0001; lut[b'a' as usize] = 0b0001;
-    lut[b'C' as usize] = 0b0010; lut[b'c' as usize] = 0b0010;
-    lut[b'G' as usize] = 0b0100; lut[b'g' as usize] = 0b0100;
-    lut[b'T' as usize] = 0b1000; lut[b't' as usize] = 0b1000;
-    lut[b'U' as usize] = 0b1000; lut[b'u' as usize] = 0b1000;
-    lut[b'R' as usize] = 0b0101; lut[b'r' as usize] = 0b0101;
-    lut[b'Y' as usize] = 0b1010; lut[b'y' as usize] = 0b1010;
-    lut[b'S' as usize] = 0b0110; lut[b's' as usize] = 0b0110;
-    lut[b'W' as usize] = 0b1001; lut[b'w' as usize] = 0b1001;
-    lut[b'K' as usize] = 0b1100; lut[b'k' as usize] = 0b1100;
-    lut[b'M' as usize] = 0b0011; lut[b'm' as usize] = 0b0011;
-    lut[b'B' as usize] = 0b1110; lut[b'b' as usize] = 0b1110;
-    lut[b'D' as usize] = 0b1101; lut[b'd' as usize] = 0b1101;
-    lut[b'H' as usize] = 0b1011; lut[b'h' as usize] = 0b1011;
-    lut[b'V' as usize] = 0b0111; lut[b'v' as usize] = 0b0111;
-    lut[b'N' as usize] = 0b1111; lut[b'n' as usize] = 0b1111;
+    lut[b'A' as usize] = 0b0001;
+    lut[b'a' as usize] = 0b0001;
+    lut[b'C' as usize] = 0b0010;
+    lut[b'c' as usize] = 0b0010;
+    lut[b'G' as usize] = 0b0100;
+    lut[b'g' as usize] = 0b0100;
+    lut[b'T' as usize] = 0b1000;
+    lut[b't' as usize] = 0b1000;
+    lut[b'U' as usize] = 0b1000;
+    lut[b'u' as usize] = 0b1000;
+    lut[b'R' as usize] = 0b0101;
+    lut[b'r' as usize] = 0b0101;
+    lut[b'Y' as usize] = 0b1010;
+    lut[b'y' as usize] = 0b1010;
+    lut[b'S' as usize] = 0b0110;
+    lut[b's' as usize] = 0b0110;
+    lut[b'W' as usize] = 0b1001;
+    lut[b'w' as usize] = 0b1001;
+    lut[b'K' as usize] = 0b1100;
+    lut[b'k' as usize] = 0b1100;
+    lut[b'M' as usize] = 0b0011;
+    lut[b'm' as usize] = 0b0011;
+    lut[b'B' as usize] = 0b1110;
+    lut[b'b' as usize] = 0b1110;
+    lut[b'D' as usize] = 0b1101;
+    lut[b'd' as usize] = 0b1101;
+    lut[b'H' as usize] = 0b1011;
+    lut[b'h' as usize] = 0b1011;
+    lut[b'V' as usize] = 0b0111;
+    lut[b'v' as usize] = 0b0111;
+    lut[b'N' as usize] = 0b1111;
+    lut[b'n' as usize] = 0b1111;
     lut
 }
 
@@ -604,10 +704,22 @@ pub const fn compatible_masks(a: u8, b: u8) -> bool {
 #[inline]
 const fn decode_nibble(nibble: u8) -> u8 {
     match nibble & 0x0f {
-        0b0001 => b'A', 0b0010 => b'C', 0b0100 => b'G', 0b1000 => b'T',
-        0b0101 => b'R', 0b1010 => b'Y', 0b0110 => b'S', 0b1001 => b'W',
-        0b1100 => b'K', 0b0011 => b'M', 0b1110 => b'B', 0b1101 => b'D',
-        0b1011 => b'H', 0b0111 => b'V', 0b1111 => b'N', _ => b'N',
+        0b0001 => b'A',
+        0b0010 => b'C',
+        0b0100 => b'G',
+        0b1000 => b'T',
+        0b0101 => b'R',
+        0b1010 => b'Y',
+        0b0110 => b'S',
+        0b1001 => b'W',
+        0b1100 => b'K',
+        0b0011 => b'M',
+        0b1110 => b'B',
+        0b1101 => b'D',
+        0b1011 => b'H',
+        0b0111 => b'V',
+        0b1111 => b'N',
+        _ => b'N',
     }
 }
 
@@ -875,7 +987,6 @@ mod tests {
         assert_eq!(a.compatibility_counts(31, &b, 31, 33), Some((33, 33)));
     }
 
-
     #[test]
     fn lut_packing_rejects_non_iupac_input() {
         let err = OneHotSequence::try_from_iupac_bytes(b"ACGT|N").unwrap_err();
@@ -918,12 +1029,19 @@ mod tests {
         let seq = OneHotSequence::from_iupac_bytes(b"TTACGTRNAA");
         let pattern = OneHotSequence::from_iupac_bytes(b"ACGTR");
         let lookup = pattern.mask_at(0).unwrap();
-        let external: Vec<_> = (1..pattern.len()).map(|i| pattern.mask_at(i).unwrap()).collect();
+        let external: Vec<_> = (1..pattern.len())
+            .map(|i| pattern.mask_at(i).unwrap())
+            .collect();
         assert_eq!(seq.find_with_external_after(lookup, &external), Some(2));
         assert_eq!(seq.find_with_external_after(lookup, &[]), None);
         let wrong = OneHotSequence::from_iupac_bytes(b"ACGTC");
-        let wrong_external: Vec<_> = (1..wrong.len()).map(|i| wrong.mask_at(i).unwrap()).collect();
-        assert_eq!(seq.find_with_external_after(wrong.mask_at(0).unwrap(), &wrong_external), None);
+        let wrong_external: Vec<_> = (1..wrong.len())
+            .map(|i| wrong.mask_at(i).unwrap())
+            .collect();
+        assert_eq!(
+            seq.find_with_external_after(wrong.mask_at(0).unwrap(), &wrong_external),
+            None
+        );
     }
 
     #[test]
@@ -931,9 +1049,14 @@ mod tests {
         let seq = OneHotSequence::from_iupac_bytes(b"CCAGTCC");
         let expected = OneHotSequence::from_iupac_bytes(b"RGT");
         let after = [expected.mask_at(1).unwrap(), expected.mask_at(2).unwrap()];
-        assert_eq!(seq.find_with_external_after(expected.mask_at(0).unwrap(), &after), Some(2));
+        assert_eq!(
+            seq.find_with_external_after(expected.mask_at(0).unwrap(), &after),
+            Some(2)
+        );
         let before = [expected.mask_at(0).unwrap(), expected.mask_at(1).unwrap()];
-        assert_eq!(seq.find_with_external_before(expected.mask_at(2).unwrap(), &before), Some(4));
+        assert_eq!(
+            seq.find_with_external_before(expected.mask_at(2).unwrap(), &before),
+            Some(4)
+        );
     }
-
 }

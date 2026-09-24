@@ -101,7 +101,7 @@ pub struct TestDataCli {
     /// Minimum number of exonic molecules required for a cell to be exported
     /// in the truth matrices.
     #[arg(long, value_name = "N", default_value_t = 90)]
-    pub min_cell_counts: usize,
+    pub min_umi_count: usize,
 
     /// Feature namespace used for exonic/intronic truth matrices.
     #[arg(long, value_enum, default_value_t = TruthFeatureMode::Gene)]
@@ -119,7 +119,7 @@ impl TestDataCli {
             body_error_rate: self.body_error_rate,
             end_error_rate: self.end_error_rate,
             bad_end_bases: self.bad_end_bases,
-            min_cell_counts: self.min_cell_counts,
+            min_umi_count: self.min_umi_count,
             truth_path: self.truth_path.clone(),
             seed: self.seed,
             truth_feature_mode: self.truth_feature_mode,

@@ -200,3 +200,138 @@ fn nelrune_run_none_grammar_dedups_by_r1_and_r2_sequence() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn bd_cell_umi_primer_qname_round_trip_preserves_identity() -> Result<()> {
+    use std::collections::HashMap;
+
+    use sc_primer::{BdCellVersion, Chemistry, ReadTagRecord, RhapsodyWhitelist};
+
+    let detector =
+        PrimerDetector::from_chemistry(Chemistry::BdV2_384).map_err(anyhow::Error::msg)?;
+    let grammar = detector.grammar();
+    let whitelist = RhapsodyWhitelist::builtin(BdCellVersion::V2_384);
+    let r2 = b"ACGTGTCAGTACGATCGTAGCTAGCATCGATGCTAGCTACGATCGTAGCTAGCATCGATGCTAG";
+
+    let umis: [&[u8]; 10] = [
+        b"AAAAAA", b"AAAAAC", b"AAAAAG", b"AAAAAT", b"AAAACA", b"AAAACC", b"AAAACG", b"AAAACT",
+        b"AAAAGA", b"AAAAGC",
+    ];
+
+    let mut recovered: HashMap<(Vec<u8>, Vec<u8>), usize> = HashMap::new();
+
+    for cell_index in 0..10_u64 {
+        let cell_id = cell_index + 1;
+        let cell_cassette = detector
+            .cell_seq_for_index(cell_index)
+            .map_err(anyhow::Error::msg)?;
+        let canonical_cell = whitelist
+            .cell_id_to_seq(cell_id)
+            .expect("synthetic BD cell id must have a canonical 27-base barcode");
+
+        for (umi_index, umi) in umis.iter().enumerate() {
+            for copy in 0..2 {
+                let primer = grammar
+                    .synthesize(&cell_cassette, umi)
+                    .map_err(anyhow::Error::msg)?;
+                let qual = vec![b'I'; primer.len()];
+                let hit = detector
+                    .detect_first(&primer, &qual)
+                    .map_err(anyhow::Error::msg)?
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "primer detection failed for cell_index={cell_index} umi_index={umi_index} copy={copy} cell={} umi={}",
+                            String::from_utf8_lossy(&canonical_cell),
+                            String::from_utf8_lossy(umi),
+                        )
+                    });
+
+                let detected_cell = hit.cell_seq.clone().unwrap_or_else(|| {
+                    hit.get_cell(&primer, &qual)
+                        .expect("synthetic primer CELL slice must be valid")
+                        .seq
+                        .to_vec()
+                });
+                let detected_umi = hit
+                    .get_umi(&primer, &qual)
+                    .expect("synthetic primer UMI slice must be valid")
+                    .seq
+                    .to_vec();
+
+                assert_eq!(
+                    detected_cell, canonical_cell,
+                    "primer CELL round trip changed identity at cell_index={cell_index} cell_id={cell_id} umi_index={umi_index} copy={copy}"
+                );
+                assert_eq!(
+                    detected_umi, *umi,
+                    "primer UMI round trip changed identity at cell_index={cell_index} umi_index={umi_index} copy={copy}"
+                );
+
+                let before_identity = grammar
+                    .molecule_identity_if_exact(
+                        Some(&detected_cell),
+                        Some(&detected_umi),
+                        &primer,
+                        r2,
+                    )
+                    .map_err(anyhow::Error::msg)?
+                    .expect("synthetic A/C/G/T molecule identity must be exact");
+
+                let tag = ReadTagRecord::new(
+                    format!("synthetic-{cell_index}-{umi_index}-{copy}"),
+                    None,
+                    &detected_cell,
+                    vec![b'I'; detected_cell.len()],
+                    &detected_umi,
+                    vec![b'I'; detected_umi.len()],
+                );
+                let qname = tag.extend_qname(&tag.read_id);
+                let decoded = ReadTagRecord::from_qname(&qname)?;
+
+                assert_eq!(
+                    decoded.cell_seq, canonical_cell,
+                    "QNAME hex CELL round trip changed identity at cell_index={cell_index} cell_id={cell_id} umi_index={umi_index} copy={copy}; qname={qname}"
+                );
+                assert_eq!(
+                    decoded.umi_seq, *umi,
+                    "QNAME hex UMI round trip changed identity at cell_index={cell_index} umi_index={umi_index} copy={copy}; qname={qname}"
+                );
+
+                let after_identity = grammar
+                    .molecule_identity_if_exact(
+                        Some(&decoded.cell_seq),
+                        Some(&decoded.umi_seq),
+                        &primer,
+                        r2,
+                    )
+                    .map_err(anyhow::Error::msg)?
+                    .expect("QNAME-decoded molecule identity must remain exact");
+
+                assert_eq!(
+                    after_identity, before_identity,
+                    "numeric molecule identity changed across primer/QNAME round trip at cell_index={cell_index} umi_index={umi_index} copy={copy}"
+                );
+
+                *recovered
+                    .entry((decoded.cell_seq, decoded.umi_seq))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+
+    assert_eq!(
+        recovered.len(),
+        100,
+        "10 cells x 10 UMIs must yield 100 identities"
+    );
+    assert!(
+        recovered.values().all(|&count| count == 2),
+        "every synthetic cell+UMI identity must survive exactly twice; bad counts: {:?}",
+        recovered
+            .iter()
+            .filter(|&(_, &count)| count != 2)
+            .collect::<Vec<_>>()
+    );
+
+    Ok(())
+}

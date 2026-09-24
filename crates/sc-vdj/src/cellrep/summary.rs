@@ -302,8 +302,8 @@ impl ReceptorSequenceEvidence {
                 for base in 0..4 {
                     counts[base][dst] = counts[base][dst]
                         .saturating_add(self.base_counts[base].get(i).copied().unwrap_or(0));
-                    quals[base][dst] = quals[base][dst]
-                        .max(self.base_max_qual[base].get(i).copied().unwrap_or(0));
+                    quals[base][dst] =
+                        quals[base][dst].max(self.base_max_qual[base].get(i).copied().unwrap_or(0));
                 }
             }
             if let Some(i) = bi {
@@ -363,22 +363,39 @@ impl ReceptorSequenceEvidence {
 
     fn trace_split_dump(&self, label: &str, index: &VdjIndex) {
         let seq = self.consensus(index);
-        let segments = self.segment_support.iter().map(|(id, n)| {
-            index.segment(*id).map(|s| format!("{}:{n}", s.name))
-                .unwrap_or_else(|| format!("#{id:?}:{n}"))
-        }).collect::<Vec<_>>().join(",");
+        let segments = self
+            .segment_support
+            .iter()
+            .map(|(id, n)| {
+                index
+                    .segment(*id)
+                    .map(|s| format!("{}:{n}", s.name))
+                    .unwrap_or_else(|| format!("#{id:?}:{n}"))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         eprintln!(
             "[sc-vdj split-trace] {label}: support={} len={} segments=[{}] consensus={}",
-            self.support_features, self.len(), segments, String::from_utf8_lossy(&seq),
+            self.support_features,
+            self.len(),
+            segments,
+            String::from_utf8_lossy(&seq),
         );
         // The collector is already represented by the ambiguity-aware consensus
         // above.  Keep split tracing human-readable: the raw A/C/G/T position
         // vectors are useful internally, but obscure the actual sequence being
         // accepted or rejected.
-        let anchors = self.germline_anchors.iter().map(|a| {
-            index.segment(a.segment_id).map(|s| format!("{}@{}", s.name, a.summary_start))
-                .unwrap_or_else(|| format!("#{:?}@{}", a.segment_id, a.summary_start))
-        }).collect::<Vec<_>>().join(",");
+        let anchors = self
+            .germline_anchors
+            .iter()
+            .map(|a| {
+                index
+                    .segment(a.segment_id)
+                    .map(|s| format!("{}@{}", s.name, a.summary_start))
+                    .unwrap_or_else(|| format!("#{:?}@{}", a.segment_id, a.summary_start))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         eprintln!("[sc-vdj split-trace]   anchors: [{anchors}]");
     }
 
@@ -480,7 +497,9 @@ fn trace_new_summary_split(
     existing: &[ReceptorSequenceEvidence],
     index: &VdjIndex,
 ) {
-    if std::env::var_os("SC_VDJ_TRACE_SUMMARY_SPLITS").is_none() { return; }
+    if std::env::var_os("SC_VDJ_TRACE_SUMMARY_SPLITS").is_none() {
+        return;
+    }
     eprintln!("\n[sc-vdj split-trace] NEW SUMMARY: {context}; incoming was rejected by {} existing model(s)", existing.len());
     incoming.trace_split_dump("INCOMING", index);
     for (i, model) in existing.iter().enumerate() {
@@ -713,11 +732,7 @@ struct OverlapAlignment {
 /// gaps: choose the best endpoint on the last row/column, then traceback to an
 /// edge.  We require >=90% identity among aligned A/C/G/T pairs and at least
 /// `max(min_overlap, 24)` informative aligned bases.
-fn needleman_wunsch_overlap(
-    a: &[u8],
-    b: &[u8],
-    min_overlap: usize,
-) -> Option<OverlapAlignment> {
+fn needleman_wunsch_overlap(a: &[u8], b: &[u8], min_overlap: usize) -> Option<OverlapAlignment> {
     if a.is_empty() || b.is_empty() {
         return None;
     }
@@ -783,8 +798,7 @@ fn needleman_wunsch_overlap(
                 let bj = j - 1;
                 let x = a[ai].to_ascii_uppercase();
                 let y = b[bj].to_ascii_uppercase();
-                if matches!(x, b'A' | b'C' | b'G' | b'T')
-                    && matches!(y, b'A' | b'C' | b'G' | b'T')
+                if matches!(x, b'A' | b'C' | b'G' | b'T') && matches!(y, b'A' | b'C' | b'G' | b'T')
                 {
                     informative += 1;
                     if x == y {

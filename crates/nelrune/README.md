@@ -114,9 +114,24 @@ On clusters where the compute-node hostname used by your browser differs from
 ## Output
 
 - `nelrune.log` — stage/progress log plus the original normalizer and quantifier `MappingInfo` reports
-- `nelrune-report.txt` — final quantification `MappingInfo`
-- `exonic/`, `intronic/`, and optional SNP output directories from `QuantData::write`
+- `nelrune-report.txt` — final quantification report, including permanent cell-calling/accounting diagnostics
+- `exonic/`, `intronic/`, and optional SNP output directories — **filtered canonical-cell matrices**
+- `unfiltered/exonic/`, `unfiltered/intronic/`, and optional SNP directories — **all observed barcode evidence (>=1 UMI) before canonical cell calling**
 - mapper BAM only when `--bam-out` is supplied; otherwise the temporary mapper BAM is removed after quantification
+
+### Filtered and unfiltered matrices are both part of the output contract
+
+Nelrune must preserve the pre-cell-calling GEX evidence. The normal top-level
+matrices contain the canonical called cells used downstream; the matching
+`unfiltered/` matrices contain every observed barcode with at least one UMI.
+The unfiltered matrices are intentionally retained so that barcode-rank/cell
+calling can be audited, alternative callers can be tested, and evidence is not
+lost when a caller is unexpectedly stringent. **Do not remove the unfiltered
+export as an output-size optimization or replace it with filtered-only output.**
+
+`nelrune-report.txt` records the number of exonic/intronic barcodes before the
+cutoff, UMI totals, counts above standard UMI thresholds, the cell-calling
+method/cutoff, retained cells, and cells not called.
 
 ## Deliberate minimalism
 

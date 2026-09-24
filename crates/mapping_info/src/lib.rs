@@ -13,6 +13,59 @@ use chrono::{DateTime, Utc};
 
 use std::fmt;
 
+/// Fixed-width signed integer histogram used for cheap diagnostics.
+///
+/// Values below/above the configured range are accumulated in underflow/overflow
+/// counters, so memory use is bounded regardless of the observed values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedHistogram {
+    min: i32,
+    max: i32,
+    counts: Vec<usize>,
+    underflow: usize,
+    overflow: usize,
+}
+
+impl SignedHistogram {
+    pub fn new(min: i32, max: i32) -> Self {
+        assert!(min <= max, "histogram minimum must not exceed maximum");
+        Self {
+            min,
+            max,
+            counts: vec![0; (max - min + 1) as usize],
+            underflow: 0,
+            overflow: 0,
+        }
+    }
+
+    pub fn observe(&mut self, value: i32) {
+        if value < self.min {
+            self.underflow += 1;
+        } else if value > self.max {
+            self.overflow += 1;
+        } else {
+            self.counts[(value - self.min) as usize] += 1;
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        assert_eq!(
+            (self.min, self.max),
+            (other.min, other.max),
+            "cannot merge histograms with different ranges"
+        );
+        self.underflow += other.underflow;
+        self.overflow += other.overflow;
+        for (a, b) in self.counts.iter_mut().zip(&other.counts) {
+            *a += *b;
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.underflow == 0 && self.overflow == 0 && self.counts.iter().all(|&n| n == 0)
+    }
+}
+
 /// MappingInfo captures all mapping data and is a way to easily copy this data over multiple analysis runs.
 #[derive(Debug)]
 pub struct MappingInfo {
@@ -56,6 +109,8 @@ pub struct MappingInfo {
     pub named_timings: HashMap<String, Duration>,
     pub reads_log: BTreeMap<String, usize>,
     pub error_counts: HashMap<String, usize>, // To store error types and their counts
+    /// Bounded named diagnostic histograms.
+    pub signed_histograms: BTreeMap<String, SignedHistogram>,
     // log should also print (if not likely to tty)
     #[allow(dead_code)]
     std_out_is_tty: bool,
@@ -199,7 +254,9 @@ impl fmt::Display for MappingInfo {
             )?;
             writeln!(f, "  {}", "-".repeat(32 + 1 + 15 + 19))?;
             for (name, value) in &self.reads_log {
-                if name.starts_with("primer provenance ") || name.starts_with("contig absent from splice index: ") {
+                if name.starts_with("primer provenance ")
+                    || name.starts_with("contig absent from splice index: ")
+                {
                     continue;
                 }
                 writeln!(
@@ -212,7 +269,9 @@ impl fmt::Display for MappingInfo {
             }
             writeln!(f)?;
 
-            let provenance: Vec<_> = self.reads_log.iter()
+            let provenance: Vec<_> = self
+                .reads_log
+                .iter()
                 .filter(|(name, _)| name.starts_with("primer provenance "))
                 .collect();
             if !provenance.is_empty() {
@@ -220,19 +279,35 @@ impl fmt::Display for MappingInfo {
                 writeln!(f, "-----------------")?;
                 for (name, value) in provenance {
                     let label = name.strip_prefix("primer provenance ").unwrap_or(name);
-                    writeln!(f, "  {:<24} {:<15} {:.2}", format!("{label}:"), value.to_formatted_string(&Locale::en), pct(*value, total))?;
+                    writeln!(
+                        f,
+                        "  {:<24} {:<15} {:.2}",
+                        format!("{label}:"),
+                        value.to_formatted_string(&Locale::en),
+                        pct(*value, total)
+                    )?;
                 }
                 writeln!(f)?;
             }
 
-            let missing_contigs: Vec<_> = self.reads_log.iter()
-                .filter_map(|(name, value)| name.strip_prefix("contig absent from splice index: ").map(|contig| (contig, value)))
+            let missing_contigs: Vec<_> = self
+                .reads_log
+                .iter()
+                .filter_map(|(name, value)| {
+                    name.strip_prefix("contig absent from splice index: ")
+                        .map(|contig| (contig, value))
+                })
                 .collect();
             if !missing_contigs.is_empty() {
                 writeln!(f, "Reference contigs absent from splice index")?;
                 writeln!(f, "------------------------------------------")?;
                 for (contig, value) in missing_contigs {
-                    writeln!(f, "  {:<24} {}", contig, value.to_formatted_string(&Locale::en))?;
+                    writeln!(
+                        f,
+                        "  {:<24} {}",
+                        contig,
+                        value.to_formatted_string(&Locale::en)
+                    )?;
                 }
                 writeln!(f)?;
             }
@@ -269,6 +344,42 @@ impl fmt::Display for MappingInfo {
                     k,
                     c.to_formatted_string(&Locale::en),
                     pct(c, total),
+                )?;
+            }
+            writeln!(f)?;
+        }
+
+        // Named signed diagnostic histograms.
+        for (name, hist) in &self.signed_histograms {
+            if hist.is_empty() {
+                continue;
+            }
+            writeln!(f, "Histogram: {name}")?;
+            if hist.underflow > 0 {
+                writeln!(
+                    f,
+                    "  < {:>4}: {}",
+                    hist.min,
+                    hist.underflow.to_formatted_string(&Locale::en)
+                )?;
+            }
+            for (i, &count) in hist.counts.iter().enumerate() {
+                if count > 0 {
+                    let value = hist.min + i as i32;
+                    writeln!(
+                        f,
+                        "  {:>6}: {}",
+                        value,
+                        count.to_formatted_string(&Locale::en)
+                    )?;
+                }
+            }
+            if hist.overflow > 0 {
+                writeln!(
+                    f,
+                    "  > {:>4}: {}",
+                    hist.max,
+                    hist.overflow.to_formatted_string(&Locale::en)
                 )?;
             }
             writeln!(f)?;
@@ -355,6 +466,7 @@ impl MappingInfo {
             named_timings: HashMap::new(),
             reads_log,
             error_counts: HashMap::new(), // Initialize the HashMap
+            signed_histograms: BTreeMap::new(),
             std_out_is_tty: is(atty::Stream::Stdout),
             hist: vec![0; 20],
         };
@@ -413,6 +525,21 @@ impl MappingInfo {
         if id < self.hist.len() {
             self.hist[id] += 1;
         }
+    }
+
+    /// Observe one signed integer value in a bounded named histogram.
+    /// The first observation fixes the inclusive range for that histogram.
+    pub fn observe_signed_histogram(&mut self, name: &str, value: i32, min: i32, max: i32) {
+        let hist = self
+            .signed_histograms
+            .entry(name.to_string())
+            .or_insert_with(|| SignedHistogram::new(min, max));
+        assert_eq!(
+            (hist.min, hist.max),
+            (min, max),
+            "histogram '{name}' reused with a different range"
+        );
+        hist.observe(value);
     }
 
     pub fn start_counter(&mut self) {
@@ -574,6 +701,15 @@ impl MappingInfo {
         }
         for (a, b) in self.hist.iter_mut().zip(&other.hist) {
             *a += *b;
+        }
+        for (name, other_hist) in &other.signed_histograms {
+            match self.signed_histograms.get_mut(name) {
+                Some(hist) => hist.merge(other_hist),
+                None => {
+                    self.signed_histograms
+                        .insert(name.clone(), other_hist.clone());
+                }
+            }
         }
         for (name, duration) in &other.named_timings {
             *self
@@ -910,5 +1046,22 @@ mod tests {
         let read = rendered.find("read_fastq:").unwrap();
         let write = rendered.find("write_star:").unwrap();
         assert!(read < write);
+    }
+
+    #[test]
+    fn signed_histogram_is_bounded_and_merges() {
+        let mut a = MappingInfo::new(None, 0.0, 0);
+        a.observe_signed_histogram("splice donor offset [bp]", -1, -2, 2);
+        a.observe_signed_histogram("splice donor offset [bp]", 9, -2, 2);
+
+        let mut b = MappingInfo::new(None, 0.0, 0);
+        b.observe_signed_histogram("splice donor offset [bp]", -1, -2, 2);
+        b.observe_signed_histogram("splice donor offset [bp]", -9, -2, 2);
+        a.merge(&b);
+
+        let hist = a.signed_histograms.get("splice donor offset [bp]").unwrap();
+        assert_eq!(hist.counts[1], 2); // -1
+        assert_eq!(hist.underflow, 1);
+        assert_eq!(hist.overflow, 1);
     }
 }

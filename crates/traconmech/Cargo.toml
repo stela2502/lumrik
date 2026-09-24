@@ -1,0 +1,15 @@
+[package]
+name = "traconmech"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Trace biological context to candidate mechanisms"
+
+[dependencies]
+anyhow = "1"
+clap = { workspace = true }
+ommverse = { path = "../ommverse" }
+sc-analysis = { path = "../sc-analysis" }
+hmm = { path = "../hmm" }
+rayon = "1"

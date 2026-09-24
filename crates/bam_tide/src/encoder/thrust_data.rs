@@ -46,7 +46,7 @@ impl TruthData {
     pub fn write<P: AsRef<Path>>(
         &mut self,
         base: P,
-        min_cell_counts: usize,
+        min_umi_count: usize,
         gene_index: &FeatureIndex,
         snp_index: &FeatureIndex,
     ) -> Result<(), String> {
@@ -67,7 +67,7 @@ impl TruthData {
             .map_err(|e| format!("failed to create {:?}: {e}", alt_path))?;        
 
         // --- finalize ---
-        self.gene.finalize_for_export(min_cell_counts, gene_index);
+        self.gene.finalize_for_export(min_umi_count, gene_index);
 
         let cells: std::collections::HashSet<u64> =
             self.gene.export_cell_ids().iter().copied().collect();

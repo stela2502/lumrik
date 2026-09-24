@@ -70,7 +70,9 @@ fn main() -> Result<()> {
         let mut checksum = 0u64;
 
         for read in &reads {
-            if let Some(feature_id) = mapper.map_feature_id_with_qual(&read.seq, &read.qual, &mut info) {
+            if let Some(feature_id) =
+                mapper.map_feature_id_with_qual(&read.seq, &read.qual, &mut info)
+            {
                 calls += 1;
                 // Keep the returned value observable so the optimizer cannot
                 // discard the mapping work.
@@ -109,7 +111,10 @@ fn main() -> Result<()> {
 }
 
 #[derive(Debug)]
-struct BenchRead { seq: Vec<u8>, qual: Vec<u8> }
+struct BenchRead {
+    seq: Vec<u8>,
+    qual: Vec<u8>,
+}
 
 fn report_mapped_reads(mapper: &fast_tag_mapper::FastTagMapper, reads: &[BenchRead], limit: usize) {
     eprintln!("diagnostic: first {limit} mapped reads (untimed)");
@@ -211,7 +216,11 @@ fn load_fastq_sequences(path: &Path, max_reads: usize) -> Result<Vec<BenchRead>>
             "FASTQ sequence/quality length mismatch"
         );
 
-        let qual = qual.as_bytes().iter().map(|q| q.saturating_sub(33)).collect();
+        let qual = qual
+            .as_bytes()
+            .iter()
+            .map(|q| q.saturating_sub(33))
+            .collect();
         reads.push(BenchRead { seq, qual });
     }
 

@@ -268,7 +268,10 @@ fn barcode_path(dir: &Path) -> Option<std::path::PathBuf> {
 
 fn read_mtx_barcodes(dir: &Path) -> Result<Vec<(String, u64)>> {
     let path = barcode_path(dir).with_context(|| {
-        format!("no barcodes.tsv.gz or barcodes.tsv found in {}", dir.display())
+        format!(
+            "no barcodes.tsv.gz or barcodes.tsv found in {}",
+            dir.display()
+        )
     })?;
     let reader = text_lines(&path)?;
     let mut out = Vec::new();

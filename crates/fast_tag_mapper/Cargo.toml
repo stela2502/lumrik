@@ -8,6 +8,7 @@ description = "Fast BD/FASTA feature-id mapper for bam_tide"
 anyhow = "1.0.102"
 clap = { workspace = true }
 flate2 = "1"
+serde = { version = "1", features = ["derive"] }
 
 mapping_info = { path = "../mapping_info" }
 scdata = { path = "../scdata" }

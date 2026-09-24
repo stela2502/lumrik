@@ -10,8 +10,8 @@ use crate::{
 };
 use read_tag_table::ReadTagTableCli;
 
-pub const DEFAULT_MAX_5P_OVERHANG_BP: u32 = 0;
-pub const DEFAULT_MAX_3P_OVERHANG_BP: u32 = 0;
+pub const DEFAULT_MAX_5P_OVERHANG_BP: u32 = 100;
+pub const DEFAULT_MAX_3P_OVERHANG_BP: u32 = 100;
 pub const DEFAULT_ALLOWED_INTRONIC_GAP_SIZE: u32 = 0;
 pub const DEFAULT_SNP_MIN_ANCHOR: u8 = 5;
 

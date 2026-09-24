@@ -1,8 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use sc_vdj::{
-    DecodedNumericRecombinationId, DecodedRecombinationId, RecombinationId, VdjIndex,
-};
+use sc_vdj::{DecodedNumericRecombinationId, DecodedRecombinationId, RecombinationId, VdjIndex};
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
@@ -54,7 +52,12 @@ enum Command {
 
 fn main() -> Result<()> {
     let c = Cli::parse();
-    if let Some(Command::Migrate { index, input, output }) = c.command {
+    if let Some(Command::Migrate {
+        index,
+        input,
+        output,
+    }) = c.command
+    {
         return migrate_dir(&index, &input, &output);
     }
 
@@ -155,22 +158,82 @@ fn main() -> Result<()> {
 
 fn print_numeric_comparison(decoded: &[(RecombinationId, DecodedNumericRecombinationId)]) {
     let rows: Vec<(&str, Vec<String>)> = vec![
-        ("chain", decoded.iter().map(|(_, d)| d.chain.map(|x| x.to_string()).unwrap_or_default()).collect()),
-        ("V_id", decoded.iter().map(|(_, d)| d.v_id.to_string()).collect()),
-        ("D_id", decoded.iter().map(|(_, d)| d.d_id.map(|x| x.to_string()).unwrap_or_default()).collect()),
-        ("J_id", decoded.iter().map(|(_, d)| d.j_id.to_string()).collect()),
-        ("v_del_3", decoded.iter().map(|(_, d)| d.v_del_3.to_string()).collect()),
-        ("p_v3", decoded.iter().map(|(_, d)| d.p_v3_len.to_string()).collect()),
-        ("n1", decoded.iter().map(|(_, d)| d.n1_len.to_string()).collect()),
-        ("p_d5", decoded.iter().map(|(_, d)| opt(d.p_d5_len)).collect()),
-        ("d_del_5", decoded.iter().map(|(_, d)| opt(d.d_del_5)).collect()),
-        ("d_retained", decoded.iter().map(|(_, d)| opt(d.d_retained_len)).collect()),
-        ("d_del_3", decoded.iter().map(|(_, d)| opt(d.d_del_3)).collect()),
-        ("p_d3", decoded.iter().map(|(_, d)| opt(d.p_d3_len)).collect()),
+        (
+            "chain",
+            decoded
+                .iter()
+                .map(|(_, d)| d.chain.map(|x| x.to_string()).unwrap_or_default())
+                .collect(),
+        ),
+        (
+            "V_id",
+            decoded.iter().map(|(_, d)| d.v_id.to_string()).collect(),
+        ),
+        (
+            "D_id",
+            decoded
+                .iter()
+                .map(|(_, d)| d.d_id.map(|x| x.to_string()).unwrap_or_default())
+                .collect(),
+        ),
+        (
+            "J_id",
+            decoded.iter().map(|(_, d)| d.j_id.to_string()).collect(),
+        ),
+        (
+            "v_del_3",
+            decoded.iter().map(|(_, d)| d.v_del_3.to_string()).collect(),
+        ),
+        (
+            "p_v3",
+            decoded
+                .iter()
+                .map(|(_, d)| d.p_v3_len.to_string())
+                .collect(),
+        ),
+        (
+            "n1",
+            decoded.iter().map(|(_, d)| d.n1_len.to_string()).collect(),
+        ),
+        (
+            "p_d5",
+            decoded.iter().map(|(_, d)| opt(d.p_d5_len)).collect(),
+        ),
+        (
+            "d_del_5",
+            decoded.iter().map(|(_, d)| opt(d.d_del_5)).collect(),
+        ),
+        (
+            "d_retained",
+            decoded.iter().map(|(_, d)| opt(d.d_retained_len)).collect(),
+        ),
+        (
+            "d_del_3",
+            decoded.iter().map(|(_, d)| opt(d.d_del_3)).collect(),
+        ),
+        (
+            "p_d3",
+            decoded.iter().map(|(_, d)| opt(d.p_d3_len)).collect(),
+        ),
         ("n2", decoded.iter().map(|(_, d)| opt(d.n2_len)).collect()),
-        ("j_del_5", decoded.iter().map(|(_, d)| d.j_del_5.to_string()).collect()),
-        ("p_j5", decoded.iter().map(|(_, d)| d.p_j5_len.to_string()).collect()),
-        ("pn_alternative", decoded.iter().map(|(_, d)| d.pn_alternative.to_string()).collect()),
+        (
+            "j_del_5",
+            decoded.iter().map(|(_, d)| d.j_del_5.to_string()).collect(),
+        ),
+        (
+            "p_j5",
+            decoded
+                .iter()
+                .map(|(_, d)| d.p_j5_len.to_string())
+                .collect(),
+        ),
+        (
+            "pn_alternative",
+            decoded
+                .iter()
+                .map(|(_, d)| d.pn_alternative.to_string())
+                .collect(),
+        ),
     ];
 
     println!("comparison (differing fields only; numeric segment IDs)");
@@ -192,24 +255,72 @@ fn print_numeric_comparison(decoded: &[(RecombinationId, DecodedNumericRecombina
 
 fn print_comparison(decoded: &[(RecombinationId, DecodedRecombinationId)]) {
     let rows: Vec<(&str, Vec<String>)> = vec![
-        ("chain", decoded.iter().map(|(_, d)| d.chain.to_string()).collect()),
+        (
+            "chain",
+            decoded.iter().map(|(_, d)| d.chain.to_string()).collect(),
+        ),
         ("V", decoded.iter().map(|(_, d)| d.v.clone()).collect()),
-        ("D", decoded.iter().map(|(_, d)| d.d.clone().unwrap_or_default()).collect()),
+        (
+            "D",
+            decoded
+                .iter()
+                .map(|(_, d)| d.d.clone().unwrap_or_default())
+                .collect(),
+        ),
         ("J", decoded.iter().map(|(_, d)| d.j.clone()).collect()),
-        ("v_del_3", decoded.iter().map(|(_, d)| d.v_del_3.to_string()).collect()),
-        ("p_v3", decoded.iter().map(|(_, d)| d.p_v3_len.to_string()).collect()),
-        ("n1", decoded.iter().map(|(_, d)| d.n1_len.to_string()).collect()),
-        ("p_d5", decoded.iter().map(|(_, d)| opt(d.p_d5_len)).collect()),
-        ("d_del_5", decoded.iter().map(|(_, d)| opt(d.d_del_5)).collect()),
-        ("d_retained", decoded.iter().map(|(_, d)| opt(d.d_retained_len)).collect()),
-        ("d_del_3", decoded.iter().map(|(_, d)| opt(d.d_del_3)).collect()),
-        ("p_d3", decoded.iter().map(|(_, d)| opt(d.p_d3_len)).collect()),
+        (
+            "v_del_3",
+            decoded.iter().map(|(_, d)| d.v_del_3.to_string()).collect(),
+        ),
+        (
+            "p_v3",
+            decoded
+                .iter()
+                .map(|(_, d)| d.p_v3_len.to_string())
+                .collect(),
+        ),
+        (
+            "n1",
+            decoded.iter().map(|(_, d)| d.n1_len.to_string()).collect(),
+        ),
+        (
+            "p_d5",
+            decoded.iter().map(|(_, d)| opt(d.p_d5_len)).collect(),
+        ),
+        (
+            "d_del_5",
+            decoded.iter().map(|(_, d)| opt(d.d_del_5)).collect(),
+        ),
+        (
+            "d_retained",
+            decoded.iter().map(|(_, d)| opt(d.d_retained_len)).collect(),
+        ),
+        (
+            "d_del_3",
+            decoded.iter().map(|(_, d)| opt(d.d_del_3)).collect(),
+        ),
+        (
+            "p_d3",
+            decoded.iter().map(|(_, d)| opt(d.p_d3_len)).collect(),
+        ),
         ("n2", decoded.iter().map(|(_, d)| opt(d.n2_len)).collect()),
-        ("j_del_5", decoded.iter().map(|(_, d)| d.j_del_5.to_string()).collect()),
-        ("p_j5", decoded.iter().map(|(_, d)| d.p_j5_len.to_string()).collect()),
+        (
+            "j_del_5",
+            decoded.iter().map(|(_, d)| d.j_del_5.to_string()).collect(),
+        ),
+        (
+            "p_j5",
+            decoded
+                .iter()
+                .map(|(_, d)| d.p_j5_len.to_string())
+                .collect(),
+        ),
         (
             "pn_alternative",
-            decoded.iter().map(|(_, d)| d.pn_alternative.to_string()).collect(),
+            decoded
+                .iter()
+                .map(|(_, d)| d.pn_alternative.to_string())
+                .collect(),
         ),
     ];
 
@@ -296,7 +407,12 @@ fn copy_and_migrate_tree(
     Ok(())
 }
 
-fn migrate_file(src: &Path, dst: &Path, index: &VdjIndex, stats: &mut MigrationStats) -> Result<()> {
+fn migrate_file(
+    src: &Path,
+    dst: &Path,
+    index: &VdjIndex,
+    stats: &mut MigrationStats,
+) -> Result<()> {
     let bytes = fs::read(src).with_context(|| format!("reading {}", src.display()))?;
     stats.files_copied += 1;
     if let Ok(text) = std::str::from_utf8(&bytes) {

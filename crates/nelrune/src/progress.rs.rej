@@ -1,0 +1,35 @@
+--- crates/nelrune/src/progress.rs
++++ crates/nelrune/src/progress.rs
+@@ -643,12 +643,30 @@
+                             ),
+                         ),
+                         StatusMetric::new(
+                             "Duplicates",
+-                            format!("{} ({:.2}%)", self.duplicates, self.duplicate_pct),
++                            format!(
++                                "{} ({:.2}%)",
++                                self.duplicates,
++                                if self.reads_processed == 0 && self.candidate_pairs > 0 {
++                                    100.0 * self.duplicates as f64
++                                        / self.candidate_pairs as f64
++                                } else {
++                                    self.duplicate_pct
++                                }
++                            ),
+                         ),
+                         StatusMetric::new(
+                             "Unique molecule yield",
+-                            format!("{:.2}%", self.unique_yield_pct),
++                            format!(
++                                "{:.2}%",
++                                if self.reads_processed == 0 && self.candidate_pairs > 0 {
++                                    100.0
++                                        - 100.0 * self.duplicates as f64
++                                            / self.candidate_pairs as f64
++                                } else {
++                                    self.unique_yield_pct
++                                }
++                            ),
+                         ),
+ 
+ 

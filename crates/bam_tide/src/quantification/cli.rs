@@ -11,8 +11,8 @@ use read_tag_table::ReadTagTableCli;
 use crate::{
     cli::AnalysisType,
     quantification::bam_collector::config::{
-        DEFAULT_ALLOWED_INTRONIC_GAP_SIZE, DEFAULT_MAX_3P_OVERHANG_BP,
-        DEFAULT_MAX_5P_OVERHANG_BP, DEFAULT_SNP_MIN_ANCHOR,
+        DEFAULT_ALLOWED_INTRONIC_GAP_SIZE, DEFAULT_MAX_3P_OVERHANG_BP, DEFAULT_MAX_5P_OVERHANG_BP,
+        DEFAULT_SNP_MIN_ANCHOR,
     },
 };
 
@@ -29,7 +29,6 @@ pub enum CellCallingMode {
     /// sc-beacon two-Gaussian mixture over log10 per-cell exonic UMI totals.
     Beacon,
 }
-
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum GrammarSelection {
@@ -123,8 +122,7 @@ pub struct QuantCli {
 
     /// Minimum UMI count for `--cell-calling fixed`.
     #[arg(long, default_value_t = 400)]
-    pub min_cell_counts: usize,
-
+    pub min_umi_count: usize,
 
     /// Optional reference genome FASTA.
     ///

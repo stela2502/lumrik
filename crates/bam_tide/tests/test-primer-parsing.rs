@@ -39,7 +39,6 @@ fn fastq(id: &str, seq: &[u8]) -> FastqRecord {
     FastqRecord::new(id, seq, &vec![b'I'; seq.len()])
 }
 
-
 fn reverse_complement(seq: &[u8]) -> Vec<u8> {
     PrimerDetector::reverse_complement(seq)
 }
@@ -320,7 +319,6 @@ fn bd_rhapsody_normalizer_uses_corrected_cell_barcode() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn illumina_normalize_pair_trims_r2_readthrough_at_r1_primer_boundary() -> Result<()> {
     let config = test_config();
@@ -421,7 +419,6 @@ fn illumina_normalize_pair_does_not_trim_biological_umi_lookalike() -> Result<()
     Ok(())
 }
 
-
 #[test]
 fn illumina_normalize_pair_trims_four_base_terminal_readthrough() -> Result<()> {
     let config = test_config();
@@ -441,7 +438,10 @@ fn illumina_normalize_pair_trims_four_base_terminal_readthrough() -> Result<()> 
     let feature_mapper = fast_tag_mapper::FastTagMapper::new();
     partial.normalize_pair(&r1, &fastq("read1", &r2_seq), &config, &feature_mapper)?;
 
-    assert_eq!(partial.candidates[0].fastq_record.seq, reverse_complement(biological));
+    assert_eq!(
+        partial.candidates[0].fastq_record.seq,
+        reverse_complement(biological)
+    );
     Ok(())
 }
 
@@ -464,6 +464,9 @@ fn illumina_normalize_pair_trims_eight_base_terminal_readthrough() -> Result<()>
     let feature_mapper = fast_tag_mapper::FastTagMapper::new();
     partial.normalize_pair(&r1, &fastq("read1", &r2_seq), &config, &feature_mapper)?;
 
-    assert_eq!(partial.candidates[0].fastq_record.seq, reverse_complement(biological));
+    assert_eq!(
+        partial.candidates[0].fastq_record.seq,
+        reverse_complement(biological)
+    );
     Ok(())
 }

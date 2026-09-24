@@ -7,8 +7,8 @@ use std::fs;
 //use rand::rngs::SmallRng;
 //use rand::{Rng, SeedableRng};
 
-use std::path::Path;
 use std::collections::HashSet;
+use std::path::Path;
 
 use sc_beacon::{KneeCountFit, fit_knee_counts, write_count_qc};
 
@@ -40,9 +40,21 @@ impl std::fmt::Display for CellAccounting {
         writeln!(f, "---------------")?;
         writeln!(f, "exonic cells before cutoff: {}", self.exonic_cells)?;
         writeln!(f, "intronic cells before cutoff: {}", self.intronic_cells)?;
-        writeln!(f, "cells with exonic or intronic evidence: {}", self.exonic_or_intronic_cells)?;
-        writeln!(f, "unique exonic UMIs before filter: {}", self.exonic_umis_before_filter)?;
-        writeln!(f, "unique exonic UMIs after filter: {}", self.exonic_umis_after_filter)?;
+        writeln!(
+            f,
+            "cells with exonic or intronic evidence: {}",
+            self.exonic_or_intronic_cells
+        )?;
+        writeln!(
+            f,
+            "unique exonic UMIs before filter: {}",
+            self.exonic_umis_before_filter
+        )?;
+        writeln!(
+            f,
+            "unique exonic UMIs after filter: {}",
+            self.exonic_umis_after_filter
+        )?;
         for (threshold, count) in &self.exonic_thresholds {
             writeln!(f, "exonic cells with >= {threshold} UMIs: {count}")?;
         }
@@ -70,8 +82,8 @@ impl BeaconCellCalling {
         let mut rows = self.cells.clone();
         rows.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-        let mut out = std::fs::File::create(path)
-            .map_err(|e| format!("creating {}: {e}", path.display()))?;
+        let mut out =
+            std::fs::File::create(path).map_err(|e| format!("creating {}: {e}", path.display()))?;
         writeln!(out, "rank\tcell_id\tumi_count\tcalled")
             .map_err(|e| format!("writing {}: {e}", path.display()))?;
         for (rank, (cell_id, count, called)) in rows.into_iter().enumerate() {
@@ -132,10 +144,15 @@ impl QuantData {
             .into_iter()
             .map(|(cell_id, count)| (cell_id, count, count >= fit.umi_cutoff))
             .collect();
-        let retained = cells.iter()
+        let retained = cells
+            .iter()
             .filter_map(|(cell_id, _, called)| called.then_some(*cell_id))
             .collect();
-        Ok(BeaconCellCalling { fit, cells, retained })
+        Ok(BeaconCellCalling {
+            fit,
+            cells,
+            retained,
+        })
     }
 
     /// Write an evidence-preserving `unfiltered/` snapshot, then apply the
@@ -147,7 +164,7 @@ impl QuantData {
     pub fn write_with_unfiltered<P, T, F>(
         &mut self,
         base: P,
-        min_cell_counts: usize,
+        min_umi_count: usize,
         gene_index: &T,
         snp_index: Option<&F>,
         cell_barcode_len: Option<usize>,
@@ -175,7 +192,7 @@ impl QuantData {
             cell_barcode_len,
         )?;
 
-        let retained = self.finalize_for_export(min_cell_counts, gene_index, snp_index);
+        let retained = self.finalize_for_export(min_umi_count, gene_index, snp_index);
         accounting.exonic_umis_after_filter = self.gene.total_umis();
         self.write_finalized_impl(base, gene_index, snp_index, cell_barcode_len)?;
 
@@ -219,7 +236,8 @@ impl QuantData {
         self.intron.finalize_for_cells(keep, gene_index);
         if let Some(snp_index) = snp_index {
             self.snp_alt.finalize_for_cells(keep, snp_index);
-            self.snp_ref.retain_features(&self.snp_alt.observed_feature_ids());
+            self.snp_ref
+                .retain_features(&self.snp_alt.observed_feature_ids());
             self.snp_ref.finalize_for_cells(keep, snp_index);
         }
         self.write_finalized_impl(base, gene_index, snp_index, cell_barcode_len)?;
@@ -229,11 +247,11 @@ impl QuantData {
 
     pub fn finalize_for_export<T: FeatureIndex, F: FeatureIndex>(
         &mut self,
-        min_cell_counts: usize,
+        min_umi_count: usize,
         gene_index: &T,
         snp_index: Option<&F>,
     ) -> std::collections::HashSet<u64> {
-        self.gene.finalize_for_export(min_cell_counts, gene_index);
+        self.gene.finalize_for_export(min_umi_count, gene_index);
 
         let cells: std::collections::HashSet<u64> =
             self.gene.export_cell_ids().iter().copied().collect();
@@ -266,12 +284,7 @@ impl QuantData {
         T: FeatureIndex,
         F: FeatureIndex,
     {
-        self.write_finalized_impl(
-            base.as_ref(),
-            gene_index,
-            snp_index,
-            Some(cell_barcode_len),
-        )
+        self.write_finalized_impl(base.as_ref(), gene_index, snp_index, Some(cell_barcode_len))
     }
 
     fn write_finalized_impl<T: FeatureIndex, F: FeatureIndex>(
@@ -293,15 +306,19 @@ impl QuantData {
 
         match cell_barcode_len {
             Some(len) => {
-                self.gene.write_sparse_with_cell_len(&exonic_path, gene_index, len)
+                self.gene
+                    .write_sparse_with_cell_len(&exonic_path, gene_index, len)
                     .map_err(|e| format!("writing exonic truth failed: {e}"))?;
-                self.intron.write_sparse_with_cell_len(&intronic_path, gene_index, len)
+                self.intron
+                    .write_sparse_with_cell_len(&intronic_path, gene_index, len)
                     .map_err(|e| format!("writing intronic truth failed: {e}"))?;
             }
             None => {
-                self.gene.write_sparse(&exonic_path, gene_index)
+                self.gene
+                    .write_sparse(&exonic_path, gene_index)
                     .map_err(|e| format!("writing exonic truth failed: {e}"))?;
-                self.intron.write_sparse(&intronic_path, gene_index)
+                self.intron
+                    .write_sparse(&intronic_path, gene_index)
                     .map_err(|e| format!("writing intronic truth failed: {e}"))?;
             }
         }
@@ -313,15 +330,19 @@ impl QuantData {
                 .map_err(|e| format!("failed to create {:?}: {e}", alt_path))?;
             match cell_barcode_len {
                 Some(len) => {
-                    self.snp_ref.write_sparse_with_cell_len(&ref_path, snp_index, len)
+                    self.snp_ref
+                        .write_sparse_with_cell_len(&ref_path, snp_index, len)
                         .map_err(|e| format!("writing SNP ref truth failed: {e}"))?;
-                    self.snp_alt.write_sparse_with_cell_len(&alt_path, snp_index, len)
+                    self.snp_alt
+                        .write_sparse_with_cell_len(&alt_path, snp_index, len)
                         .map_err(|e| format!("writing SNP alt truth failed: {e}"))?;
                 }
                 None => {
-                    self.snp_ref.write_sparse(&ref_path, snp_index)
+                    self.snp_ref
+                        .write_sparse(&ref_path, snp_index)
                         .map_err(|e| format!("writing SNP ref truth failed: {e}"))?;
-                    self.snp_alt.write_sparse(&alt_path, snp_index)
+                    self.snp_alt
+                        .write_sparse(&alt_path, snp_index)
                         .map_err(|e| format!("writing SNP alt truth failed: {e}"))?;
                 }
             }
@@ -389,11 +410,16 @@ impl QuantData {
     }
 
     pub fn merge(&mut self, other: &Self) {
-        self.gene.merge(&other.gene);
-        self.intron.merge(&other.intron);
-        self.snp_ref.merge(&other.snp_ref);
-        self.snp_alt.merge(&other.snp_alt);
+        let gene_merge = self.gene.merge(&other.gene);
+        let intron_merge = self.intron.merge(&other.intron);
+        let snp_ref_merge = self.snp_ref.merge(&other.snp_ref);
+        let snp_alt_merge = self.snp_alt.merge(&other.snp_alt);
+
         self.report.merge(&other.report);
+        self.report.merge(&gene_merge);
+        self.report.merge(&intron_merge);
+        self.report.merge(&snp_ref_merge);
+        self.report.merge(&snp_alt_merge);
     }
 
     /// Finalize and write all truth matrices to disk.
@@ -402,14 +428,13 @@ impl QuantData {
     pub fn write<P: AsRef<Path>, T: FeatureIndex, F: FeatureIndex>(
         &mut self,
         base: P,
-        min_cell_counts: usize,
+        min_umi_count: usize,
         gene_index: &T,
         snp_index: Option<&F>,
     ) -> Result<(), String> {
-        self.finalize_for_export(min_cell_counts, gene_index, snp_index);
+        self.finalize_for_export(min_umi_count, gene_index, snp_index);
         self.write_finalized_impl(base.as_ref(), gene_index, snp_index, None)
     }
-
 }
 
 impl QuantData {

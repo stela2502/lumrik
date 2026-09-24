@@ -213,7 +213,6 @@ fn singlecelldata_to_sparse_real_can_be_written_and_read() {
     );
 }
 
-
 #[test]
 fn sparse_export_ignores_explicit_zero_values_in_nnz() {
     let mut celldata = Scdata::new(1, MatrixValueType::Real);

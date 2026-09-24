@@ -6,17 +6,17 @@ use read_tag_table::{ReadTagRecord, ReadTagTable};
 
 use anyhow::{Context, Result, bail};
 use int_to_dna::IntToDna;
-use onehot_dna::OneHotSequence;
 use mapping_info::MappingInfo;
+use onehot_dna::OneHotSequence;
 use rayon::prelude::*;
 use sc_primer::PrimerDetector;
 use scdata::{GeneUmiHash, Scdata};
 
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use std::collections::HashSet;
-use std::sync::Mutex;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct IlluminaNormalizerConfig {
@@ -268,17 +268,28 @@ impl IlluminaPartial {
 /// primer base is mandatory IUPAC-compatible evidence. Only a physical R2 end
 /// may shorten the proof, and lookup + one neighbour is always required.
 fn trim_r2_primer_readthrough(
-    r1: &FastqRecord, r2: &mut FastqRecord, primer_match: &sc_primer::PrimerMatch,
+    r1: &FastqRecord,
+    r2: &mut FastqRecord,
+    primer_match: &sc_primer::PrimerMatch,
 ) -> bool {
     use sc_primer::Orientation;
-    if primer_match.orientation != Orientation::Forward || primer_match.primer_start >= primer_match.insert_start || primer_match.insert_start > r1.seq.len() { return false; }
+    if primer_match.orientation != Orientation::Forward
+        || primer_match.primer_start >= primer_match.insert_start
+        || primer_match.insert_start > r1.seq.len()
+    {
+        return false;
+    }
     let r1_primer = &r1.seq[primer_match.primer_start..primer_match.insert_start];
-    if r1_primer.len() < 2 || r2.seq.len() < 2 { return false; }
+    if r1_primer.len() < 2 || r2.seq.len() < 2 {
+        return false;
+    }
     let expected_seq = PrimerDetector::reverse_complement(r1_primer);
     let expected = OneHotSequence::from_iupac_bytes(&expected_seq);
     let observed = OneHotSequence::from_iupac_bytes(&r2.seq);
     let lookup = expected.mask_at(0).unwrap();
-    let external: Vec<_> = (1..expected.len()).map(|i| expected.mask_at(i).unwrap()).collect();
+    let external: Vec<_> = (1..expected.len())
+        .map(|i| expected.mask_at(i).unwrap())
+        .collect();
     let mut hit = observed.find_with_external_after(lookup, &external);
     // Only weaken proof at the physical R2 end. Every base available there is
     // mandatory and at least lookup + one neighbouring nibble must exist.
@@ -286,11 +297,20 @@ fn trim_r2_primer_readthrough(
         let max_proof = expected.len().min(r2.seq.len());
         for proof in (2..=max_proof).rev() {
             let start = r2.seq.len() - proof;
-            if observed.find_next_with_external_after(lookup, &external[..proof - 1], start) == Some(start) { hit = Some(start); break; }
+            if observed.find_next_with_external_after(lookup, &external[..proof - 1], start)
+                == Some(start)
+            {
+                hit = Some(start);
+                break;
+            }
         }
     }
-    let Some(start) = hit else { return false; };
-    r2.seq.truncate(start); r2.qual.truncate(start); true
+    let Some(start) = hit else {
+        return false;
+    };
+    r2.seq.truncate(start);
+    r2.qual.truncate(start);
+    true
 }
 
 fn usable_insert(seq: &[u8], min_len: usize, max_single_base_fraction: f64) -> bool {
@@ -507,7 +527,9 @@ impl IlluminaNormalizer {
             .collect();
         let writers: Vec<Mutex<Option<FastqWriter>>> = paths
             .iter()
-            .map(|path| FastqWriter::new(path, true, self.config.gzip_level).map(|w| Mutex::new(Some(w))))
+            .map(|path| {
+                FastqWriter::new(path, true, self.config.gzip_level).map(|w| Mutex::new(Some(w)))
+            })
             .collect::<Result<_>>()?;
 
         for (r1_path, r2_path) in inputs {
@@ -516,9 +538,15 @@ impl IlluminaNormalizer {
                 r2_path,
                 |reads| {
                     reads.par_chunks(256).try_for_each(|chunk| -> Result<()> {
-                        let worker = rayon::current_thread_index().unwrap_or(0).min(writers.len() - 1);
-                        let mut guard = writers[worker].lock().map_err(|_| anyhow::anyhow!("prepared FASTQ writer lock poisoned"))?;
-                        let writer = guard.as_mut().context("prepared FASTQ writer already closed")?;
+                        let worker = rayon::current_thread_index()
+                            .unwrap_or(0)
+                            .min(writers.len() - 1);
+                        let mut guard = writers[worker]
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("prepared FASTQ writer lock poisoned"))?;
+                        let writer = guard
+                            .as_mut()
+                            .context("prepared FASTQ writer already closed")?;
                         for (_r1, r2) in chunk {
                             // Preserve current Nelrune mapping semantics: STAR receives
                             // the normalized biological insert (R2) as single-end input.
@@ -533,7 +561,9 @@ impl IlluminaNormalizer {
         }
 
         for writer in &writers {
-            let mut guard = writer.lock().map_err(|_| anyhow::anyhow!("prepared FASTQ writer lock poisoned"))?;
+            let mut guard = writer
+                .lock()
+                .map_err(|_| anyhow::anyhow!("prepared FASTQ writer lock poisoned"))?;
             if let Some(writer) = guard.take() {
                 writer.finish()?;
             }

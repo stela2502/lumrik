@@ -158,12 +158,9 @@ fn run(args: Cli) -> Result<()> {
     progress.stage("writing quantification");
     progress.start_timer("nelrune/writing");
 
-    let (retained_cells, calling) = if let Some(min_cell_counts) = args.min_cell_counts {
-        println!(
-            "Applying user-defined cell UMI cutoff: {}",
-            min_cell_counts
-        );
-        (data.cells_with_min_exonic_umis(min_cell_counts), None)
+    let (retained_cells, calling) = if let Some(min_umi_count) = args.min_umi_count {
+        println!("Applying user-defined cell UMI cutoff: {}", min_umi_count);
+        (data.cells_with_min_exonic_umis(min_umi_count), None)
     } else {
         println!("Running sc-beacon barcode-rank knee cell identification and QC...");
 
@@ -252,8 +249,8 @@ fn run(args: Cli) -> Result<()> {
         );
     } else {
         let cutoff = args
-            .min_cell_counts
-            .expect("fixed cell calling requires --min-cell-counts");
+            .min_umi_count
+            .expect("fixed cell calling requires --min-umi-count");
         progress.report_block(
             "Cell calling",
             &format!(

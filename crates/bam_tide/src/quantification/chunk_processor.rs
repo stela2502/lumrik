@@ -90,6 +90,37 @@ impl<'a> ChunkProcessor<'a> {
         out
     }
 
+    fn record_splice_mismatch_histograms(
+        &self,
+        job: &Job,
+        transcript: &gtf_splice_index::Transcript,
+        out: &mut QuantData,
+    ) {
+        const MAX_REPORTED_OFFSET_BP: i32 = 50;
+        for (donor, acceptor) in transcript
+            .junction_mismatch_offsets(&job.spliced, self.match_opts.allowed_intronic_gap_size)
+        {
+            out.report.observe_signed_histogram(
+                "splice donor offset [bp]",
+                donor,
+                -MAX_REPORTED_OFFSET_BP,
+                MAX_REPORTED_OFFSET_BP,
+            );
+            out.report.observe_signed_histogram(
+                "splice acceptor offset [bp]",
+                acceptor,
+                -MAX_REPORTED_OFFSET_BP,
+                MAX_REPORTED_OFFSET_BP,
+            );
+            out.report.observe_signed_histogram(
+                "splice nearest-boundary miss [bp]",
+                donor.abs().max(acceptor.abs()),
+                0,
+                MAX_REPORTED_OFFSET_BP,
+            );
+        }
+    }
+
     fn add_gene_hit(&self, job: &Job, out: &mut QuantData) {
         let hits = self.idx.match_genes(&job.spliced, self.match_opts);
 
@@ -101,11 +132,22 @@ impl<'a> ChunkProcessor<'a> {
         let hit = &hits[0];
         out.report.report(hit.best_hit.class.to_string());
 
+        if matches!(
+            hit.best_hit.class,
+            MatchClass::JunctionMismatch | MatchClass::Intronic | MatchClass::Incompatible
+        ) {
+            if let Some(transcript) = hit.winning_transcripts.first() {
+                self.record_splice_mismatch_histograms(job, transcript, out);
+            }
+        }
+
         let feature_id = hit.gene_id as u64;
         let feature_umi = GeneUmiHash(feature_id, job.umi);
 
         match hit.best_hit.class {
-            MatchClass::Compatible | MatchClass::ExactJunctionChain => {
+            MatchClass::Compatible
+            | MatchClass::ExactJunctionChain
+            | MatchClass::JunctionMismatch => {
                 out.gene
                     .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
             }
@@ -113,7 +155,7 @@ impl<'a> ChunkProcessor<'a> {
                 out.intron
                     .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
             }
-            MatchClass::JunctionMismatch
+            MatchClass::Incompatible
             | MatchClass::OverhangTooLarge
             | MatchClass::NoOverlap
             | MatchClass::StrandMismatch => {}
@@ -131,11 +173,20 @@ impl<'a> ChunkProcessor<'a> {
         let hit = &hits[0];
         out.report.report(hit.hit.class.to_string());
 
+        if matches!(
+            hit.hit.class,
+            MatchClass::JunctionMismatch | MatchClass::Intronic | MatchClass::Incompatible
+        ) {
+            self.record_splice_mismatch_histograms(job, hit.transcript, out);
+        }
+
         let feature_id = hit.transcript_id as u64;
         let feature_umi = GeneUmiHash(feature_id, job.umi);
 
         match hit.hit.class {
-            MatchClass::Compatible | MatchClass::ExactJunctionChain => {
+            MatchClass::Compatible
+            | MatchClass::ExactJunctionChain
+            | MatchClass::JunctionMismatch => {
                 out.gene
                     .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
             }
@@ -143,7 +194,7 @@ impl<'a> ChunkProcessor<'a> {
                 out.intron
                     .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
             }
-            MatchClass::JunctionMismatch
+            MatchClass::Incompatible
             | MatchClass::OverhangTooLarge
             | MatchClass::NoOverlap
             | MatchClass::StrandMismatch => {}

@@ -7,7 +7,9 @@ use int_to_dna::IntToDna;
 const MOLECULE_KEY_BASES: usize = 32;
 const UNBARCODED_BASES_PER_MATE: usize = MOLECULE_KEY_BASES / 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum GrammarType {
     #[default]
     Gex,
@@ -17,7 +19,11 @@ pub enum GrammarType {
 
 impl GrammarType {
     pub const fn code(self) -> &'static str {
-        match self { Self::Gex => "G", Self::Vdj => "V", Self::Other => "O" }
+        match self {
+            Self::Gex => "G",
+            Self::Vdj => "V",
+            Self::Other => "O",
+        }
     }
 
     pub fn from_code(code: &str) -> anyhow::Result<Self> {
@@ -69,7 +75,11 @@ impl Grammar {
         Self::new_typed(name, GrammarType::Other, ops)
     }
 
-    pub fn new_typed(name: impl Into<String>, grammar_type: GrammarType, ops: Vec<GrammarOp>) -> PrimerResult<Self> {
+    pub fn new_typed(
+        name: impl Into<String>,
+        grammar_type: GrammarType,
+        ops: Vec<GrammarOp>,
+    ) -> PrimerResult<Self> {
         let mut cell_len = 0usize;
         let mut umi_len = 0usize;
         let mut system: Option<SingleCellSystem> = None;
@@ -173,8 +183,10 @@ impl Grammar {
                 return Ok(None);
             }
         } else {
-            let cell = cell.ok_or_else(|| PrimerError::invalid_coordinates("missing CELL sequence"))?;
-            let umi = umi.ok_or_else(|| PrimerError::invalid_coordinates("missing UMI sequence"))?;
+            let cell =
+                cell.ok_or_else(|| PrimerError::invalid_coordinates("missing CELL sequence"))?;
+            let umi =
+                umi.ok_or_else(|| PrimerError::invalid_coordinates("missing UMI sequence"))?;
             let remaining = MOLECULE_KEY_BASES.saturating_sub(umi.len());
             if !canonical(cell) || !canonical(umi) || !canonical(&r2[..remaining.min(r2.len())]) {
                 return Ok(None);

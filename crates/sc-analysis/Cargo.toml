@@ -1,0 +1,19 @@
+[package]
+name = "sc-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Small sparse single-cell analysis engine for Lumrik"
+
+[dependencies]
+clap = { workspace = true }
+anyhow = "1"
+csv = "1"
+flate2 = "1"
+sprs = "0.11"
+ndarray = "0.15"
+linfa = "0.7"
+linfa-reduction = "0.7"
+manifolds-rs = "0.4.1"
+plotters = { version = "0.3", default-features = false, features = ["svg_backend", "line_series", "point_series"] }

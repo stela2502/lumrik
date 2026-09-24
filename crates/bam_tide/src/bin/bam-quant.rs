@@ -141,17 +141,11 @@ where
     match args.cell_calling {
         CellCallingMode::Fixed => {
             let (retained, accounting) = data
-                .write_with_unfiltered(
-                    &args.outpath,
-                    args.min_cell_counts,
-                    features,
-                    snp_index,
-                    None,
-                )
+                .write_with_unfiltered(&args.outpath, args.min_umi_count, features, snp_index, None)
                 .map_err(anyhow::Error::msg)?;
             println!(
                 "{accounting}Cell calling\n------------\nmethod: fixed\nminimum UMIs: {}\nretained cells: {}\nremoved by exonic cutoff: {}",
-                args.min_cell_counts,
+                args.min_umi_count,
                 retained.len(),
                 accounting.exonic_cells.saturating_sub(retained.len())
             );
@@ -163,12 +157,22 @@ where
 
             std::fs::create_dir_all(&args.outpath)
                 .with_context(|| format!("creating {}", args.outpath.display()))?;
-            calling.write_tsv(args.outpath.join("cell_calling.tsv")).map_err(anyhow::Error::msg)?;
-            calling.write_qc(args.outpath.join("qc")).map_err(anyhow::Error::msg)?;
+            calling
+                .write_tsv(args.outpath.join("cell_calling.tsv"))
+                .map_err(anyhow::Error::msg)?;
+            calling
+                .write_qc(args.outpath.join("qc"))
+                .map_err(anyhow::Error::msg)?;
 
-            let accounting = data.write_with_unfiltered_for_cells(
-                &args.outpath, &calling.retained, features, snp_index, None,
-            ).map_err(anyhow::Error::msg)?;
+            let accounting = data
+                .write_with_unfiltered_for_cells(
+                    &args.outpath,
+                    &calling.retained,
+                    features,
+                    snp_index,
+                    None,
+                )
+                .map_err(anyhow::Error::msg)?;
 
             println!(
                 "sc-beacon cell identification complete\n{accounting}Cell calling\n------------\nmethod: sc-beacon barcode-rank knee\ncandidate barcodes: {}\ninformative barcodes (>1 UMI): {}\nknee rank: {}\nUMI cutoff: {}\nknee score: {:.6}\nretained cells: {}\nnot called: {}\ncell diagnostics: {}\ncell QC plots: {}",

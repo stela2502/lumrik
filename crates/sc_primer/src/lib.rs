@@ -14,11 +14,11 @@ pub use cli::PrimerCli;
 pub use detector::PrimerDetector;
 pub use error::{PrimerError, PrimerResult};
 pub use grammar::{Grammar, GrammarOp, GrammarType, MoleculeIdentity};
-pub use read_tag::ReadTagRecord;
 pub use model::{
     BdPrimerDiagnostics, Orientation, PrimerMatch, PrimerMatchDiagnostics, PrimerSegment,
     PrimerSlice,
 };
+pub use read_tag::ReadTagRecord;
 pub use single_cell_systems::rhapsody::{
     BdCellVersion, BdMismatchProfile, RhapsodyCellCall, RhapsodyWhitelist,
 };

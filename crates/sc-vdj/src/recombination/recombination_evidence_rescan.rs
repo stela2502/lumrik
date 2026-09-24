@@ -930,9 +930,15 @@ fn refinement_region(call: &Recombination, index: &VdjIndex) -> Option<(usize, u
 /// every Stage-3 receptor hit. A unique offset supported by at least two exact
 /// anchors is required before a read is allowed to vote on junction bases.
 fn infer_ungapped_offset(
-    query: &[u8], reference: &[u8], start: usize, end: usize, k: usize,
+    query: &[u8],
+    reference: &[u8],
+    start: usize,
+    end: usize,
+    k: usize,
 ) -> Option<isize> {
-    if k < 2 || query.len() < k || end.saturating_sub(start) < k || end > reference.len() { return None; }
+    if k < 2 || query.len() < k || end.saturating_sub(start) < k || end > reference.len() {
+        return None;
+    }
     let query = OneHotSequence::from_iupac_bytes(query);
     let reference = OneHotSequence::from_iupac_bytes(reference);
     let mut votes = HashMap::<isize, u16>::new();
@@ -940,11 +946,14 @@ fn infer_ungapped_offset(
     let mut reference_pos = start;
     while reference_pos <= last {
         let lookup = reference.mask_at(reference_pos)?;
-        let external: Vec<_> = (1..k).map(|i| reference.mask_at(reference_pos + i).unwrap()).collect();
+        let external: Vec<_> = (1..k)
+            .map(|i| reference.mask_at(reference_pos + i).unwrap())
+            .collect();
         let mut from = 0usize;
         while let Some(query_pos) = query.find_next_with_external_after(lookup, &external, from) {
             let offset = query_pos as isize - reference_pos as isize;
-            let vote = votes.entry(offset).or_default(); *vote = vote.saturating_add(1);
+            let vote = votes.entry(offset).or_default();
+            *vote = vote.saturating_add(1);
             from = query_pos.saturating_add(1);
         }
         reference_pos = reference_pos.saturating_add(4);
@@ -952,8 +961,15 @@ fn infer_ungapped_offset(
     let mut ranked: Vec<_> = votes.into_iter().collect();
     ranked.sort_by_key(|(offset, count)| (std::cmp::Reverse(*count), *offset));
     let (best_offset, best_votes) = ranked.first().copied()?;
-    if best_votes < 2 { return None; }
-    if ranked.get(1).is_some_and(|(_, second_votes)| *second_votes == best_votes) { return None; }
+    if best_votes < 2 {
+        return None;
+    }
+    if ranked
+        .get(1)
+        .is_some_and(|(_, second_votes)| *second_votes == best_votes)
+    {
+        return None;
+    }
     Some(best_offset)
 }
 
@@ -1047,11 +1063,15 @@ fn refine_junction_from_pileup(call: &mut Recombination, pileup: &JunctionPileup
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.len() < 2 || needle.len() > haystack.len() { return None; }
+    if needle.len() < 2 || needle.len() > haystack.len() {
+        return None;
+    }
     let haystack = OneHotSequence::from_iupac_bytes(haystack);
     let needle = OneHotSequence::from_iupac_bytes(needle);
     let lookup = needle.mask_at(0)?;
-    let external: Vec<_> = (1..needle.len()).map(|i| needle.mask_at(i).unwrap()).collect();
+    let external: Vec<_> = (1..needle.len())
+        .map(|i| needle.mask_at(i).unwrap())
+        .collect();
     haystack.find_with_external_after(lookup, &external)
 }
 

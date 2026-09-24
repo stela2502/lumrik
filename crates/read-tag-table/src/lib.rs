@@ -179,8 +179,10 @@ impl ReadTagTable {
                 get_optional_ref(&rec, umi_qual_ix),
             );
             if let Some(raw) = get_optional_ref(&rec, grammar_type_ix) {
-                record.grammar_type = sc_primer::GrammarType::from_code(raw)
-                    .with_context(|| format!("invalid grammar_type '{raw}' for read '{read_id}'"))?;
+                record.grammar_type =
+                    sc_primer::GrammarType::from_code(raw).with_context(|| {
+                        format!("invalid grammar_type '{raw}' for read '{read_id}'")
+                    })?;
             }
 
             records.insert(read_id.to_string(), record);

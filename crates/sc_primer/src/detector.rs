@@ -8,9 +8,9 @@ use crate::model::{
 
 use crate::single_cell_systems::*;
 
+use crate::ReadTagRecord;
 use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
-use crate::ReadTagRecord;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -625,14 +625,7 @@ impl PrimerDetector {
                     seq: fixed,
                     mismatches,
                 } => {
-                    let chosen = Self::find_fixed(
-                        seq,
-                        packed,
-                        pos,
-                        fixed,
-                        *mismatches,
-                        search,
-                    )?;
+                    let chosen = Self::find_fixed(seq, packed, pos, fixed, *mismatches, search)?;
                     let Some(next_pos) = chosen else {
                         return Ok(None);
                     };
@@ -681,9 +674,8 @@ impl PrimerDetector {
                 } => {
                     //saw_insert_constraint = true;
 
-                    let Ok(Some(_chosen)) = Self::find_fixed(
-                        seq, packed, pos, fixed, *mismatches, search,
-                    )
+                    let Ok(Some(_chosen)) =
+                        Self::find_fixed(seq, packed, pos, fixed, *mismatches, search)
                     else {
                         /*eprintln!(
                             "I have not found the INSERT {} in sequence {} at position {}",
@@ -857,8 +849,9 @@ impl PrimerDetector {
             if !Self::has_range(seq, pos, fixed.len()) {
                 return Ok(None);
             }
-            return Ok((Self::hamming(&seq[pos..pos + fixed.len()], fixed)? <= mismatches)
-                .then_some(pos));
+            return Ok(
+                (Self::hamming(&seq[pos..pos + fixed.len()], fixed)? <= mismatches).then_some(pos),
+            );
         }
 
         // SEARCH immediately consumed by FIXED: search the declared window

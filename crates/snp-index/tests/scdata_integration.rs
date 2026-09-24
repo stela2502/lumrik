@@ -61,7 +61,7 @@ fn snp_matches_can_be_inserted_into_scdata_and_exported() -> Result<()> {
         }
     }
 
-    // TODO: adjust min_cell_counts if your Scdata export needs more cells/counts.
+    // TODO: adjust min_umi_count if your Scdata export needs more cells/counts.
     scdata_ref.finalize_for_export(1, &snp_index);
     scdata_alt.finalize_for_export(1, &snp_index);
 

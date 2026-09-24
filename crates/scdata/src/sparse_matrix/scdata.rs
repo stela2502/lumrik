@@ -199,30 +199,53 @@ impl Scdata {
     }
 
     /// Merge another matrix into this one in parallel, bucket by bucket.
-    pub fn merge(&mut self, other: &Scdata) {
+    pub fn merge(&mut self, other: &Scdata) -> MappingInfo {
         if other.is_empty() {
-            return;
+            return MappingInfo::new(None, 0.0, 0);
         }
 
         self.invalidate_export_cache();
 
-        self.data
+        let mapping = self
+            .data
             .par_iter_mut()
             .enumerate()
-            .for_each(|(index, self_bucket)| {
+            .map(|(index, self_bucket)| {
+                let mut local_mapping = MappingInfo::new(None, 0.0, 0);
+
                 if let Some(other_bucket) = other.data.get(index) {
                     for (cell_name, other_cell) in other_bucket {
                         match self_bucket.entry(*cell_name) {
                             std::collections::hash_map::Entry::Occupied(mut entry) => {
-                                entry.get_mut().merge(other_cell);
+                                entry
+                                    .get_mut()
+                                    .merge_with_mapping(other_cell, &mut local_mapping);
                             }
                             std::collections::hash_map::Entry::Vacant(entry) => {
+                                // No destination cell exists, therefore none of its UMIs
+                                // can collide at this merge boundary.
+                                local_mapping.ok_reads += other_cell.seen.len();
                                 entry.insert(other_cell.clone());
                             }
                         }
                     }
                 }
-            });
+
+                local_mapping
+            })
+            .reduce(
+                || MappingInfo::new(None, 0.0, 0),
+                |mut mapping, local_mapping| {
+                    mapping.merge(&local_mapping);
+                    mapping
+                },
+            );
+
+        /*eprintln!(
+            "SCDATA MERGE: accepted UMIs={} rejected duplicate UMIs={}",
+            mapping.ok_reads, mapping.pcr_duplicates
+        );*/
+        mapping
     }
 
     /// Merge another matrix into this one by consuming the source in a single thread.

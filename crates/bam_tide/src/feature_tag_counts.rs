@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
-use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
+use fast_tag_mapper::{BuiltinTagSet, FastTagMapper, FeatureEntry};
 use scdata::{FeatureIndex, Scdata};
 
-use crate::index::FastTagFeatureIndex;
+use crate::index::OwnedFeatureIndex;
 use crate::ngs_normalizer::NgsNormalizerSupport;
 
 use sc_beacon::{BackgroundConfig, CallConfig, FitConfig, run_from_scdata};
@@ -73,6 +73,7 @@ impl AdditionalFeatureSource {
 pub struct FeatureTagCounts {
     data: Scdata,
     mapper: FastTagMapper,
+    features: Vec<FeatureEntry>,
 }
 
 impl FeatureTagCounts {
@@ -80,6 +81,7 @@ impl FeatureTagCounts {
         Self {
             data: NgsNormalizerSupport::new_feature_tag_table(),
             mapper: FastTagMapper::new(),
+            features: Vec::new(),
         }
     }
 
@@ -106,9 +108,12 @@ impl FeatureTagCounts {
             }
         }
 
+        let mapper = mapper.with_min_hits(min_hits);
+        let features = mapper.features().to_vec();
         Ok(Self {
             data: NgsNormalizerSupport::new_feature_tag_table(),
-            mapper: mapper.with_min_hits(min_hits),
+            mapper,
+            features,
         })
     }
 
@@ -116,20 +121,30 @@ impl FeatureTagCounts {
         self.data.is_empty()
     }
 
+    /// Number of distinct cell barcodes carrying at least one feature observation.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
     pub fn mapper(&self) -> &FastTagMapper {
         &self.mapper
     }
 
-    /// Persist the raw cell/feature/UMI observations produced during FASTQ
-    /// preparation.  This deliberately stores molecule observations rather
-    /// than a finalized matrix so the later quantification stage can apply
-    /// canonical GEX cell filtering without changing feature semantics.
+    /// Persist raw observations together with the compact feature dictionary.
+    /// Quantification must never reconstruct feature identity from CLI input.
     pub fn save_observations(&self, path: &Path) -> Result<()> {
         #[derive(serde::Serialize)]
         struct Observation {
             cell: u64,
             feature: u64,
             umi: u64,
+        }
+
+        #[derive(serde::Serialize)]
+        struct PreparedFeatureObservations<'a> {
+            format: &'static str,
+            features: &'a [FeatureEntry],
+            observations: Vec<Observation>,
         }
 
         let mut observations = Vec::new();
@@ -141,15 +156,22 @@ impl FeatureTagCounts {
             }));
         }
 
-        let writer = BufWriter::new(File::create(path)
-            .with_context(|| format!("creating {}", path.display()))?);
-        bincode::serialize_into(writer, &observations)
+        let payload = PreparedFeatureObservations {
+            format: "nelrune-feature-observations-v2",
+            features: &self.features,
+            observations,
+        };
+
+        let writer = BufWriter::new(
+            File::create(path).with_context(|| format!("creating {}", path.display()))?,
+        );
+        bincode::serialize_into(writer, &payload)
             .with_context(|| format!("writing {}", path.display()))
     }
 
-    /// Reload raw preparation observations using the same feature definition
-    /// sources that were used during preparation.
-    pub fn load_observations(
+    /// Load the legacy observation-only format so it can be converted once
+    /// to the self-contained format. Quantification must not use this path.
+    pub fn load_legacy_observations(
         path: &Path,
         sources: &[AdditionalFeatureSource],
         min_hits: u32,
@@ -161,14 +183,66 @@ impl FeatureTagCounts {
             umi: u64,
         }
 
-        let reader = BufReader::new(File::open(path)
-            .with_context(|| format!("opening {}", path.display()))?);
+        let reader = BufReader::new(
+            File::open(path).with_context(|| format!("opening {}", path.display()))?,
+        );
         let observations: Vec<Observation> = bincode::deserialize_from(reader)
-            .with_context(|| format!("reading {}", path.display()))?;
+            .with_context(|| format!("reading legacy observations from {}", path.display()))?;
 
         let mut ret = Self::from_sources(sources, min_hits)?;
         let mut report = mapping_info::MappingInfo::new(None, 0.0, 0);
         for observation in observations {
+            ret.data.try_insert(
+                &observation.cell,
+                scdata::GeneUmiHash(observation.feature, observation.umi),
+                0.0,
+                &mut report,
+            );
+        }
+        Ok(ret)
+    }
+
+    /// Load the self-contained feature observations written by prepare-fastqs.
+    /// Old observation-only files are intentionally unsupported; regenerate or
+    /// convert them before quantification.
+    pub fn load_observations(path: &Path) -> Result<Self> {
+        #[derive(serde::Deserialize)]
+        struct Observation {
+            cell: u64,
+            feature: u64,
+            umi: u64,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct PreparedFeatureObservations {
+            format: String,
+            features: Vec<FeatureEntry>,
+            observations: Vec<Observation>,
+        }
+
+        let reader = BufReader::new(
+            File::open(path).with_context(|| format!("opening {}", path.display()))?,
+        );
+        let payload: PreparedFeatureObservations =
+            bincode::deserialize_from(reader).with_context(|| {
+                format!(
+                    "reading {} (expected self-contained nelrune feature observations v2)",
+                    path.display()
+                )
+            })?;
+        anyhow::ensure!(
+            payload.format == "nelrune-feature-observations-v2",
+            "unsupported feature observation format '{}'",
+            payload.format
+        );
+
+        let mut ret = Self {
+            data: NgsNormalizerSupport::new_feature_tag_table(),
+            mapper: FastTagMapper::new(),
+            features: payload.features,
+        };
+        let mut report = mapping_info::MappingInfo::new(None, 0.0, 0);
+        for observation in payload.observations {
             ret.data.try_insert(
                 &observation.cell,
                 scdata::GeneUmiHash(observation.feature, observation.umi),
@@ -213,24 +287,21 @@ impl FeatureTagCounts {
 
         let (filtered, background) = raw.split_by_cells(cells);
 
+        eprintln!("FEATURE DEBUG: canonical GEX cells = {}", cells.len());
         eprintln!(
-    "FEATURE DEBUG: canonical GEX cells = {}",
-    cells.len()
-);
-eprintln!(
-    "FEATURE DEBUG: filtered empty after split = {}",
-    filtered.is_empty()
-);
-eprintln!(
-    "FEATURE DEBUG: background empty after split = {}",
-    background.is_empty()
-);
+            "FEATURE DEBUG: filtered empty after split = {}",
+            filtered.is_empty()
+        );
+        eprintln!(
+            "FEATURE DEBUG: background empty after split = {}",
+            background.is_empty()
+        );
 
         let background_config = BackgroundConfig::default();
         let fit_config = FitConfig::default();
         let call_config = CallConfig::default();
 
-        let feature_index = FastTagFeatureIndex::new(&self.mapper);
+        let feature_index = OwnedFeatureIndex::new(self.features.clone());
 
         for (feature_type, feature_index) in feature_index.split_by_feature_type() {
             /*
@@ -245,10 +316,8 @@ eprintln!(
              * Build independent views instead and restrict each one to the
              * feature IDs represented by this index.
              */
-            let feature_ids: HashSet<u64> = feature_index
-                .ordered_feature_ids()
-                .into_iter()
-                .collect();
+            let feature_ids: HashSet<u64> =
+                feature_index.ordered_feature_ids().into_iter().collect();
 
             let mut type_filtered = NgsNormalizerSupport::new_feature_tag_table();
             type_filtered.merge(&filtered);

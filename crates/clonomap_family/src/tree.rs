@@ -11,7 +11,6 @@ pub struct MstTree {
     pub edges: Vec<(usize, usize, f32)>,
 }
 
-
 struct RootedLayout {
     parent: Vec<usize>,
     depth: Vec<usize>,
@@ -53,10 +52,10 @@ fn categorical_code(i: usize, palette: &[RGBColor]) -> (RGBColor, RGBColor, usiz
 fn split_tilt(axis: usize) -> f64 {
     // Angle of the diameter separating the two coloured halves.
     match axis % 4 {
-        0 => 90.0f64.to_radians(), // |
-        1 => 45.0f64.to_radians(), // /
-        2 => 0.0f64,               // -
-        _ => -45.0f64.to_radians(),// \
+        0 => 90.0f64.to_radians(),  // |
+        1 => 45.0f64.to_radians(),  // /
+        2 => 0.0f64,                // -
+        _ => -45.0f64.to_radians(), // \
     }
 }
 
@@ -70,9 +69,8 @@ fn blue_yellow_red(value: f32, min_value: f32, max_value: f32) -> RGBColor {
     } else {
         0.5
     };
-    let lerp = |a: u8, b: u8, u: f32| -> u8 {
-        (a as f32 + (b as f32 - a as f32) * u).round() as u8
-    };
+    let lerp =
+        |a: u8, b: u8, u: f32| -> u8 { (a as f32 + (b as f32 - a as f32) * u).round() as u8 };
     if t <= 0.5 {
         let u = t * 2.0;
         RGBColor(lerp(0, 255, u), lerp(114, 220, u), lerp(178, 0, u))
@@ -95,43 +93,71 @@ pub fn rooted_categorical_hex(
     root_node: usize,
 ) -> Vec<String> {
     use std::collections::{BTreeMap, BTreeSet};
-    let cats: BTreeSet<String> = categories.iter().enumerate()
+    let cats: BTreeSet<String> = categories
+        .iter()
+        .enumerate()
         .filter(|(i, _)| *i != root_node)
         .map(|(_, c)| c.clone())
         .collect();
     let mut ordered = Vec::with_capacity(cats.len());
     if let Some(preferred) = category_order {
         for c in preferred {
-            if cats.contains(c) && !ordered.contains(c) { ordered.push(c.clone()); }
+            if cats.contains(c) && !ordered.contains(c) {
+                ordered.push(c.clone());
+            }
         }
     }
     for c in &cats {
-        if !ordered.contains(c) { ordered.push(c.clone()); }
+        if !ordered.contains(c) {
+            ordered.push(c.clone());
+        }
     }
     let palette = categorical_palette();
-    let cmap: BTreeMap<String, (RGBColor, RGBColor, usize)> = ordered.into_iter().enumerate()
+    let cmap: BTreeMap<String, (RGBColor, RGBColor, usize)> = ordered
+        .into_iter()
+        .enumerate()
         .map(|(i, c)| {
             if c == "unpaired" || c == "HC NAIVE" {
-                (c, (RGBColor(170,170,170), RGBColor(170,170,170), 0))
+                (c, (RGBColor(170, 170, 170), RGBColor(170, 170, 170), 0))
             } else {
                 (c, categorical_code(i, &palette))
             }
-        }).collect();
-    categories.iter().enumerate().map(|(i, c)| {
-        if i == root_node { return "#AAAAAA".to_string(); }
-        let (a,b,_) = cmap.get(c).copied().unwrap_or((BLACK, WHITE, 0));
-        format!("{}/{}", rgb_hex(a), rgb_hex(b))
-    }).collect()
+        })
+        .collect();
+    categories
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            if i == root_node {
+                return "#AAAAAA".to_string();
+            }
+            let (a, b, _) = cmap.get(c).copied().unwrap_or((BLACK, WHITE, 0));
+            format!("{}/{}", rgb_hex(a), rgb_hex(b))
+        })
+        .collect()
 }
 
 /// Return the exact continuous colour used by the rooted SVG renderer.
 pub fn rooted_continuous_hex(values: &[Option<f32>], root_node: usize) -> Vec<String> {
-    let vmax = values.iter().enumerate().filter(|(i,_)| *i != root_node)
-        .filter_map(|(_,v)| *v).fold(0.0f32, f32::max).max(1.0);
-    values.iter().enumerate().map(|(i,v)| {
-        if i == root_node { "#AAAAAA".to_string() }
-        else { v.map(|x| rgb_hex(blue_yellow_red(x, 0.0, vmax))).unwrap_or_else(|| "#AAAAAA".to_string()) }
-    }).collect()
+    let vmax = values
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != root_node)
+        .filter_map(|(_, v)| *v)
+        .fold(0.0f32, f32::max)
+        .max(1.0);
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            if i == root_node {
+                "#AAAAAA".to_string()
+            } else {
+                v.map(|x| rgb_hex(blue_yellow_red(x, 0.0, vmax)))
+                    .unwrap_or_else(|| "#AAAAAA".to_string())
+            }
+        })
+        .collect()
 }
 
 fn radial_positions(layout: &RootedLayout, root_node: usize) -> Vec<(f32, f32)> {
@@ -143,7 +169,8 @@ fn radial_positions(layout: &RootedLayout, root_node: usize) -> Vec<(f32, f32)> 
             for &c in &children[v] {
                 assign_angles(c, children, angles, next);
             }
-            angles[v] = children[v].iter().map(|&c| angles[c]).sum::<f32>() / children[v].len() as f32;
+            angles[v] =
+                children[v].iter().map(|&c| angles[c]).sum::<f32>() / children[v].len() as f32;
         }
     }
     let n = layout.parent.len();
@@ -154,7 +181,8 @@ fn radial_positions(layout: &RootedLayout, root_node: usize) -> Vec<(f32, f32)> 
     let max_depth = layout.depth.iter().copied().max().unwrap_or(0).max(1) as f32;
     let mut out = vec![(0.0, 0.0); n];
     for &v in &layout.order {
-        let theta = std::f32::consts::TAU * ((angles[v] + 0.5) / denom) - std::f32::consts::FRAC_PI_2;
+        let theta =
+            std::f32::consts::TAU * ((angles[v] + 0.5) / denom) - std::f32::consts::FRAC_PI_2;
         // The observed root starts away from the virtual NAIVE centre; each
         // additional MST depth occupies another ring.
         let radius = 0.18 + 0.78 * (layout.depth[v] as f32 / max_depth);
@@ -201,12 +229,7 @@ fn layered_positions(
     // branch is at least as tall as its largest node and otherwise as tall as
     // its child envelopes plus the requested circumference-to-circumference
     // gaps.  This is the radius-aware equivalent of the old unit leaf spacing.
-    fn envelope(
-        v: usize,
-        children: &[Vec<usize>],
-        radii: &[f32],
-        half_height: &mut [f32],
-    ) -> f32 {
+    fn envelope(v: usize, children: &[Vec<usize>], radii: &[f32], half_height: &mut [f32]) -> f32 {
         if children[v].is_empty() {
             half_height[v] = radii[v];
             return half_height[v];
@@ -277,7 +300,10 @@ fn draw_split_legend_node<DB: DrawingBackend>(
         let mut pts = vec![centre];
         for step in 0..=18 {
             let a = tilt + offset + std::f64::consts::PI * step as f64 / 18.0;
-            pts.push((centre.0 + (r as f64 * a.cos()).round() as i32, centre.1 + (r as f64 * a.sin()).round() as i32));
+            pts.push((
+                centre.0 + (r as f64 * a.cos()).round() as i32,
+                centre.1 + (r as f64 * a.sin()).round() as i32,
+            ));
         }
         pts
     };
@@ -292,7 +318,11 @@ fn draw_abundance_legend<DB: DrawingBackend>(
     mut y: i32,
     max_abundance: usize,
 ) -> Result<i32, DrawingAreaErrorKind<DB::ErrorType>> {
-    area.draw(&Text::new("Clone/state size (cells)", (10, y), ("sans-serif", 15).into_font()))?;
+    area.draw(&Text::new(
+        "Clone/state size (cells)",
+        (10, y),
+        ("sans-serif", 15).into_font(),
+    ))?;
     y += 28;
     // Human-readable reference counts rather than an arbitrary sqrt(max)
     // midpoint. Every circle still uses exactly the same radius transform as
@@ -316,7 +346,11 @@ fn draw_abundance_legend<DB: DrawingBackend>(
         let text_style = ("sans-serif", 15)
             .into_text_style(area)
             .pos(Pos::new(HPos::Left, VPos::Center));
-        area.draw(&Text::new(format!("{n} cell{}", if n == 1 { "" } else { "s" }), (44, y), text_style))?;
+        area.draw(&Text::new(
+            format!("{n} cell{}", if n == 1 { "" } else { "s" }),
+            (44, y),
+            text_style,
+        ))?;
         y += (2 * r + 12).max(26);
     }
     Ok(y + 6)
@@ -376,7 +410,9 @@ impl MstTree {
             return Ok(());
         }
         if categories.len() != n_nodes || mixed.len() != n_nodes || abundance.len() != n_nodes {
-            return Err("rooted annotation vectors are not row-aligned with ClonoMap states".into());
+            return Err(
+                "rooted annotation vectors are not row-aligned with ClonoMap states".into(),
+            );
         }
 
         let rooted = self.rooted_layout(n_nodes, root_node);
@@ -431,25 +467,38 @@ impl MstTree {
         let category_count = cmap.len();
         let legend_columns = category_count.div_ceil(25).max(1);
         let legend_width = (legend_columns as u32 * 220).max(280);
-        let root = SVGBackend::new(outfile, (1220 + legend_width, canvas_height)).into_drawing_area();
+        let root =
+            SVGBackend::new(outfile, (1220 + legend_width, canvas_height)).into_drawing_area();
         root.fill(&WHITE)?;
         let (plot, legend) = root.split_horizontally(1220);
         let mut chart = ChartBuilder::on(&plot)
             .caption(title, ("sans-serif", 25))
             .margin(35)
             .build_cartesian_2d(-1.12f32..1.12f32, -1.12f32..1.12f32)?;
-        chart.configure_mesh().disable_mesh().x_labels(0).y_labels(0).draw()?;
+        chart
+            .configure_mesh()
+            .disable_mesh()
+            .x_labels(0)
+            .y_labels(0)
+            .draw()?;
 
         for &v in &rooted.order {
             if v != root_node {
                 let p = rooted.parent[v];
-                chart.draw_series([PathElement::new(vec![positions[p], positions[v]], BLACK.mix(0.38))])?;
+                chart.draw_series([PathElement::new(
+                    vec![positions[p], positions[v]],
+                    BLACK.mix(0.38),
+                )])?;
             }
         }
         for &v in &rooted.order {
             let r = abundance_radius(abundance[v], max_abundance);
             if v == root_node {
-                chart.draw_series([Circle::new(positions[v], 9, RGBColor(170, 170, 170).filled())])?;
+                chart.draw_series([Circle::new(
+                    positions[v],
+                    9,
+                    RGBColor(170, 170, 170).filled(),
+                )])?;
                 chart.draw_series([Circle::new(positions[v], 9, BLACK.stroke_width(2))])?;
                 chart.draw_series([Text::new(
                     "HC NAIVE",
@@ -458,9 +507,15 @@ impl MstTree {
                 )])?;
                 continue;
             }
-            let (c1, c2, axis) = cmap.get(&categories[v]).copied().unwrap_or((BLACK, WHITE, 0));
+            let (c1, c2, axis) = cmap
+                .get(&categories[v])
+                .copied()
+                .unwrap_or((BLACK, WHITE, 0));
             chart.draw_series(PointSeries::of_element(
-                [positions[v]], r, &c1, &move |coord, size, _| {
+                [positions[v]],
+                r,
+                &c1,
+                &move |coord, size, _| {
                     let mut a = Vec::with_capacity(20);
                     let mut b = Vec::with_capacity(20);
                     // Diameter tilted 40 degrees. Each polygon includes the centre
@@ -470,11 +525,18 @@ impl MstTree {
                     b.push((0, 0));
                     for step in 0..=18 {
                         let ang = tilt + std::f64::consts::PI * step as f64 / 18.0;
-                        a.push(((size as f64 * ang.cos()).round() as i32, (size as f64 * ang.sin()).round() as i32));
+                        a.push((
+                            (size as f64 * ang.cos()).round() as i32,
+                            (size as f64 * ang.sin()).round() as i32,
+                        ));
                     }
                     for step in 0..=18 {
-                        let ang = tilt + std::f64::consts::PI + std::f64::consts::PI * step as f64 / 18.0;
-                        b.push(((size as f64 * ang.cos()).round() as i32, (size as f64 * ang.sin()).round() as i32));
+                        let ang =
+                            tilt + std::f64::consts::PI + std::f64::consts::PI * step as f64 / 18.0;
+                        b.push((
+                            (size as f64 * ang.cos()).round() as i32,
+                            (size as f64 * ang.sin()).round() as i32,
+                        ));
                     }
                     EmptyElement::at(coord)
                         + Polygon::new(a, c1.filled())
@@ -484,14 +546,21 @@ impl MstTree {
             ))?;
             if mixed[v] {
                 chart.draw_series(PointSeries::of_element(
-                    [positions[v]], r + 2, &BLACK, &|coord, size, style| {
+                    [positions[v]],
+                    r + 2,
+                    &BLACK,
+                    &|coord, size, style| {
                         EmptyElement::at(coord) + Circle::new((0, 0), size, style.stroke_width(1))
                     },
                 ))?;
             }
         }
 
-        legend.draw(&Text::new(annotation_name, (10, 35), ("sans-serif", 20).into_font()))?;
+        legend.draw(&Text::new(
+            annotation_name,
+            (10, 35),
+            ("sans-serif", 20).into_font(),
+        ))?;
         let rows_per_column = category_count.div_ceil(legend_columns).max(1);
         for (i, (cat, (c1, c2, axis))) in cmap.iter().enumerate() {
             let col = i / rows_per_column;
@@ -512,12 +581,24 @@ impl MstTree {
         }
         let mut ly = 67 + rows_per_column as i32 * 24 + 18;
         ly = draw_abundance_legend(&legend, ly, max_abundance)?;
-        legend.draw(&Text::new("Black ring = mixed state", (10, ly), ("sans-serif", 15).into_font()))?;
+        legend.draw(&Text::new(
+            "Black ring = mixed state",
+            (10, ly),
+            ("sans-serif", 15).into_font(),
+        ))?;
         ly += 24;
-        legend.draw(&Text::new("Grey HC NAIVE = inferred unmutated HC; LC empty", (10, ly), ("sans-serif", 15).into_font()))?;
+        legend.draw(&Text::new(
+            "Grey HC NAIVE = inferred unmutated HC; LC empty",
+            (10, ly),
+            ("sans-serif", 15).into_font(),
+        ))?;
         ly += 24;
         let max_path = rooted.path_distance.iter().copied().fold(0.0f32, f32::max);
-        legend.draw(&Text::new(format!("Max MST path: {:.1}", max_path), (10, ly), ("sans-serif", 15).into_font()))?;
+        legend.draw(&Text::new(
+            format!("Max MST path: {:.1}", max_path),
+            (10, ly),
+            ("sans-serif", 15).into_font(),
+        ))?;
         root.present()?;
         Ok(())
     }
@@ -541,7 +622,10 @@ impl MstTree {
             return Ok(());
         }
         if values.len() != n_nodes || abundance.len() != n_nodes {
-            return Err("rooted continuous annotation vectors are not row-aligned with ClonoMap states".into());
+            return Err(
+                "rooted continuous annotation vectors are not row-aligned with ClonoMap states"
+                    .into(),
+            );
         }
         let rooted = self.rooted_layout(n_nodes, root_node);
         let max_abundance = abundance.iter().copied().max().unwrap_or(1).max(1);
@@ -562,7 +646,11 @@ impl MstTree {
         // colour within a plot whose maximum is 3, even when no observed node
         // happens to have distance 0.
         let vmin = 0.0f32;
-        let vmax = observed_values.iter().copied().fold(0.0f32, f32::max).max(1.0);
+        let vmax = observed_values
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max)
+            .max(1.0);
 
         let root = SVGBackend::new(outfile, (1500, canvas_height)).into_drawing_area();
         root.fill(&WHITE)?;
@@ -571,17 +659,29 @@ impl MstTree {
             .caption(title, ("sans-serif", 25))
             .margin(35)
             .build_cartesian_2d(-1.12f32..1.12f32, -1.12f32..1.12f32)?;
-        chart.configure_mesh().disable_mesh().x_labels(0).y_labels(0).draw()?;
+        chart
+            .configure_mesh()
+            .disable_mesh()
+            .x_labels(0)
+            .y_labels(0)
+            .draw()?;
         for &v in &rooted.order {
             if v != root_node {
                 let p = rooted.parent[v];
-                chart.draw_series([PathElement::new(vec![positions[p], positions[v]], BLACK.mix(0.38))])?;
+                chart.draw_series([PathElement::new(
+                    vec![positions[p], positions[v]],
+                    BLACK.mix(0.38),
+                )])?;
             }
         }
         for &v in &rooted.order {
             let r = abundance_radius(abundance[v], max_abundance);
             if v == root_node {
-                chart.draw_series([Circle::new(positions[v], 9, RGBColor(170, 170, 170).filled())])?;
+                chart.draw_series([Circle::new(
+                    positions[v],
+                    9,
+                    RGBColor(170, 170, 170).filled(),
+                )])?;
                 chart.draw_series([Circle::new(positions[v], 9, BLACK.stroke_width(2))])?;
                 chart.draw_series([Text::new(
                     "HC NAIVE",
@@ -598,7 +698,11 @@ impl MstTree {
             chart.draw_series([Circle::new(positions[v], r, BLACK.stroke_width(2))])?;
         }
         let mut ly = 35i32;
-        legend.draw(&Text::new(annotation_name, (10, ly), ("sans-serif", 20).into_font()))?;
+        legend.draw(&Text::new(
+            annotation_name,
+            (10, ly),
+            ("sans-serif", 20).into_font(),
+        ))?;
         ly += 34;
 
         // Standard continuous colour bar: every numeric value maps onto the
@@ -627,13 +731,25 @@ impl MstTree {
             .into_text_style(&legend)
             .pos(Pos::new(HPos::Right, VPos::Top));
         legend.draw(&Text::new(format!("{vmin:.0}"), (BAR_X, ly), left_style))?;
-        legend.draw(&Text::new(format!("{vmax:.0}"), (BAR_X + BAR_W, ly), right_style))?;
+        legend.draw(&Text::new(
+            format!("{vmax:.0}"),
+            (BAR_X + BAR_W, ly),
+            right_style,
+        ))?;
         ly += 28;
         ly = draw_abundance_legend(&legend, ly, max_abundance)?;
-        legend.draw(&Text::new("Grey HC NAIVE = inferred unmutated HC; LC empty", (10, ly), ("sans-serif", 15).into_font()))?;
+        legend.draw(&Text::new(
+            "Grey HC NAIVE = inferred unmutated HC; LC empty",
+            (10, ly),
+            ("sans-serif", 15).into_font(),
+        ))?;
         ly += 24;
         let max_path = rooted.path_distance.iter().copied().fold(0.0f32, f32::max);
-        legend.draw(&Text::new(format!("Max MST path: {:.1}", max_path), (10, ly), ("sans-serif", 15).into_font()))?;
+        legend.draw(&Text::new(
+            format!("Max MST path: {:.1}", max_path),
+            (10, ly),
+            ("sans-serif", 15).into_font(),
+        ))?;
         root.present()?;
         Ok(())
     }
@@ -670,7 +786,13 @@ impl MstTree {
                 children[parent[v]].push(v);
             }
         }
-        RootedLayout { parent, depth, path_distance, order, children }
+        RootedLayout {
+            parent,
+            depth,
+            path_distance,
+            order,
+            children,
+        }
     }
 
     /// Build an MST directly from selected rows of a caller-supplied feature matrix.
@@ -979,7 +1101,7 @@ impl MstTree {
             .collect()
     }
 
-        pub fn plot_2d(
+    pub fn plot_2d(
         &self,
         coords: &ndarray::Array2<f32>,
         outfile: &str,
@@ -1102,7 +1224,6 @@ fn median(v: &[f32]) -> f32 {
         v[m]
     }
 }
-
 
 #[cfg(test)]
 mod plot_encoding_tests {

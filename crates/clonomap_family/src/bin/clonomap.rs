@@ -27,11 +27,11 @@ struct Args {
 
     /// Write PCA plot (SVG)
     #[arg(long)]
-        plot_pca: Option<String>,
+    plot_pca: Option<String>,
 
     /// Write PCA tree plot (SVG)
     #[arg(long)]
-        plot_tree: Option<String>,
+    plot_tree: Option<String>,
 
     /// Make analysis amino acis based (give me the frame starting position (0 ,1 or 2)
     #[arg(long)]
@@ -102,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     model.encoder.sequences.to_tsv(&rows_path)?;
     println!("Written Amino Acid info → {}", rows_path.display());
 
-        {
+    {
         if let Some(f) = args.plot_pca {
             model.pca.plot_2d_clusters(&model.tree, &f)?;
             eprintln!("✅ PCA plot written to {f}");

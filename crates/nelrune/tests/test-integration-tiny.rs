@@ -119,8 +119,16 @@ fn write_two_cell_diagonal_fixture(source_r1: &Path, source_r2: &Path, r1: &Path
     let r1_lines: Vec<&str> = r1_text.lines().collect();
     let r2_lines: Vec<&str> = r2_text.lines().collect();
 
-    assert_eq!(r1_lines.len(), 8, "tiny R1 fixture must contain exactly two reads");
-    assert_eq!(r2_lines.len(), 8, "tiny R2 fixture must contain exactly two reads");
+    assert_eq!(
+        r1_lines.len(),
+        8,
+        "tiny R1 fixture must contain exactly two reads"
+    );
+    assert_eq!(
+        r2_lines.len(),
+        8,
+        "tiny R2 fixture must contain exactly two reads"
+    );
 
     let mut out_r1 = String::new();
     let mut out_r2 = String::new();
@@ -138,23 +146,45 @@ fn write_two_cell_diagonal_fixture(source_r1: &Path, source_r2: &Path, r1: &Path
     // entry is a zero, not a missing cell or feature.
     for read in 0..2 {
         let i = read * 4;
-        out_r1.push_str(&format!("{}\n{}\n{}\n{}\n", r1_lines[i], r1_lines[i + 1], r1_lines[i + 2], r1_lines[i + 3]));
-        out_r2.push_str(&format!("{}\n{}\n{}\n{}\n", r2_lines[i], r2_lines[i + 1], r2_lines[i + 2], r2_lines[i + 3]));
+        out_r1.push_str(&format!(
+            "{}\n{}\n{}\n{}\n",
+            r1_lines[i],
+            r1_lines[i + 1],
+            r1_lines[i + 2],
+            r1_lines[i + 3]
+        ));
+        out_r2.push_str(&format!(
+            "{}\n{}\n{}\n{}\n",
+            r2_lines[i],
+            r2_lines[i + 1],
+            r2_lines[i + 2],
+            r2_lines[i + 3]
+        ));
     }
 
     for read in 0..2 {
         let i = read * 4;
         let source_cell_read = r1_lines[i + 1];
-        assert!(source_cell_read.len() >= 4, "tiny R1 read is shorter than CELL:4");
+        assert!(
+            source_cell_read.len() >= 4,
+            "tiny R1 read is shorter than CELL:4"
+        );
         let second_cell_read = format!("TGCA{}", &source_cell_read[4..]);
         let second_name = format!("{}-cell2", r1_lines[i]);
 
-        out_r1.push_str(&format!("{second_name}\n{second_cell_read}\n{}\n{}\n", r1_lines[i + 2], r1_lines[i + 3]));
+        out_r1.push_str(&format!(
+            "{second_name}\n{second_cell_read}\n{}\n{}\n",
+            r1_lines[i + 2],
+            r1_lines[i + 3]
+        ));
 
         let second_r2_name = format!("{}-cell2", r2_lines[i]);
         let second_r2_seq = reverse_complement(r2_lines[i + 1]);
         let second_r2_qual: String = r2_lines[i + 3].chars().rev().collect();
-        out_r2.push_str(&format!("{second_r2_name}\n{second_r2_seq}\n{}\n{second_r2_qual}\n", r2_lines[i + 2]));
+        out_r2.push_str(&format!(
+            "{second_r2_name}\n{second_r2_seq}\n{}\n{second_r2_qual}\n",
+            r2_lines[i + 2]
+        ));
     }
 
     fs::write(r1, out_r1).unwrap_or_else(|err| panic!("failed to write {}: {err}", r1.display()));
@@ -245,7 +275,7 @@ fn integration_tiny_star() {
             "--min-mapq",
             "0",
             // Both synthetic cells have two molecules and must survive filtering.
-            "--min-cell-counts",
+            "--min-umi-count",
             "1",
             "--min-insert-len",
             "20",
