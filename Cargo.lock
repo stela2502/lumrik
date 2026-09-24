@@ -217,7 +217,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bam_tide"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -754,7 +754,7 @@ checksum = "ef8ae57c4978a2acd8b869ce6b9ca1dfe817bff704c220209fdef2c0b75a01b9"
 
 [[package]]
 name = "data_table"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "fast_tag_mapper"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1318,7 +1318,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "gtf_splice_index"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1372,7 +1372,7 @@ checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hmm"
-version = "0.7.2"
+version = "0.7.3"
 
 [[package]]
 name = "hts-sys"
@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-dna"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "clap",
  "int-to-prot",
@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-prot"
-version = "0.7.2"
+version = "0.7.3"
 
 [[package]]
 name = "interpol"
@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "lumrik-status"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
 ]
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "mapping_info"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "atty",
  "chrono",
@@ -2070,7 +2070,7 @@ dependencies = [
 
 [[package]]
 name = "nelrune"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "ommverse"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "read-tag-table"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2738,7 +2738,7 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "reference_curator"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2927,7 +2927,7 @@ dependencies = [
 
 [[package]]
 name = "sc-analysis"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2944,7 +2944,7 @@ dependencies = [
 
 [[package]]
 name = "sc-beacon"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "sc-mapper"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -2974,7 +2974,7 @@ dependencies = [
 
 [[package]]
 name = "sc-te"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -2991,7 +2991,7 @@ dependencies = [
 
 [[package]]
 name = "sc-vdj"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3011,7 +3011,7 @@ dependencies = [
 
 [[package]]
 name = "sc_primer"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3028,7 +3028,7 @@ dependencies = [
 
 [[package]]
 name = "scdata"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3214,7 +3214,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "snp-index"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3521,7 +3521,7 @@ dependencies = [
 
 [[package]]
 name = "traconmech"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "clap",
