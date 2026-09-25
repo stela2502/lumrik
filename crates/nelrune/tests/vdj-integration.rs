@@ -7,7 +7,7 @@ const CELL: &str = "CTTGGTCTTTTGGTTAATTCTTACCAT";
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data/vdj-integration-cell")
+        .join("../sc-vdj/tests/data/vdj-integration-cell")
 }
 
 fn test_output_dir() -> PathBuf {
@@ -70,7 +70,8 @@ fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
     }
     fs::create_dir_all(&out).expect("create persistent test output");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_nelrune-vdj"))
+    let output = Command::new(env!("CARGO_BIN_EXE_nelrune"))
+        .arg("vdj")
         .arg("--exonic")
         .arg(&exonic)
         .arg("--bam")
@@ -83,7 +84,7 @@ fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
         .arg("100")
         .arg("--no-health-server")
         .output()
-        .expect("run nelrune-vdj");
+        .expect("run nelrune vdj");
 
     fs::write(out.join("nelrune-vdj.stdout.txt"), &output.stdout)
         .expect("write nelrune-vdj stdout");
@@ -93,14 +94,14 @@ fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "nelrune-vdj failed with {}\nSTDOUT:\n{}\nSTDERR:\n{}",
+        "nelrune vdj failed with {}\nSTDOUT:\n{}\nSTDERR:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         stderr
     );
 
     let batches = parsed_batch_flushes(&stderr)
-        .expect("nelrune-vdj stderr did not report routing batches");
+        .expect("nelrune vdj stderr did not report routing batches");
     assert!(
         batches >= 2,
         "batch size 100 did not force repeated compaction; batches={batches}\n{stderr}"

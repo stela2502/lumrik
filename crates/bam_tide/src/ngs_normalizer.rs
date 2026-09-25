@@ -98,14 +98,6 @@ impl NgsNormalizerSupport {
         Scdata::new(1, MatrixValueType::Real)
     }
 
-    pub fn configure_rayon_threads(threads: usize) {
-        if threads > 1 {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build_global()
-                .ok();
-        }
-    }
 
     pub fn orientation_label(orientation: Orientation) -> &'static str {
         match orientation {

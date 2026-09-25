@@ -10,7 +10,7 @@ use mapping_info::MappingInfo;
 use onehot_dna::OneHotSequence;
 use rayon::prelude::*;
 use sc_primer::PrimerDetector;
-use scdata::{GeneUmiHash, Scdata};
+use scdata::{GeneUmiHash, Scdata, ScdataInsertState};
 
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use std::collections::HashSet;
@@ -194,16 +194,14 @@ impl IlluminaPartial {
         let umi_id = IntToDna::new(&umi.seq).into_u64();
 
         if let Some(id) = feature_tag_mapper.map_feature_id(&r2.seq, &mut self.stats) {
-            if self.feature_tag_table.try_insert(
-                &cell_id,
-                GeneUmiHash(id, umi_id),
-                1.0,
-                &mut self.stats,
-            ) {
+            let state = self
+                .feature_tag_table
+                .try_insert(&cell_id, GeneUmiHash(id, umi_id), 1.0);
+            self.stats.report(state.as_str());
+            if state == ScdataInsertState::Inserted {
                 self.stats.report("unique_feature");
                 self.stats.report("feature_tag_match");
             } else {
-                self.stats.report("duplicate");
                 self.stats.report("duplicate_molecules");
             }
             return Ok(());
@@ -440,8 +438,6 @@ impl IlluminaNormalizer {
         F: FnMut(&[(Option<FastqRecord>, FastqRecord)]) -> Result<bool>,
         P: FnMut(&MappingInfo),
     {
-        NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
-
         let mut reader = FastqPairReader::from_paths(r1_path, r2_path).with_context(|| {
             format!(
                 "failed to open FASTQ pair: {} and {}",
@@ -600,8 +596,6 @@ impl IlluminaNormalizer {
         r1_path: &Path,
         r2_path: &Path,
     ) -> Result<Vec<(Option<FastqRecord>, FastqRecord)>> {
-        NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
-
         let mut reader = FastqPairReader::from_paths(r1_path, r2_path).with_context(|| {
             format!(
                 "failed to open FASTQ pair: {} and {}",
@@ -767,16 +761,20 @@ impl IlluminaNormalizer {
         self.stats
             .start_timer("bam_tide/multi_cpu/illumina_normalize_chunk");
 
+        let threads = rayon::current_num_threads().max(1);
+        let chunk_size = (input.len() / threads).max(10_000);
         let partials: Vec<IlluminaPartial> = input
-            .par_iter()
-            .map(|(r1, r2)| {
+            .par_chunks(chunk_size)
+            .map(|chunk| {
                 let mut out = IlluminaPartial::new();
 
-                if out
-                    .normalize_pair(r1, r2, &self.config, self.feature_tag_counts.mapper())
-                    .is_err()
-                {
-                    out.stats.report("failed_pairs");
+                for (r1, r2) in chunk {
+                    if out
+                        .normalize_pair(r1, r2, &self.config, self.feature_tag_counts.mapper())
+                        .is_err()
+                    {
+                        out.stats.report("failed_pairs");
+                    }
                 }
 
                 out

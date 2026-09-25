@@ -1,5 +1,6 @@
 use super::{BamFeatureEvidence, SequencePart};
 use crate::index::{Chain, SegmentId, VdjIndex};
+use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
 
 /// Compact germline-aware sequence summary for one connected receptor fragment.
@@ -8,7 +9,7 @@ use onehot_dna::OneHotSequence;
 /// retain A/C/G/T counts and maximum qualities per position, plus compact
 /// germline segment support/placement metadata.  No read-level sequence history
 /// is kept after a successful merge.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReceptorSequenceEvidence {
     pub base_counts: [Vec<u16>; 4],
     pub base_max_qual: [Vec<u8>; 4],
@@ -19,12 +20,98 @@ pub struct ReceptorSequenceEvidence {
     /// a merge/indexing identity and for downstream support scoring.
     pub germline_anchors: Vec<GermlineAnchor>,
     pub support_features: u32,
+    /// Packed current best sequence. Kept in lock-step with the A/C/G/T
+    /// evidence so hot-path matching and the later rediscovery pass do not
+    /// have to rebuild a sequence representation from the count vectors.
+    /// `None` means the current consensus contains an unobserved/ambiguous N.
+    packed_consensus: Option<IntToDna>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GermlineAnchor {
     pub segment_id: SegmentId,
     pub summary_start: isize,
+}
+
+const PACKED_BOOTSTRAP_READS: usize = 50;
+const PACKED_STAR_WINDOW_BASES: u32 = 16;
+const PACKED_STAR_WINDOW_MIN_READS: usize = 3;
+
+#[derive(Debug, Clone)]
+struct PendingPackedRead {
+    packed: IntToDna,
+    qualities: Vec<u8>,
+    segment_ids: Vec<SegmentId>,
+    germline_anchors: Vec<GermlineAnchor>,
+}
+
+impl PendingPackedRead {
+    fn from_part(
+        part: &SequencePart,
+        segment_ids: &[SegmentId],
+        reverse: bool,
+        index: &VdjIndex,
+        min_overlap: usize,
+    ) -> Option<Self> {
+        let bases = if reverse {
+            crate::index::reverse_complement(&part.bases)
+        } else {
+            part.bases.clone()
+        };
+        let packed = IntToDna::try_new(&bases).ok()?;
+        let mut qualities = part.qualities.clone();
+        if reverse {
+            qualities.reverse();
+        }
+        let mut germline_anchors = Vec::with_capacity(segment_ids.len());
+        for &id in segment_ids {
+            if let Some(segment) = index.segment(id) {
+                let anchor_overlap = min_overlap.min(8).max(4);
+                if let Some(read_start) =
+                    fast_anchor_offset(&segment.sequence, &bases, anchor_overlap)
+                {
+                    germline_anchors.push(GermlineAnchor {
+                        segment_id: id,
+                        summary_start: -read_start,
+                    });
+                }
+            }
+        }
+        Some(Self {
+            packed,
+            qualities,
+            segment_ids: segment_ids.to_vec(),
+            germline_anchors,
+        })
+    }
+
+    #[inline]
+    fn mapping_sequence(&self) -> OneHotSequence {
+        OneHotSequence::from_2bit_bytes(&self.packed.u8_encoded, self.packed.size)
+    }
+
+    fn into_summary(self, index: &VdjIndex) -> ReceptorSequenceEvidence {
+        let n = self.packed.size;
+        let mut out = ReceptorSequenceEvidence {
+            base_counts: std::array::from_fn(|_| vec![0; n]),
+            base_max_qual: std::array::from_fn(|_| vec![0; n]),
+            segment_support: Vec::with_capacity(self.segment_ids.len()),
+            germline_anchors: self.germline_anchors,
+            support_features: 1,
+            packed_consensus: Some(self.packed.clone()),
+        };
+        for pos in 0..n {
+            let byte = self.packed.u8_encoded[pos >> 2];
+            let base = ((byte >> ((pos & 3) * 2)) & 0b11) as usize;
+            out.base_counts[base][pos] = 1;
+            out.base_max_qual[base][pos] = self.qualities.get(pos).copied().unwrap_or(0);
+        }
+        for id in self.segment_ids {
+            add_segment_support(&mut out.segment_support, id, 1);
+        }
+        out.refresh_packed_consensus(index);
+        out
+    }
 }
 
 impl ReceptorSequenceEvidence {
@@ -34,6 +121,10 @@ impl ReceptorSequenceEvidence {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn packed_consensus(&self) -> Option<&IntToDna> {
+        self.packed_consensus.as_ref()
     }
 
     pub fn segment_ids(&self) -> impl Iterator<Item = SegmentId> + '_ {
@@ -169,6 +260,7 @@ impl ReceptorSequenceEvidence {
             segment_support: Vec::with_capacity(segment_ids.len()),
             germline_anchors: Vec::with_capacity(segment_ids.len()),
             support_features: 1,
+            packed_consensus: None,
         };
         for (i, &base) in bases.iter().enumerate() {
             let Some(k) = base_index(base) else { continue };
@@ -192,7 +284,14 @@ impl ReceptorSequenceEvidence {
                 }
             }
         }
+        out.refresh_packed_consensus(index);
         out
+    }
+
+    #[inline]
+    fn refresh_packed_consensus(&mut self, index: &VdjIndex) {
+        let consensus = self.consensus(index);
+        self.packed_consensus = IntToDna::try_new(&consensus).ok();
     }
 
     fn shares_segment(&self, other: &Self) -> bool {
@@ -251,12 +350,19 @@ impl ReceptorSequenceEvidence {
         candidates.sort_unstable();
         candidates.dedup();
 
+        // Mapper/germline geometry has already proposed these offsets. Do not
+        // search the alignment space for the common case: verify the known
+        // placement directly with packed OneHot comparisons. Up to five
+        // incompatible informative positions are accepted here; uglier
+        // overlaps fall through to the existing indel-aware rescue.
         let offset = candidates
             .into_iter()
-            .find(|off| overlap_is_compatible_packed(&a, &b, *off, min_overlap))
+            .find(|off| known_offset_is_compatible_packed(&a, &b, *off, min_overlap, 5))
             .or_else(|| best_offset_packed(&a, &b, min_overlap).map(|x| x.0));
         if let Some(offset) = offset {
+            trace_overlap_placement("packed", self, other, index, offset);
             self.merge_at(other, offset);
+            self.refresh_packed_consensus(index);
             return true;
         }
 
@@ -278,6 +384,7 @@ impl ReceptorSequenceEvidence {
             let bc = other.consensus(index);
             if let Some(aln) = needleman_wunsch_overlap(&ac, &bc, min_overlap) {
                 self.merge_aligned(other, &aln.columns);
+                self.refresh_packed_consensus(index);
                 return true;
             }
         }
@@ -397,6 +504,64 @@ impl ReceptorSequenceEvidence {
             .collect::<Vec<_>>()
             .join(",");
         eprintln!("[sc-vdj split-trace]   anchors: [{anchors}]");
+    }
+
+    fn merge_packed_at(
+        &mut self,
+        other: &PendingPackedRead,
+        offset: isize,
+        index: &VdjIndex,
+    ) {
+        let prepend = (-offset).max(0) as usize;
+        if prepend > 0 {
+            for v in &mut self.base_counts {
+                let mut x = vec![0; prepend];
+                x.extend_from_slice(v);
+                *v = x;
+            }
+            for v in &mut self.base_max_qual {
+                let mut x = vec![0; prepend];
+                x.extend_from_slice(v);
+                *v = x;
+            }
+            for anchor in &mut self.germline_anchors {
+                anchor.summary_start += prepend as isize;
+            }
+        }
+        let start = if offset < 0 { 0 } else { offset as usize };
+        let need = start + other.packed.size;
+        for v in &mut self.base_counts {
+            if v.len() < need {
+                v.resize(need, 0);
+            }
+        }
+        for v in &mut self.base_max_qual {
+            if v.len() < need {
+                v.resize(need, 0);
+            }
+        }
+        for pos in 0..other.packed.size {
+            let byte = other.packed.u8_encoded[pos >> 2];
+            let base = ((byte >> ((pos & 3) * 2)) & 0b11) as usize;
+            let dst = start + pos;
+            self.base_counts[base][dst] = self.base_counts[base][dst].saturating_add(1);
+            self.base_max_qual[base][dst] = self.base_max_qual[base][dst]
+                .max(other.qualities.get(pos).copied().unwrap_or(0));
+        }
+        for &id in &other.segment_ids {
+            add_segment_support(&mut self.segment_support, id, 1);
+        }
+        for anchor in &other.germline_anchors {
+            let shifted = GermlineAnchor {
+                segment_id: anchor.segment_id,
+                summary_start: anchor.summary_start + start as isize,
+            };
+            if !self.germline_anchors.contains(&shifted) {
+                self.germline_anchors.push(shifted);
+            }
+        }
+        self.support_features = self.support_features.saturating_add(1);
+        self.refresh_packed_consensus(index);
     }
 
     fn merge_at(&mut self, other: &Self, offset: isize) {
@@ -569,7 +734,100 @@ pub(crate) fn consume_chain_features(
     chain: Chain,
     min_overlap: usize,
 ) {
-    for feature in features {
+    let mut pending = Vec::<PendingPackedRead>::with_capacity(PACKED_BOOTSTRAP_READS);
+    let mut pending_star_window: Option<(i32, u32)> = None;
+
+    let flush_pending = |pending: &mut Vec<PendingPackedRead>,
+                         summaries: &mut Vec<ReceptorSequenceEvidence>| {
+        if pending.is_empty() {
+            return;
+        }
+
+        // The bootstrap reads have not entered ReceptorSequenceEvidence yet.
+        // Seed one collector, then use shared germline geometry to propose an
+        // exact coordinate for the remaining packed reads. OneHot verifies only
+        // that coordinate; accepted reads splat directly into the collector.
+        let first = pending.remove(0);
+        let mut collector = first.into_summary(index);
+        let mut unresolved = Vec::new();
+
+        for read in pending.drain(..) {
+            let a = collector.mapping_sequence();
+            let b = read.mapping_sequence();
+            let mut offsets = Vec::<isize>::new();
+            for aa in &collector.germline_anchors {
+                for bb in &read.germline_anchors {
+                    if aa.segment_id == bb.segment_id {
+                        offsets.push(aa.summary_start - bb.summary_start);
+                    }
+                }
+            }
+            offsets.sort_unstable();
+            offsets.dedup();
+
+            if let Some(offset) = offsets.into_iter().find(|off| {
+                known_offset_is_compatible_packed(&a, &b, *off, min_overlap, 5)
+            }) {
+                collector.merge_packed_at(&read, offset, index);
+            } else {
+                unresolved.push(read);
+            }
+        }
+
+        // Only the assembled stack and genuinely unresolved reads enter the old
+        // general summary machinery. Successful packed reads never become
+        // individual ReceptorSequenceEvidence objects.
+        let mut incoming = Vec::with_capacity(1 + unresolved.len());
+        incoming.push(collector);
+        incoming.extend(unresolved.into_iter().map(|read| read.into_summary(index)));
+        merge_summary_batch(summaries, incoming, index, min_overlap);
+    };
+
+    // STAR has already done the expensive genomic placement.  Feed nearby
+    // alignments to the packed collector together instead of preserving BAM
+    // arrival order: this makes the existing shared-anchor/direct packed check
+    // see the reads in genomic order and lets one collector absorb a local pile
+    // before persistent summaries are touched.  Unmapped/rescued evidence sorts
+    // last and retains the old fallback behaviour.
+    let mut ordered_features = features.to_vec();
+    ordered_features.sort_unstable_by_key(|feature| {
+        feature
+            .mappings
+            .iter()
+            .filter(|m| m.alignment.tid >= 0)
+            .map(|m| (m.alignment.tid, m.alignment.start))
+            .min()
+            .unwrap_or((i32::MAX, u32::MAX))
+    });
+
+    for feature in ordered_features {
+        let feature_star_start = feature
+            .mappings
+            .iter()
+            .filter(|m| m.alignment.tid >= 0)
+            .map(|m| (m.alignment.tid, m.alignment.start))
+            .min();
+
+        // Keep the packed collector local in STAR coordinate space.  Sixteen
+        // bases is enough to amortize a real placement, but never flush a tiny
+        // pile: retain at least three observations so sparse HC evidence is not
+        // accidentally reduced to a single anchor.  Every read still enters
+        // either the packed collector or the exact old fallback below.
+        if let (Some((window_tid, window_start)), Some((tid, start))) =
+            (pending_star_window, feature_star_start)
+        {
+            let outside_window = tid != window_tid
+                || start.saturating_sub(window_start) >= PACKED_STAR_WINDOW_BASES;
+            if outside_window && pending.len() >= PACKED_STAR_WINDOW_MIN_READS {
+                flush_pending(&mut pending, summaries);
+                pending_star_window = None;
+            }
+        }
+
+        if pending_star_window.is_none() {
+            pending_star_window = feature_star_start;
+        }
+
         let mut segment_ids: Vec<_> = feature
             .mappings
             .iter()
@@ -586,9 +844,6 @@ pub(crate) fn consume_chain_features(
             continue;
         }
 
-        // The mapper geometry tells us how read orientation relates to the
-        // transcript-oriented germline sequence.  If mappings disagree, keep
-        // forward orientation and let observed overlap decide later.
         let reverse = feature
             .mappings
             .iter()
@@ -608,59 +863,32 @@ pub(crate) fn consume_chain_features(
             if part.bases.is_empty() {
                 continue;
             }
-            let incoming = ReceptorSequenceEvidence::from_part(
-                part,
-                &segment_ids,
-                reverse,
-                index,
-                min_overlap,
-            );
-
-            let mut target = None;
-
-            // First try summaries sharing a germline identity.  This is the
-            // common fast path and avoids global sequence searching.
-            for i in 0..summaries.len() {
-                if !summaries[i].shares_segment(&incoming) {
-                    continue;
+            if let Some(read) =
+                PendingPackedRead::from_part(part, &segment_ids, reverse, index, min_overlap)
+            {
+                pending.push(read);
+                if pending.len() == PACKED_BOOTSTRAP_READS {
+                    flush_pending(&mut pending, summaries);
+                    pending_star_window = None;
                 }
-                if summaries[i].try_consume(&incoming, index, min_overlap) {
-                    target = Some(i);
-                    break;
-                }
+            } else {
+                // IUPAC/ambiguous input cannot be represented losslessly in
+                // the 2-bit staging buffer. Preserve the old path for it.
+                flush_pending(&mut pending, summaries);
+                pending_star_window = None;
+                let incoming = ReceptorSequenceEvidence::from_part(
+                    part,
+                    &segment_ids,
+                    reverse,
+                    index,
+                    min_overlap,
+                );
+                merge_summary_batch(summaries, vec![incoming], index, min_overlap);
             }
-
-            // A bridging fragment may connect different germline identities
-            // through observed overlap (V->D, D->J, J->C).  This fallback is
-            // only over compact summaries, never over retained BAM fragments.
-            if target.is_none() {
-                for i in 0..summaries.len() {
-                    if summaries[i].shares_segment(&incoming) {
-                        continue; // already tested above
-                    }
-                    if summaries[i].try_consume(&incoming, index, min_overlap) {
-                        target = Some(i);
-                        break;
-                    }
-                }
-            }
-
-            let target = match target {
-                Some(i) => i,
-                None => {
-                    trace_new_summary_split("consume_chain_features", &incoming, summaries, index);
-                    summaries.push(incoming);
-                    summaries.len() - 1
-                }
-            };
-
-            // Only the summary touched by this new evidence can have acquired a
-            // new bridge to another existing component.  Re-test that one
-            // component rather than rescanning every pair after every read.
-            collapse_from(summaries, target, index, min_overlap);
         }
     }
 
+    flush_pending(&mut pending, summaries);
     summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
 }
 
@@ -850,6 +1078,70 @@ fn needleman_wunsch_overlap(a: &[u8], b: &[u8], min_overlap: usize) -> Option<Ov
     }
 
     Some(OverlapAlignment { columns })
+}
+
+fn trace_overlap_placement(
+    method: &str,
+    a: &ReceptorSequenceEvidence,
+    b: &ReceptorSequenceEvidence,
+    index: &VdjIndex,
+    offset: isize,
+) {
+    if std::env::var_os("SC_VDJ_TRACE_OVERLAPS").is_none() {
+        return;
+    }
+
+    let a_seq = a.consensus(index);
+    let b_seq = b.consensus(index);
+    let left = 0isize.min(offset);
+    let a_pad = (0isize - left) as usize;
+    let b_pad = (offset - left) as usize;
+    let width = (a_pad + a_seq.len()).max(b_pad + b_seq.len());
+
+    let mut a_line = vec![b' '; width];
+    let mut b_line = vec![b' '; width];
+    a_line[a_pad..a_pad + a_seq.len()].copy_from_slice(&a_seq);
+    b_line[b_pad..b_pad + b_seq.len()].copy_from_slice(&b_seq);
+
+    let mut marks = vec![b' '; width];
+    for pos in 0..width {
+        let aa = a_line[pos];
+        let bb = b_line[pos];
+        if aa == b' ' || bb == b' ' {
+            continue;
+        }
+        marks[pos] = if aa == bb && aa != b'N' { b'|' } else { b'.' };
+    }
+
+    eprintln!("\\n[sc-vdj overlap-trace] method={method} offset={offset}");
+    eprintln!("[sc-vdj overlap-trace] A: {}", String::from_utf8_lossy(&a_seq));
+    eprintln!("[sc-vdj overlap-trace] B: {}", String::from_utf8_lossy(&b_seq));
+    eprintln!("[sc-vdj overlap-trace] placed:");
+    eprintln!("[sc-vdj overlap-trace] A  {}", String::from_utf8_lossy(&a_line));
+    eprintln!("[sc-vdj overlap-trace]    {}", String::from_utf8_lossy(&marks));
+    eprintln!("[sc-vdj overlap-trace] B  {}", String::from_utf8_lossy(&b_line));
+}
+
+fn known_offset_is_compatible_packed(
+    a: &OneHotSequence,
+    b: &OneHotSequence,
+    off: isize,
+    min_overlap: usize,
+    max_mismatches: usize,
+) -> bool {
+    let a0 = off.max(0) as usize;
+    let b0 = (-off).max(0) as usize;
+    if a0 >= a.len() || b0 >= b.len() {
+        return false;
+    }
+    let ov = (a.len() - a0).min(b.len() - b0);
+    if ov < min_overlap {
+        return false;
+    }
+    let Some((informative, compatible)) = a.compatibility_counts(a0, b, b0, ov) else {
+        return false;
+    };
+    informative >= min_overlap && informative.saturating_sub(compatible) <= max_mismatches
 }
 
 fn overlap_is_compatible_packed(

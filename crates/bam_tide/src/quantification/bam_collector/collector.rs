@@ -17,7 +17,7 @@ use crate::quantification::{
     snp::SnpSideChannel,
 };
 
-use crate::results::QuantData;
+use scdata::QuantData;
 
 use read_tag_table::{ReadTagRecord, ReadTagTable};
 use sc_primer::Grammar;
@@ -25,11 +25,13 @@ use sc_primer::Grammar;
 use gtf_splice_index::{MatchOptions, SpliceIndex};
 
 use snp_index::Genome;
+use mapping_info::MappingInfo;
 
 const CHUNK: usize = 100_000;
 
 pub struct BamCollectorResult {
     pub data: QuantData,
+    pub report: MappingInfo,
     pub snp: Option<SnpSideChannel>,
 }
 
@@ -60,7 +62,8 @@ impl BamCollector {
     /// later when the input SAM/BAM stream has been opened.
     pub fn from_cli(config: BamCollectorConfig) -> Result<Self> {
         let index = SpliceIndex::load(&config.index)
-            .with_context(|| format!("reading splice index {}", config.index.display()))?;
+            .with_context(|| format!("reading splice index {}", config.index.display()))?
+            .with_match_mode(config.quant_mode.splice_match_mode());
 
         let genome = match &config.genome {
             Some(path) => Some(
@@ -93,8 +96,6 @@ impl BamCollector {
             read1_only: config.read1_only,
 
             require_strand: config.require_strand,
-
-            quant_mode: config.quant_mode,
 
             ..ProcessorOptions::default()
         };
@@ -134,7 +135,7 @@ impl BamCollector {
     }
 
     pub fn run_paths(self, paths: &[std::path::PathBuf]) -> Result<BamCollectorResult> {
-        self.run_paths_with_progress(paths, |_| {})
+        self.run_paths_with_progress(paths, |_, _| {})
     }
 
     /// Collect BAM paths while publishing a snapshot after every processed chunk.
@@ -145,19 +146,19 @@ impl BamCollector {
         mut progress: F,
     ) -> Result<BamCollectorResult>
     where
-        F: FnMut(&QuantData),
+        F: FnMut(&QuantData, &MappingInfo),
     {
-        let mut data = QuantData::new();
+        let mut data = QuantData::standard();
         let Some(first_path) = paths.first() else {
             anyhow::bail!("no BAM files supplied");
         };
-        data.report = mapping_info::MappingInfo::new(
+        let mut report = MappingInfo::new(
             None,
             self.config.min_mapq as f32,
             self.config.max_reads.unwrap_or(usize::MAX),
         );
 
-        data.report.start_counter();
+        report.start_counter();
 
         let mut n_seen = 0usize;
         let mut seen_unbarcoded = HashSet::<(u64, u64)>::new();
@@ -208,6 +209,7 @@ impl BamCollector {
                 &mut reader,
                 snp.as_ref(),
                 &mut data,
+                &mut report,
                 &mut n_seen,
                 &mut seen_unbarcoded,
                 read_tag_table.as_ref(),
@@ -217,7 +219,7 @@ impl BamCollector {
             .with_context(|| format!("collecting BAM {}", path.display()))?;
         }
 
-        Ok(BamCollectorResult { data, snp })
+        Ok(BamCollectorResult { data, report, snp })
     }
 
     fn collect(&self, mut reader: Reader) -> Result<BamCollectorResult> {
@@ -225,24 +227,25 @@ impl BamCollector {
 
         let snp = self.load_snp_side_channel(&header)?;
 
-        let mut data = QuantData::new();
+        let mut data = QuantData::standard();
 
-        data.report = mapping_info::MappingInfo::new(
+        let mut report = MappingInfo::new(
             None,
             self.config.min_mapq as f32,
             self.config.max_reads.unwrap_or(usize::MAX),
         );
 
-        data.report.start_counter();
+        report.start_counter();
 
         let mut n_seen = 0usize;
         let mut seen_unbarcoded = HashSet::<(u64, u64)>::new();
 
-        let mut no_progress = |_: &QuantData| {};
+        let mut no_progress = |_: &QuantData, _: &MappingInfo| {};
         self.collect_reader(
             &mut reader,
             snp.as_ref(),
             &mut data,
+            &mut report,
             &mut n_seen,
             &mut seen_unbarcoded,
             None,
@@ -250,7 +253,7 @@ impl BamCollector {
             &mut no_progress,
         )?;
 
-        Ok(BamCollectorResult { data, snp })
+        Ok(BamCollectorResult { data, report, snp })
     }
 
     fn collect_reader(
@@ -258,11 +261,12 @@ impl BamCollector {
         reader: &mut Reader,
         snp: Option<&SnpSideChannel>,
         data: &mut QuantData,
+        report: &mut MappingInfo,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
         read_tag_table: Option<&ReadTagTable>,
         bulk_cell_id: u64,
-        progress: &mut dyn FnMut(&QuantData),
+        progress: &mut dyn FnMut(&QuantData, &MappingInfo),
     ) -> Result<()> {
         let header = reader.header().clone();
 
@@ -306,6 +310,7 @@ impl BamCollector {
                     &processor,
                     &mut jobs,
                     data,
+                    report,
                     n_seen,
                     seen_unbarcoded,
                     bulk_cell_id,
@@ -327,6 +332,7 @@ impl BamCollector {
                     &processor,
                     &mut jobs,
                     data,
+                    report,
                     n_seen,
                     seen_unbarcoded,
                     bulk_cell_id,
@@ -335,8 +341,8 @@ impl BamCollector {
             }
         }
 
-        self.flush_jobs(&processor, &mut jobs, data)?;
-        progress(data);
+        self.flush_jobs(&processor, &mut jobs, data, report)?;
+        progress(data, report);
         Ok(())
     }
 
@@ -349,12 +355,13 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
+        report: &mut MappingInfo,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
         bulk_cell_id: u64,
-        progress: &mut dyn FnMut(&QuantData),
+        progress: &mut dyn FnMut(&QuantData, &MappingInfo),
     ) -> Result<bool> {
-        data.report
+        report
             .report_n("bam_records_seen", group.records().len());
 
         let qname = std::str::from_utf8(group.qname())
@@ -367,20 +374,20 @@ impl BamCollector {
         // requiring CB/UB tags or query-name sorting.
         if self.config.analysis_type == AnalysisType::Bulk {
             let molecule_id = bulk_molecule_id(qname.as_bytes());
-            data.report.report("bulk synthetic identity");
+            report.report("bulk synthetic identity");
 
             for record in group.records() {
                 self.push_job(
                     job_builder.build_with_identity(
                         record,
-                        &mut data.report,
+                        report,
                         bulk_cell_id,
                         molecule_id,
                     )?,
                     jobs,
                     n_seen,
                 );
-                if self.after_job(processor, jobs, data, *n_seen, progress)? {
+                if self.after_job(processor, jobs, data, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -397,11 +404,11 @@ impl BamCollector {
                 sc_primer::GrammarType::Vdj => "primer provenance VDJ",
                 sc_primer::GrammarType::Other => "primer provenance Other",
             };
-            data.report
+            report
                 .report_n(provenance_label, group.records().len());
 
             if !self.config.grammar_type.accepts(read_tag.grammar_type) {
-                data.report
+                report
                     .report_n("primer provenance filtered", group.records().len());
                 return Ok(false);
             }
@@ -419,8 +426,8 @@ impl BamCollector {
                 record.push_aux(b"UB", Aux::String(umi))?;
                 record.push_aux(b"UY", Aux::String(umi_qual))?;
 
-                self.push_job(job_builder.build(record, &mut data.report)?, jobs, n_seen);
-                if self.after_job(processor, jobs, data, *n_seen, progress)? {
+                self.push_job(job_builder.build(record, report)?, jobs, n_seen);
+                if self.after_job(processor, jobs, data, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -430,14 +437,14 @@ impl BamCollector {
         // BAMs without Lumrik provenance predate GrammarType (or come from an
         // external CB/UB source). Preserve historical behaviour by treating
         // those records as GEX.
-        data.report
+        report
             .report_n("primer provenance GEX (legacy)", group.records().len());
         if !self
             .config
             .grammar_type
             .accepts(sc_primer::GrammarType::Gex)
         {
-            data.report
+            report
                 .report_n("primer provenance filtered", group.records().len());
             return Ok(false);
         }
@@ -455,23 +462,23 @@ impl BamCollector {
                 .map_err(anyhow::Error::msg)?;
 
             if !seen_unbarcoded.insert((identity.cell_id, identity.molecule_id)) {
-                data.report.report("unbarcoded PCR duplicate");
+                report.report("unbarcoded PCR duplicate");
                 return Ok(false);
             }
-            data.report.report("unbarcoded sequence identity");
+            report.report("unbarcoded sequence identity");
 
             for record in group.records() {
                 self.push_job(
                     job_builder.build_with_identity(
                         record,
-                        &mut data.report,
+                        report,
                         identity.cell_id,
                         identity.molecule_id,
                     )?,
                     jobs,
                     n_seen,
                 );
-                if self.after_job(processor, jobs, data, *n_seen, progress)? {
+                if self.after_job(processor, jobs, data, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -482,8 +489,8 @@ impl BamCollector {
         // now shared by all inputs, but ordinary quantification semantics stay
         // record-for-record identical to the previous JobBuilder path.
         for record in group.records() {
-            self.push_job(job_builder.build(record, &mut data.report)?, jobs, n_seen);
-            if self.after_job(processor, jobs, data, *n_seen, progress)? {
+            self.push_job(job_builder.build(record, report)?, jobs, n_seen);
+            if self.after_job(processor, jobs, data, report, *n_seen, progress)? {
                 return Ok(true);
             }
         }
@@ -503,12 +510,13 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
+        report: &mut MappingInfo,
         n_seen: usize,
-        progress: &mut dyn FnMut(&QuantData),
+        progress: &mut dyn FnMut(&QuantData, &MappingInfo),
     ) -> Result<bool> {
         if jobs.len() >= CHUNK {
-            self.flush_jobs(processor, jobs, data)?;
-            progress(data);
+            self.flush_jobs(processor, jobs, data, report)?;
+            progress(data, report);
         }
         Ok(self.config.max_reads.is_some_and(|max| n_seen >= max))
     }
@@ -518,16 +526,17 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
+        report: &mut MappingInfo,
     ) -> Result<()> {
         if jobs.is_empty() {
             return Ok(());
         }
 
-        data.report.stop_file_io_time();
+        report.stop_file_io_time();
 
-        processor.process_into(self.config.quant_mode, jobs, data)?;
+        processor.process_into(jobs, data, report)?;
 
-        data.report.stop_single_processor_time();
+        report.stop_single_processor_time();
 
         jobs.clear();
 

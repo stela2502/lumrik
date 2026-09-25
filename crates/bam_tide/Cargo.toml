@@ -14,7 +14,6 @@ tokio = "1.49.0"
 
 
 assert_cmd = "2.1.2"
-rand = { version = "0.8", features = ["small_rng"] }
 flate2 = "1.1.9"
 csv = "1.4.0"
 #snp-index = "0.1.0"

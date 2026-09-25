@@ -9,7 +9,7 @@ pub mod index;
 pub mod model;
 pub mod types;
 
-pub use index::{IdNameKeys, SPLICE_INDEX_FORMAT_VERSION, SpliceIndex};
+pub use index::{IdNameKeys, SPLICE_INDEX_FORMAT_VERSION, SpliceFeatureIndex, SpliceIndex, SpliceMatch, SpliceMatchMode};
 
 pub use annotation::AnnotationBuilder;
 
@@ -21,3 +21,4 @@ pub use model::types::{GeneId, TranscriptId};
 
 // Re-export shared model matching types at crate root.
 pub use model::{MatchClass, MatchOptions, OverhangClass};
+pub use model::types::QuantClass;

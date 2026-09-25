@@ -14,7 +14,7 @@ use mapping_info::MappingInfo;
 use rayon::prelude::*;
 use rust_htslib::bam::{Read, Reader};
 use sc_primer::{Orientation, PrimerDetector};
-use scdata::GeneUmiHash;
+use scdata::{GeneUmiHash, ScdataInsertState};
 
 use std::path::PathBuf;
 
@@ -38,12 +38,12 @@ pub struct OntNormalizerConfig {
 }
 
 impl OntNormalizerConfig {
-    fn process_read(
+    fn process_read_into(
         &self,
         read: &FastqRecord,
         feature_tag_mapper: &FastTagMapper,
-    ) -> NormalizerPartial {
-        let mut out = NormalizerPartial::new();
+        out: &mut NormalizerPartial,
+    ) {
         out.stats.report("total_records");
         out.stats.report("reads_processed");
 
@@ -53,7 +53,7 @@ impl OntNormalizerConfig {
                 out.stats.report("zero_cassette");
                 out.stats.report("no_primer_match");
                 out.stats.report("no_cell_umi");
-                return out;
+                return;
             }
         };
 
@@ -61,7 +61,7 @@ impl OntNormalizerConfig {
             0 => {
                 out.stats.report("zero_cassette");
                 out.stats.report("no_cell_umi");
-                return out;
+                return;
             }
             1 => out.stats.report("one_cassette"),
             _ => out.stats.report("multi_cassette"),
@@ -115,16 +115,13 @@ impl OntNormalizerConfig {
 
             if let Some(id) = feature_tag_mapper.map_feature_id(&insert_record.seq, &mut out.stats)
             {
-                if out.feature_tag_table.try_insert(
-                    &cell_id,
-                    GeneUmiHash(id, umi_id),
-                    1.0,
-                    &mut out.stats,
-                ) {
+                let state = out
+                    .feature_tag_table
+                    .try_insert(&cell_id, GeneUmiHash(id, umi_id), 1.0);
+                out.stats.report(state.as_str());
+                if state == ScdataInsertState::Inserted {
                     out.stats.report("unique_feature");
                     out.stats.report("feature_tag_match");
-                } else {
-                    out.stats.report("duplicate");
                 }
 
                 continue;
@@ -142,8 +139,6 @@ impl OntNormalizerConfig {
             out.stats.report("emitted_molecules");
             out.stats.report("unique_genomic");
         }
-
-        out
     }
 }
 
@@ -230,8 +225,6 @@ impl OntNormalizer {
         F: FnMut(&[(Option<FastqRecord>, FastqRecord)]) -> Result<bool>,
         P: FnMut(&MappingInfo),
     {
-        NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
-
         let mut bam = Reader::from_path(&self.config.bam)
             .with_context(|| format!("failed to open BAM: {}", self.config.bam.display()))?;
 
@@ -308,8 +301,6 @@ impl OntNormalizer {
     }
 
     pub fn collect_fastqs(&mut self) -> Result<Vec<(Option<FastqRecord>, FastqRecord)>> {
-        NgsNormalizerSupport::configure_rayon_threads(self.config.threads);
-
         let mut bam = Reader::from_path(&self.config.bam)
             .with_context(|| format!("failed to open BAM: {}", self.config.bam.display()))?;
 
@@ -409,9 +400,17 @@ impl OntNormalizer {
         self.stats
             .start_timer("bam_tide/multi_cpu/ont_normalize_chunk");
 
+        let threads = rayon::current_num_threads().max(1);
+        let chunk_size = (input.len() / threads).max(10_000);
         let partials: Vec<NormalizerPartial> = input
-            .par_iter()
-            .map(|read| config.process_read(read, self.feature_tag_counts.mapper()))
+            .par_chunks(chunk_size)
+            .map(|chunk| {
+                let mut out = NormalizerPartial::new();
+                for read in chunk {
+                    config.process_read_into(read, self.feature_tag_counts.mapper(), &mut out);
+                }
+                out
+            })
             .collect();
 
         self.stats

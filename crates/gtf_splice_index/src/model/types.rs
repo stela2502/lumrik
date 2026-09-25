@@ -53,6 +53,36 @@ impl fmt::Display for MatchClass {
     }
 }
 
+/// Quantification destination implied by a splice-model match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuantClass {
+    Exonic,
+    Intronic,
+}
+
+impl QuantClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exonic => "exonic",
+            Self::Intronic => "intronic",
+        }
+    }
+}
+
+impl MatchClass {
+    /// Route this match into a quantification dataset.
+    ///
+    /// Ranking above 2 is exonic, rank 2 is intronic, and lower-ranked
+    /// matches are not quantified.
+    pub fn quant_class(self) -> Option<QuantClass> {
+        match self.rank() {
+            3.. => Some(QuantClass::Exonic),
+            2 => Some(QuantClass::Intronic),
+            _ => None,
+        }
+    }
+}
+
 impl MatchClass {
     /// Numeric ranking used for choosing the best hit.
     ///

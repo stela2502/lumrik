@@ -1,9 +1,9 @@
 //snp.rs
 use anyhow::{Context, Result};
-use mapping_info::MappingInfo;
-use scdata::Scdata;
+use scdata::QuantData;
 use scdata::cell_data::GeneUmiHash;
 use snp_index::{AlignedRead, SnpIndex, VcfReadOptions};
+use mapping_info::MappingInfo;
 
 pub struct SnpSideChannel {
     pub index: SnpIndex,
@@ -33,8 +33,7 @@ impl SnpSideChannel {
         aligned: Option<&AlignedRead>,
         cell: u64,
         umi: u64,
-        sc_ref: &mut Scdata,
-        sc_alt: &mut Scdata,
+        data: &mut QuantData,
         report: &mut MappingInfo,
     ) {
         let Some(read) = aligned else {
@@ -53,11 +52,11 @@ impl SnpSideChannel {
         }
 
         for snp_id in ref_ids {
-            sc_ref.try_insert(&cell, GeneUmiHash(snp_id, umi), 1.0, report);
+            data.try_insert(QuantData::SNP_REF, &cell, GeneUmiHash(snp_id, umi), 1.0, report);
         }
 
         for snp_id in alt_ids {
-            sc_alt.try_insert(&cell, GeneUmiHash(snp_id, umi), 1.0, report);
+            data.try_insert(QuantData::SNP_ALT, &cell, GeneUmiHash(snp_id, umi), 1.0, report);
         }
 
         report.report("snp hit");

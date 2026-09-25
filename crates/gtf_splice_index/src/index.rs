@@ -13,6 +13,7 @@ use crate::types::{RefBlock, SplicedRead, Strand};
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
+use scdata::FeatureIndex;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
@@ -136,6 +137,46 @@ impl ChrBuckets {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpliceMatchMode {
+    #[default]
+    Gene,
+    Transcript,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpliceMatch<'a> {
+    pub feature_id: u64,
+    pub transcript: &'a Transcript,
+    pub hit: MatchHit,
+}
+
+pub struct SpliceFeatureIndex<'a> {
+    idx: &'a SpliceIndex,
+    name_to_id: HashMap<String, u64>,
+}
+
+impl FeatureIndex for SpliceFeatureIndex<'_> {
+    fn feature_name(&self, feature_id: u64) -> &str {
+        match self.idx.match_mode {
+            SpliceMatchMode::Gene => self.idx.gene_name(feature_id as usize).unwrap_or("NA"),
+            SpliceMatchMode::Transcript => self.idx.transcript_name(feature_id as usize).unwrap_or("NA"),
+        }
+    }
+    fn feature_id(&self, name: &str) -> Option<u64> { self.name_to_id.get(name).copied() }
+    fn ordered_feature_ids(&self) -> Vec<u64> {
+        let len = match self.idx.match_mode {
+            SpliceMatchMode::Gene => self.idx.genes.len(),
+            SpliceMatchMode::Transcript => self.idx.transcripts.len(),
+        };
+        (0..len as u64).collect()
+    }
+    fn to_10x_feature_line(&self, feature_id: u64) -> String {
+        let name = self.feature_name(feature_id);
+        format!("{name}\t{name}\tGene Expression")
+    }
+}
+
 /// Best transcript matches (ties allowed).
 ///
 /// This borrows the transcript from the index (zero-copy).
@@ -177,6 +218,9 @@ pub struct SpliceIndex {
     // Cached transcript spans, indexed by TranscriptId
     pub tx_span_start: Vec<u32>,
     pub tx_span_end: Vec<u32>,
+
+    #[serde(skip, default)]
+    match_mode: SpliceMatchMode,
 }
 
 /// Human-readable summary of the `SpliceIndex`.
@@ -294,6 +338,7 @@ impl SpliceIndex {
             chr_buckets: Vec::new(),
             tx_span_start: Vec::new(),
             tx_span_end: Vec::new(),
+            match_mode: SpliceMatchMode::default(),
         }
     }
 
@@ -302,6 +347,22 @@ impl SpliceIndex {
         for cb in &mut self.chr_buckets {
             cb.finalize_by_tx_start(&self.tx_span_start, &self.tx_span_end);
         }
+    }
+
+    pub fn with_match_mode(mut self, mode: SpliceMatchMode) -> Self {
+        self.match_mode = mode;
+        self
+    }
+
+    pub fn match_mode(&self) -> SpliceMatchMode { self.match_mode }
+
+    pub fn feature_index(&self) -> SpliceFeatureIndex<'_> {
+        let mut name_to_id = HashMap::new();
+        match self.match_mode {
+            SpliceMatchMode::Gene => for gene in &self.genes { for name in &gene.names { name_to_id.entry(name.clone()).or_insert(gene.id as u64); } },
+            SpliceMatchMode::Transcript => for tx in &self.transcripts { for name in &tx.names { name_to_id.entry(name.clone()).or_insert(tx.id as u64); } },
+        }
+        SpliceFeatureIndex { idx: self, name_to_id }
     }
 
     /// get all gene names from the index (id == gene_id)
@@ -417,6 +478,7 @@ impl SpliceIndex {
 
             tx_span_start: Vec::new(),
             tx_span_end: Vec::new(),
+            match_mode: SpliceMatchMode::default(),
         };
 
         idx.chr_buckets = (0..idx.chr_names.len())
@@ -919,6 +981,24 @@ impl SpliceIndex {
             )
         });
         out
+    }
+
+    /// Match using the runtime-selected feature identity.
+    pub fn match_features<'a>(&'a self, read: &SplicedRead, opts: MatchOptions) -> Vec<SpliceMatch<'a>> {
+        match self.match_mode {
+            SpliceMatchMode::Gene => self.match_genes(read, opts).into_iter().filter_map(|m| {
+                m.winning_transcripts.first().copied().map(|transcript| SpliceMatch {
+                    feature_id: m.gene_id as u64,
+                    transcript,
+                    hit: m.best_hit,
+                })
+            }).collect(),
+            SpliceMatchMode::Transcript => self.match_transcripts(read, opts).into_iter().map(|m| SpliceMatch {
+                feature_id: m.transcript_id as u64,
+                transcript: m.transcript,
+                hit: m.hit,
+            }).collect(),
+        }
     }
 
     // -----------------------

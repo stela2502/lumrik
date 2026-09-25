@@ -1,5 +1,7 @@
 mod prepare_fastqs;
 mod quant;
+mod vdj;
+use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -11,13 +13,12 @@ use rust_htslib::bam;
 use bam_tide::FeatureTagCounts;
 use bam_tide::illumina_normalizer::cli::{InsertRead, PrimerRead};
 use bam_tide::illumina_normalizer::{IlluminaNormalizer, IlluminaNormalizerConfig};
-use bam_tide::index::{GeneFeatureIndex, TranscriptFeatureIndex};
 use bam_tide::ont_normalizer::OntNormalizer;
 use bam_tide::ont_normalizer::normalizer::OntNormalizerConfig;
 use bam_tide::quantification::bam_collector::BamCollector;
-use bam_tide::quantification::cli::QuantMode;
 
-use gtf_splice_index::SpliceIndex;
+use gtf_splice_index::{QuantClass, SpliceIndex};
+use scdata::QuantData;
 use sc_mapper::{MappingCall, StreamingMapper};
 
 use lumrik_status::{public_hostname, spawn_status_server};
@@ -28,6 +29,7 @@ fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("prepare-fastqs") => return prepare_fastqs::run(),
         Some("quant") => return quant::run(),
+        Some("vdj") => return vdj::run(),
         _ => {}
     }
 
@@ -46,7 +48,11 @@ fn run(args: Cli) -> Result<()> {
     fs::create_dir_all(&args.outpath)
         .with_context(|| format!("creating output directory {}", args.outpath.display()))?;
 
-    configure_rayon(args.threads);
+    if args.threads > 0 {
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global();
+    }
 
     let mut progress = RunProgress::new();
     progress.start_timer("nelrune/startup");
@@ -146,14 +152,17 @@ fn run(args: Cli) -> Result<()> {
         .run_paths(std::slice::from_ref(&mapper_bam))
         .context("collecting BAM quantification")?;
     let mut data = result.data;
+    let mut report = result.report;
     progress.stop_timer("nelrune/quantification");
 
-    let index = SpliceIndex::load(&args.bam_collector.index).with_context(|| {
-        format!(
-            "reading splice index {} for export",
-            args.bam_collector.index.display()
-        )
-    })?;
+    let index = SpliceIndex::load(&args.bam_collector.index)
+        .with_context(|| {
+            format!(
+                "reading splice index {} for export",
+                args.bam_collector.index.display()
+            )
+        })?
+        .with_match_mode(args.bam_collector.quant_mode.splice_match_mode());
 
     progress.stage("writing quantification");
     progress.start_timer("nelrune/writing");
@@ -164,7 +173,7 @@ fn run(args: Cli) -> Result<()> {
     } else {
         println!("Running sc-beacon barcode-rank knee cell identification and QC...");
 
-        let calling = data.beacon_cell_calling().map_err(anyhow::Error::msg)?;
+        let calling = bam_tide::results::beacon_cell_calling(&data).map_err(anyhow::Error::msg)?;
 
         std::fs::create_dir_all(&args.outpath)
             .with_context(|| format!("creating {}", args.outpath.display()))?;
@@ -180,48 +189,39 @@ fn run(args: Cli) -> Result<()> {
         let retained = calling.retained.clone();
         (retained, Some(calling))
     };
-    let cell_accounting = match args.bam_collector.quant_mode {
-        QuantMode::Gene => {
-            let features = GeneFeatureIndex::new(&index);
-            data.write_with_unfiltered_for_cells(
-                &args.outpath,
-                &retained_cells,
-                &features,
-                result.snp.as_ref().map(|s| &s.index),
-                Some(cell_barcode_len),
-            )
-            .map_err(anyhow::Error::msg)
-            .context("writing gene quantification")?
-        }
-        QuantMode::Transcript => {
-            let features = TranscriptFeatureIndex::new(&index);
-            data.write_with_unfiltered_for_cells(
-                &args.outpath,
-                &retained_cells,
-                &features,
-                result.snp.as_ref().map(|s| &s.index),
-                Some(cell_barcode_len),
-            )
-            .map_err(anyhow::Error::msg)
-            .context("writing transcript quantification")?
-        }
-    };
+    let features = index.feature_index();
+    let mut indexes: HashMap<String, &dyn scdata::FeatureIndex> = HashMap::new();
+    indexes.insert(QuantClass::Exonic.as_str().to_string(), &features);
+    indexes.insert(QuantClass::Intronic.as_str().to_string(), &features);
+    if let Some(snp) = result.snp.as_ref() {
+        indexes.insert(QuantData::SNP_REF.to_string(), &snp.index);
+        indexes.insert(QuantData::SNP_ALT.to_string(), &snp.index);
+    }
+    let cell_accounting = data
+        .write_raw_and_filtered_for_cells(
+            &args.outpath,
+            &retained_cells,
+            &indexes,
+            Some(cell_barcode_len),
+        )
+        .map_err(anyhow::Error::msg)
+        .context("writing quantification")?;
 
     // Additional-feature tables have their own feature-type-aware writer.
-    // Preserve every observed feature-tag cell under unfiltered/, then retain
-    // only the canonical GEX cells in the normal output.
+    // Preserve every observed feature-tag cell under raw/, then retain
+    // only the canonical GEX cells under filtered/.
     feature_counts
-        .finalize_and_write_all(cell_barcode_len, &args.outpath.join("unfiltered"))
-        .context("writing unfiltered additional feature tables")?;
+        .finalize_and_write_all(cell_barcode_len, &args.outpath.join("raw"))
+        .context("writing raw additional feature tables")?;
     feature_counts
-        .finalize_and_write(&retained_cells, cell_barcode_len, &args.outpath)
-        .context("writing additional feature tables")?;
+        .finalize_and_write(&retained_cells, cell_barcode_len, &args.outpath.join("filtered"))
+        .context("writing filtered additional feature tables")?;
     progress.stop_timer("nelrune/writing");
 
-    let bam_records_seen = data.report.get_issue_count("bam_records_seen");
-    let quantified_bam_records = data.report.get_issue_count("cell_umi from BAM tags");
-    let compatible_bam_records = data.report.get_issue_count("Compatible");
-    let unmapped_bam_records = data.report.get_issue_count("unmapped");
+    let bam_records_seen = report.get_issue_count("bam_records_seen");
+    let quantified_bam_records = report.get_issue_count("cell_umi from BAM tags");
+    let compatible_bam_records = report.get_issue_count("Compatible");
+    let unmapped_bam_records = report.get_issue_count("unmapped");
     progress.set_quantification_summary(
         bam_records_seen,
         quantified_bam_records,
@@ -264,21 +264,21 @@ fn run(args: Cli) -> Result<()> {
     }
 
     // Preserve Nelrune's broad orchestration timings in the final report too.
-    data.report.merge(progress.mapping_info());
+    report.merge(progress.mapping_info());
 
     progress.report_timings();
-    progress.report_block("Quantification report", &data.report);
+    progress.report_block("Quantification report", &report);
 
     fs::write(
         args.outpath.join("nelrune-report.txt"),
-        data.report.to_string(),
+        report.to_string(),
     )
     .context("writing nelrune-report.txt")?;
 
     progress.stage(format!("mapper BAM retained at {}", mapper_bam.display()));
 
     progress.finish();
-    progress.write_final_status(&args.outpath)?;
+    progress.write_final_status(&args.outpath, "nelrune")?;
 
     eprintln!(
         "[nelrune] complete: {} reads in {:.1}s ({:.0} reads/s overall, {:.0} reads/s steady after first progress)",
@@ -508,10 +508,3 @@ impl MapperBamSink {
     }
 }
 
-fn configure_rayon(threads: usize) {
-    if threads > 0 {
-        let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build_global();
-    }
-}

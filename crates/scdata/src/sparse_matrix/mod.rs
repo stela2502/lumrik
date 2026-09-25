@@ -5,4 +5,4 @@ pub mod matrix_value;
 pub mod scdata;
 
 pub use matrix_value::MatrixValueType;
-pub use scdata::Scdata;
+pub use scdata::{Scdata, ScdataInsertState};

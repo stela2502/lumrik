@@ -13,6 +13,7 @@ use rust_htslib::bam::{self, Read};
 use scdata::CellHash;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 const CDR3_UPSTREAM_BASES: usize = 32;
 const J_BAIT_BASES: usize = 24;
@@ -51,6 +52,8 @@ pub struct RecombinationRescanCall {
 
 #[derive(Debug, Clone, Default)]
 pub struct RecombinationEvidenceRescanReport {
+    pub bam_read_time: Duration,
+    pub evidence_processing_time: Duration,
     pub bam_records_scanned: usize,
     pub wanted_cell_records: usize,
     pub receptor_hit_records: usize,
@@ -530,10 +533,17 @@ where
     // record to EOF. Expensive recombination/constant matching is restricted to
     // cells that already have reconstructed calls, but the BAM denominator and
     // live progress always reflect the complete file scan.
-    for record in reader.records() {
+    let mut records = reader.records();
+    loop {
         if max_bam_records.is_some_and(|limit| report.bam_records_scanned >= limit) {
             break;
         }
+        let read_started = Instant::now();
+        let next = records.next();
+        report.bam_read_time += read_started.elapsed();
+        let Some(record) = next else {
+            break;
+        };
         let record = record?;
         report.bam_records_scanned += 1;
         if report.bam_records_scanned % RESCAN_PROGRESS_EVERY_BAM_RECORDS == 0 {
@@ -573,6 +583,7 @@ where
             if batch.len() >= RESCAN_EVIDENCE_BATCH_SIZE {
                 let full =
                     std::mem::replace(&mut batch, Vec::with_capacity(RESCAN_EVIDENCE_BATCH_SIZE));
+                let processing_started = Instant::now();
                 evidence.consume_batch(
                     full,
                     &receptor_mapper,
@@ -582,6 +593,7 @@ where
                     index,
                     calls,
                 );
+                report.evidence_processing_time += processing_started.elapsed();
                 batches_completed = batches_completed.saturating_add(1);
                 let (
                     receptor_hit_records,
@@ -623,6 +635,7 @@ where
     }
 
     if !batch.is_empty() {
+        let processing_started = Instant::now();
         evidence.consume_batch(
             batch,
             &receptor_mapper,
@@ -632,6 +645,7 @@ where
             index,
             calls,
         );
+        report.evidence_processing_time += processing_started.elapsed();
         batches_completed = batches_completed.saturating_add(1);
         let (
             receptor_hit_records,

@@ -1,7 +1,6 @@
 // test-gzipped-files.rs
 use flate2::read::GzDecoder;
-use mapping_info::MappingInfo;
-use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
+use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata, ScdataInsertState};
 
 use std::collections::HashMap;
 use std::fs;
@@ -73,8 +72,6 @@ fn read_gz_to_string(path: &PathBuf) -> String {
 #[test]
 fn integer_10x_gz_files_match_expected_exactly() {
     let mut scdata = Scdata::new(1, MatrixValueType::Integer);
-    let mut report = MappingInfo::new(None, 56.0, 10_000);
-
     let feature_index = TestFeatureIndex::new(vec!["Gene1", "Gene2", "Gene3", "Gene4"]);
 
     let gene1 = feature_index.feature_id("Gene1"); // 0
@@ -84,13 +81,13 @@ fn integer_10x_gz_files_match_expected_exactly() {
     // Cell 1: Gene1 x20, Gene4 x10
     for umi in 0..20 {
         assert!(
-            scdata.try_insert(&1_u64, GeneUmiHash(gene1, umi as u64), 0.0, &mut report),
+            scdata.try_insert(&1_u64, GeneUmiHash(gene1, umi as u64), 0.0) == ScdataInsertState::Inserted,
             "insert Gene1 umi {umi}"
         );
     }
     for umi in 20..30 {
         assert!(
-            scdata.try_insert(&1_u64, GeneUmiHash(gene4, umi as u64), 0.0, &mut report),
+            scdata.try_insert(&1_u64, GeneUmiHash(gene4, umi as u64), 0.0) == ScdataInsertState::Inserted,
             "insert Gene4 umi {umi}"
         );
     }
@@ -101,18 +98,16 @@ fn integer_10x_gz_files_match_expected_exactly() {
             scdata.try_insert(
                 &13_452_355_u64,
                 GeneUmiHash(gene3, umi as u64),
-                0.0,
-                &mut report
-            ),
+                0.0
+            ) == ScdataInsertState::Inserted,
             "insert Gene3 umi {umi}"
         );
         assert!(
             scdata.try_insert(
                 &13_452_355_u64,
                 GeneUmiHash(gene1, umi as u64),
-                0.0,
-                &mut report
-            ),
+                0.0
+            ) == ScdataInsertState::Inserted,
             "insert Gene1 umi {umi}"
         );
     }

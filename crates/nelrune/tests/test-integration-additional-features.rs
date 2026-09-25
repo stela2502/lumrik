@@ -85,49 +85,53 @@ fn read_gzip_text(path: &Path) -> String {
 }
 
 fn assert_feature_output(out: &Path, feature_type: &str, feature_name: &str) {
-    let dir = out.join(feature_type);
+    for view in ["raw", "filtered"] {
+        let dir = out.join(view).join(feature_type);
 
-    eprintln!("\n========== FEATURE OUTPUT: {feature_type} ==========");
-    eprintln!("directory: {}", dir.display());
-
-    assert!(
-        dir.is_dir(),
-        "Nelrune did not create expected additional-feature output folder {}",
-        dir.display()
-    );
-
-    for file in ["barcodes.tsv.gz", "features.tsv.gz", "matrix.mtx.gz"] {
-        let path = dir.join(file);
+        eprintln!(
+            "\n========== FEATURE OUTPUT: {view}/{feature_type} =========="
+        );
+        eprintln!("directory: {}", dir.display());
 
         assert!(
-            path.is_file(),
-            "missing expected additional-feature matrix output: {}",
-            path.display()
+            dir.is_dir(),
+            "Nelrune did not create expected additional-feature output folder {}",
+            dir.display()
         );
 
-        let text = read_gzip_text(&path);
+        for file in ["barcodes.tsv.gz", "features.tsv.gz", "matrix.mtx.gz"] {
+            let path = dir.join(file);
 
-        eprintln!("--- {file} ---");
-        if text.is_empty() {
-            eprintln!("<EMPTY>");
-        } else {
-            eprintln!("{text}");
+            assert!(
+                path.is_file(),
+                "missing expected additional-feature matrix output: {}",
+                path.display()
+            );
+
+            let text = read_gzip_text(&path);
+
+            eprintln!("--- {file} ---");
+            if text.is_empty() {
+                eprintln!("<EMPTY>");
+            } else {
+                eprintln!("{text}");
+            }
         }
+
+        let features = dir.join("features.tsv.gz");
+        let text = read_gzip_text(&features);
+
+        assert!(
+            text.lines().any(|line| {
+                let mut fields = line.split('\t');
+                fields.next() == Some(feature_name)
+                    && fields.next() == Some(feature_name)
+                    && fields.next() == Some(feature_type)
+            }),
+            "expected feature {feature_name:?} with type {feature_type:?} in {}:\n{text}",
+            features.display()
+        );
     }
-
-    let features = dir.join("features.tsv.gz");
-    let text = read_gzip_text(&features);
-
-    assert!(
-        text.lines().any(|line| {
-            let mut fields = line.split('\t');
-            fields.next() == Some(feature_name)
-                && fields.next() == Some(feature_name)
-                && fields.next() == Some(feature_type)
-        }),
-        "expected feature {feature_name:?} with type {feature_type:?} in {}:\n{text}",
-        features.display()
-    );
 }
 
 #[test]

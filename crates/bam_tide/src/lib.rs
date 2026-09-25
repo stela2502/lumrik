@@ -2,7 +2,6 @@
 // Core infrastructure
 pub mod cli;
 pub mod core;
-pub mod encoder;
 pub mod index;
 pub mod results;
 
@@ -29,4 +28,4 @@ pub mod multi_subset_bam;
 pub mod transcriptome_to_genome;
 
 pub use feature_tag_counts::{AdditionalFeatureSource, FeatureTagCounts};
-pub use results::QuantData;
+pub use scdata::QuantData;

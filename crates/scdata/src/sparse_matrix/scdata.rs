@@ -10,6 +10,22 @@ use crate::cell_data::GeneUmiHash;
 use crate::{CellHash, FeatureIndex, MatrixValueType};
 use sprs::{CsMat, TriMat};
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScdataInsertState {
+    Inserted,
+    Duplicate,
+}
+
+impl ScdataInsertState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inserted => "inserted",
+            Self::Duplicate => "duplicate",
+        }
+    }
+}
+
 /// Sparse single-cell count store.
 ///
 /// Cells are partitioned into 256 buckets by the first packed 4-base byte
@@ -51,9 +67,8 @@ pub struct Scdata {
 ///
 /// ```no_run
 /// use std::collections::HashMap;
-/// use mapping_info::MappingInfo;
 /// use std::path::PathBuf;
-/// use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
+/// use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata, ScdataInsertState};
 ///
 /// struct SimpleIndex {
 ///     names: Vec<String>,
@@ -92,13 +107,18 @@ pub struct Scdata {
 /// }
 ///
 /// let mut data = Scdata::new(1, MatrixValueType::Integer);
-/// let mut report = MappingInfo::new(None, 0.0, 0);
 /// let index = SimpleIndex::new(vec!["GeneA", "GeneB"]);
 ///
 /// let gene_a = index.feature_id("GeneA").unwrap();
 ///
-/// data.try_insert(&1_u64, GeneUmiHash(gene_a, 100), 0.0, &mut report);
-/// data.try_insert(&1_u64, GeneUmiHash(gene_a, 101), 0.0, &mut report);
+/// assert_eq!(
+///     data.try_insert(&1_u64, GeneUmiHash(gene_a, 100), 0.0),
+///     ScdataInsertState::Inserted
+/// );
+/// assert_eq!(
+///     data.try_insert(&1_u64, GeneUmiHash(gene_a, 101), 0.0),
+///     ScdataInsertState::Inserted
+/// );
 ///
 /// data.finalize_for_export(0, &index);
 /// let out = PathBuf::from("example_sparse_out");
@@ -365,14 +385,14 @@ impl Scdata {
 
     /// Insert one unique feature/UMI observation for a cell.
     ///
-    /// Returns `false` if the exact feature/UMI pair already existed.
+    /// The storage layer reports only what happened. Run-level accounting is
+    /// owned by the caller.
     pub fn try_insert(
         &mut self,
         name: &u64,
         data: GeneUmiHash,
         _value: f32,
-        report: &mut MappingInfo,
-    ) -> bool {
+    ) -> ScdataInsertState {
         let index = self.to_key(name);
         self.invalidate_export_cache();
 
@@ -380,14 +400,10 @@ impl Scdata {
             .entry(*name)
             .or_insert_with(|| CellData::new(*name));
 
-        report.ok_reads += 1;
-
-        if !cell_info.add(data) {
-            report.pcr_duplicates += 1;
-            report.local_dup += 1;
-            false
+        if cell_info.add(data) {
+            ScdataInsertState::Inserted
         } else {
-            true
+            ScdataInsertState::Duplicate
         }
     }
 
@@ -502,7 +518,7 @@ impl Scdata {
     /// Both the feature cache and NNZ count use exactly the same value predicate
     /// as the MatrixMarket writer. Consumers do not need to validate or repair
     /// sparse export metadata themselves.
-    fn rebuild_feature_ids_with_data<I: FeatureIndex>(&mut self, index: &I) {
+    fn rebuild_feature_ids_with_data<I: FeatureIndex + ?Sized>(&mut self, index: &I) {
         let allowed: HashSet<u64> = index.ordered_feature_ids().into_iter().collect();
 
         let (observed_feature_ids, total_entries) = self
@@ -590,7 +606,7 @@ impl Scdata {
     /// This applies the UMI cutoff, retains only passing cells,
     /// establishes deterministic export order, rebuilds export caches,
     /// and marks the object as checked.
-    pub fn finalize_for_export<I: FeatureIndex>(&mut self, min_total_umis: usize, index: &I) {
+    pub fn finalize_for_export<I: FeatureIndex + ?Sized>(&mut self, min_total_umis: usize, index: &I) {
         let keep = self.passing_cell_set_by_umi(min_total_umis);
         self.restrict_to_cells(&keep);
         self.rebuild_feature_ids_with_data(index);
@@ -600,7 +616,7 @@ impl Scdata {
     /// Prepare the object for export.
     ///
     /// Here a given set of cells are marked for export
-    pub fn finalize_for_cells<I: FeatureIndex>(&mut self, keep: &HashSet<u64>, index: &I) {
+    pub fn finalize_for_cells<I: FeatureIndex + ?Sized>(&mut self, keep: &HashSet<u64>, index: &I) {
         self.restrict_to_cells(keep);
         self.rebuild_feature_ids_with_data(index);
         self.checked = true;

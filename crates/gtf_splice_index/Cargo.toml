@@ -22,3 +22,5 @@ bincode = "1"
 zstd = "0.13"
 int-to-dna = { path = "../int_to_dna" }
 int-to-prot = { path = "../int_to_prot" }
+
+scdata = { path = "../scdata" }

@@ -22,6 +22,15 @@ pub enum QuantMode {
     Transcript,
 }
 
+impl QuantMode {
+    pub fn splice_match_mode(self) -> gtf_splice_index::SpliceMatchMode {
+        match self {
+            Self::Gene => gtf_splice_index::SpliceMatchMode::Gene,
+            Self::Transcript => gtf_splice_index::SpliceMatchMode::Transcript,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum CellCallingMode {
     /// Historical fixed UMI threshold (`--min-cell-counts`).

@@ -20,6 +20,7 @@ lumrik-status = { path = "../lumrik-status" }
 sc-mapper = { path = "../sc-mapper" }
 sc_primer = { path = "../sc_primer" }
 scdata = { path="../scdata" }
+sc-vdj = { path = "../sc-vdj" }
 rust-htslib = { workspace = true }
 reference_curator = { path = "../reference_curator" }
 sprs = "=0.11.1"

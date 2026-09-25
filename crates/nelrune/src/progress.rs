@@ -378,35 +378,38 @@ impl RunProgress {
     }
 
     /// Publish a live quantification snapshot after a BAM chunk has been processed.
-    pub fn update_quantification_live(&self, data: &bam_tide::results::QuantData) {
+    pub fn update_quantification_live(
+        &self,
+        data: &scdata::QuantData,
+        report: &MappingInfo,
+    ) {
         let memory = memory_status();
         if let Ok(mut state) = self.state.write() {
-            state.bam_records_seen = data.report.get_issue_count("bam_records_seen");
+            state.bam_records_seen = report.get_issue_count("bam_records_seen");
             // During BAM-only quantification the normal FASTQ-side
             // `candidate_pairs` counter is unused. Reuse the existing server
             // slot to expose the biologically useful denominator: records
             // carrying explicit GEX (`|G|`) provenance. Do not include legacy
             // records or VDJ/custom-capture (`|V|`) records here.
-            state.candidate_pairs = data.report.get_issue_count("primer provenance GEX");
-            state.quantified_bam_records = data.report.get_issue_count("quantified_bam_records");
-            state.compatible_bam_records = data.report.get_issue_count("compatible");
-            state.unmapped_bam_records = data.report.get_issue_count("unmapped");
-            state.observed_exonic_cells = data.gene.cell_ids().len();
-            state.observed_intronic_cells = data.intron.cell_ids().len();
-            state.observed_exonic_genes = data.gene.observed_feature_ids().len();
-            state.observed_intronic_genes = data.intron.observed_feature_ids().len();
-            state.exonic_umis = data.gene.total_umis();
-            state.intronic_umis = data.intron.total_umis();
-            // QuantData::merge records UMI collisions in its MappingInfo.
-            // Surface those post-quantification PCR duplicates through the
-            // same server counter used during FASTQ processing.
-            state.duplicates = data.report.pcr_duplicates;
-            state.match_exact_junction_chain = data.report.get_issue_count("ExactJunctionChain");
-            state.match_compatible = data.report.get_issue_count("Compatible");
-            state.match_intronic = data.report.get_issue_count("Intronic");
-            state.match_incompatible = data.report.get_issue_count("Incompatible");
-            state.match_junction_mismatch = data.report.get_issue_count("JunctionMismatch");
-            state.match_overhang_too_large = data.report.get_issue_count("OverhangTooLarge");
+            state.candidate_pairs = report.get_issue_count("primer provenance GEX");
+            state.quantified_bam_records = report.get_issue_count("quantified_bam_records");
+            state.compatible_bam_records = report.get_issue_count("compatible");
+            state.unmapped_bam_records = report.get_issue_count("unmapped");
+            state.observed_exonic_cells = data.cell_ids(scdata::QuantData::EXONIC).len();
+            state.observed_intronic_cells = data.cell_ids(scdata::QuantData::INTRONIC).len();
+            state.observed_exonic_genes = data.observed_feature_ids(scdata::QuantData::EXONIC).len();
+            state.observed_intronic_genes = data.observed_feature_ids(scdata::QuantData::INTRONIC).len();
+            state.exonic_umis = data.total_umis(scdata::QuantData::EXONIC);
+            state.intronic_umis = data.total_umis(scdata::QuantData::INTRONIC);
+            // Surface post-quantification PCR duplicates from the runner-owned report
+            // through the same server counter used during FASTQ processing.
+            state.duplicates = report.pcr_duplicates;
+            state.match_exact_junction_chain = report.get_issue_count("ExactJunctionChain");
+            state.match_compatible = report.get_issue_count("Compatible");
+            state.match_intronic = report.get_issue_count("Intronic");
+            state.match_incompatible = report.get_issue_count("Incompatible");
+            state.match_junction_mismatch = report.get_issue_count("JunctionMismatch");
+            state.match_overhang_too_large = report.get_issue_count("OverhangTooLarge");
             state.process_rss_mib = memory.process_rss_mib;
             state.process_peak_rss_mib = memory.process_peak_rss_mib;
             state.system_available_mib = memory.system_available_mib;
@@ -466,14 +469,16 @@ impl RunProgress {
     }
 
     /// Persist the final health-server state so completed runs remain inspectable.
-    pub fn write_final_status(&self, outdir: &Path) -> Result<()> {
+    pub fn write_final_status(&self, outdir: &Path, run_type: &str) -> Result<()> {
         let state = self
             .state
             .read()
             .map_err(|_| anyhow::anyhow!("Nelrune status lock poisoned"))?
             .clone();
-        let mut yaml = File::create(outdir.join("nelrune-run-summary.yaml"))
-            .context("creating nelrune-run-summary.yaml")?;
+        let jaml_name = format!("{run_type}log.jaml");
+        let html_name = format!("{run_type}.log.html");
+        let mut yaml = File::create(outdir.join(&jaml_name))
+            .with_context(|| format!("creating {jaml_name}"))?;
         writeln!(yaml, "schema: lumrik-nelrune-run-summary-v1")?;
         writeln!(yaml, "stage: {:?}", state.stage)?;
         writeln!(yaml, "started_unix_ms: {}", state.started_unix_ms)?;
@@ -554,8 +559,8 @@ impl RunProgress {
         yaml.flush()?;
 
         let html = snapshot_html(&state.server_snapshot());
-        let mut report = File::create(outdir.join("nelrune-report.html"))
-            .context("creating nelrune-report.html")?;
+        let mut report = File::create(outdir.join(&html_name))
+            .with_context(|| format!("creating {html_name}"))?;
         report.write_all(html.as_bytes())?;
         report.flush()?;
         Ok(())

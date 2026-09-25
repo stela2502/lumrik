@@ -8,6 +8,7 @@
 
 use crate::fast_mapper::encode_8mer;
 use crate::{FeatureEntry, MapStatus};
+use onehot_dna::OneHotSequence;
 
 const TABLE_SIZE: usize = 1 << 16;
 const NO_ENTRY: u32 = u32::MAX;
@@ -23,6 +24,7 @@ struct LocusTagEntry {
 struct LocusFeature {
     locus_ids: Vec<u64>,
     feature: FeatureEntry,
+    packed: OneHotSequence,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +94,7 @@ impl FastLocusMapper {
         self.features.push(LocusFeature {
             locus_ids: vec![locus_id],
             feature,
+            packed: OneHotSequence::from_bytes(seq),
         });
 
         for tag_pos in 0..=seq.len().saturating_sub(8) {
@@ -118,6 +121,14 @@ impl FastLocusMapper {
     }
 
     pub fn map_status(&self, locus_id: u64, seq: &[u8]) -> MapStatus {
+        // Same hot-path principle as FastTagMapper: an exact seed is a locator,
+        // not a vote.  Use the indexed reference position immediately to test
+        // the complete receptor bait with the packed representation.  The old
+        // vote path remains the unchanged rescue for imperfect observations.
+        if let Some(status) = self.first_direct_full_overlap(locus_id, seq) {
+            return status;
+        }
+
         // Most locus queries have one or two candidate features. Keep votes in
         // a compact vector so no hash table is allocated for every BAM read.
         let mut votes = Vec::<((usize, isize), u32)>::new();
@@ -150,6 +161,76 @@ impl FastLocusMapper {
         }
 
         self.resolve_votes(votes)
+    }
+
+    /// Cheap exact-hit path for the VDJ rescan.  The global locus index still
+    /// supplies candidate positions, but a hit is verified directly against
+    /// the complete packed bait instead of accumulating votes across every
+    /// shared V/J 8-mer.  Multiple exact features deliberately fall through to
+    /// the existing resolver so tie behaviour is unchanged.
+    fn first_direct_full_overlap(&self, locus_id: u64, seq: &[u8]) -> Option<MapStatus> {
+        let mut packed_query: Option<OneHotSequence> = None;
+        let mut exact_feature: Option<usize> = None;
+
+        for query_pos in (0..=seq.len().saturating_sub(8)).step_by(8) {
+            let Some(kmer) = encode_8mer(&seq[query_pos..query_pos + 8]) else {
+                continue;
+            };
+
+            let mut entry_index = self.heads[kmer as usize];
+            while entry_index != NO_ENTRY {
+                let entry = self.entries[entry_index as usize];
+                let feature_index = entry.feature_index as usize;
+                let feature = &self.features[feature_index];
+                entry_index = entry.next;
+
+                if feature.locus_ids.binary_search(&locus_id).is_err() {
+                    continue;
+                }
+
+                let query_start = query_pos as isize - entry.tag_pos as isize;
+                let Ok(query_start) = usize::try_from(query_start) else {
+                    continue;
+                };
+                let reference_len = feature.packed.len();
+                let Some(query_end) = query_start.checked_add(reference_len) else {
+                    continue;
+                };
+                if query_end > seq.len() {
+                    continue;
+                }
+
+                if packed_query.is_none() {
+                    packed_query = OneHotSequence::try_from_bytes(seq).ok();
+                }
+                let Some(query) = packed_query.as_ref() else {
+                    return None;
+                };
+                let Some((informative, compatible)) = query.compatibility_counts(
+                    query_start,
+                    &feature.packed,
+                    0,
+                    reference_len,
+                ) else {
+                    continue;
+                };
+                if informative != reference_len || compatible != reference_len {
+                    continue;
+                }
+
+                match exact_feature {
+                    None => exact_feature = Some(feature_index),
+                    Some(previous) if previous == feature_index => {}
+                    Some(_) => return None,
+                }
+            }
+        }
+
+        exact_feature.map(|feature_index| MapStatus::Hit {
+            feature_id: self.features[feature_index].feature.id,
+            feature_index,
+            hits: 1,
+        })
     }
 
     fn resolve_votes(&self, votes: Vec<((usize, isize), u32)>) -> MapStatus {

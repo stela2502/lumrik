@@ -48,10 +48,14 @@ pub fn run() -> Result<()> {
 
     fs::create_dir_all(&args.outpath)
         .with_context(|| format!("creating {}", args.outpath.display()))?;
-    super::configure_rayon(args.threads);
+    if args.threads > 0 {
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global();
+    }
 
     let mut progress = RunProgress::new();
-    progress.open_log(args.outpath.join("nelrune.log"))?;
+    progress.open_log(args.outpath.join("nelrune_prepare_fastq.log"))?;
     let _health_server = if args.no_health_server {
         progress.stage("health server disabled");
         None
@@ -123,6 +127,6 @@ pub fn run() -> Result<()> {
         shard_dir.display()
     );
     progress.finish();
-    progress.write_final_status(&args.outpath)?;
+    progress.write_final_status(&args.outpath, "prepare")?;
     Ok(())
 }

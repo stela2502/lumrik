@@ -16,6 +16,7 @@ use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 const EVIDENCE_BATCH_SIZE: usize = 200_000;
 const UNMAPPED_IGH_SEED_LEN: usize = 13;
@@ -23,6 +24,12 @@ const UNMAPPED_IGH_MIN_J_SEEDS: usize = 2;
 const UNMAPPED_IGH_MIN_J_SEED_SPAN: usize = UNMAPPED_IGH_SEED_LEN;
 const UNMAPPED_IGH_MIN_HARVEST_SEEDS: usize = 2;
 const UNMAPPED_CANDIDATE_BATCH_SIZE: usize = 100_000;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BamIngestTiming {
+    pub bam_read: Duration,
+    pub evidence_processing: Duration,
+}
 
 #[derive(Debug, Clone)]
 struct UnmappedReadCandidate {
@@ -472,6 +479,7 @@ impl VdjRunner {
         F: FnMut(BamIngestProgress, &CellEvidenceVdj, &VdjIndex),
     {
         self.read_bam_with_progress_for_cells_limited(path, resolver, allowed_cells, None, progress)
+            .map(|(records, _)| records)
     }
 
     /// As `read_bam_with_progress_for_cells`, but optionally stop the initial
@@ -485,7 +493,7 @@ impl VdjRunner {
         allowed_cells: Option<&HashSet<u64>>,
         max_bam_records: Option<usize>,
         mut progress: F,
-    ) -> Result<usize>
+    ) -> Result<(usize, BamIngestTiming)>
     where
         P: AsRef<Path>,
         R: BamIdentityResolver,
@@ -522,8 +530,16 @@ impl VdjRunner {
         // fragment is never split merely because it crossed the evidence-batch boundary.
         let mut last_query: Option<(u64, Vec<u8>)> = None;
         let mut current_evidence_id: Option<EvidenceId> = None;
+        let mut timing = BamIngestTiming::default();
 
-        for rec in reader.records() {
+        let mut records = reader.records();
+        loop {
+            let read_started = Instant::now();
+            let next = records.next();
+            timing.bam_read += read_started.elapsed();
+            let Some(rec) = next else {
+                break;
+            };
             let rec = rec?;
             let cell = resolver.cell(&rec);
             let query_key = cell.as_ref().map(|cell| {
@@ -553,11 +569,13 @@ impl VdjRunner {
                 if batch.len() >= EVIDENCE_BATCH_SIZE {
                     let full =
                         std::mem::replace(&mut batch, Vec::with_capacity(EVIDENCE_BATCH_SIZE));
+                    let processing_started = Instant::now();
                     self.evidence.consume_batch(
                         full,
                         &self.index,
                         self.config.min_sequence_overlap,
                     );
+                    timing.evidence_processing += processing_started.elapsed();
                     progress(
                         unmapped_rescue.progress(bam_records, allowed_cell_records, n),
                         &self.evidence,
@@ -565,11 +583,13 @@ impl VdjRunner {
                     );
                 }
                 if unmapped_candidates.len() >= UNMAPPED_CANDIDATE_BATCH_SIZE {
+                    let processing_started = Instant::now();
                     let rescue = self.consume_unmapped_candidate_batch(
                         &mut unmapped_candidates,
                         &unmapped_igh_seeds,
                         unmapped_pool.as_ref(),
                     );
+                    timing.evidence_processing += processing_started.elapsed();
                     n = n.saturating_add(rescue.admitted);
                     unmapped_rescue.add_assign(rescue);
                     progress(
@@ -688,8 +708,10 @@ impl VdjRunner {
         }
 
         if !batch.is_empty() {
+            let processing_started = Instant::now();
             self.evidence
                 .consume_batch(batch, &self.index, self.config.min_sequence_overlap);
+            timing.evidence_processing += processing_started.elapsed();
             progress(
                 unmapped_rescue.progress(bam_records, allowed_cell_records, n),
                 &self.evidence,
@@ -698,11 +720,13 @@ impl VdjRunner {
         }
 
         if !unmapped_candidates.is_empty() {
+            let processing_started = Instant::now();
             let rescue = self.consume_unmapped_candidate_batch(
                 &mut unmapped_candidates,
                 &unmapped_igh_seeds,
                 unmapped_pool.as_ref(),
             );
+            timing.evidence_processing += processing_started.elapsed();
             n = n.saturating_add(rescue.admitted);
             unmapped_rescue.add_assign(rescue);
             progress(
@@ -713,7 +737,7 @@ impl VdjRunner {
         }
 
         self.flush_id = self.flush_id.wrapping_add(1);
-        Ok(n)
+        Ok((n, timing))
     }
     /// Re-scan the retained BAM with cell-specific reconstructed receptor baits.
     ///

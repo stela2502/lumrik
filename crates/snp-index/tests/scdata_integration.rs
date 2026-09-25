@@ -52,12 +52,14 @@ fn snp_matches_can_be_inserted_into_scdata_and_exported() -> Result<()> {
 
         for hit in &snp_match.reference {
             let snp_id = hit.feature_id();
-            scdata_ref.try_insert(&cell_id, GeneUmiHash(snp_id as u64, umi), 1.0, &mut report);
+            let state = scdata_ref.try_insert(&cell_id, GeneUmiHash(snp_id as u64, umi), 1.0);
+            report.report(state.as_str());
         }
 
         for hit in &snp_match.alternate {
             let snp_id = hit.feature_id();
-            scdata_alt.try_insert(&cell_id, GeneUmiHash(snp_id as u64, umi), 1.0, &mut report);
+            let state = scdata_alt.try_insert(&cell_id, GeneUmiHash(snp_id as u64, umi), 1.0);
+            report.report(state.as_str());
         }
     }
 

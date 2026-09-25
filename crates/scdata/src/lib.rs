@@ -5,6 +5,7 @@ pub mod cell_data;
 pub mod cell_hash;
 pub mod feature_index;
 pub mod mtx;
+pub mod quant_data;
 pub mod sparse_matrix;
 
 pub use crate::cell_data::GeneUmiHash;
@@ -13,4 +14,6 @@ pub use crate::feature_index::FeatureIndex;
 pub use crate::mtx::{
     MexFeature, MexFeatureIndex, load_mtx_feature_matrix, read_mtx_barcodes, read_mtx_cell_ids,
 };
-pub use crate::sparse_matrix::{MatrixValueType, Scdata};
+pub use crate::sparse_matrix::{MatrixValueType, Scdata, ScdataInsertState};
+
+pub use crate::quant_data::{CellAccounting, QuantData};

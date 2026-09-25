@@ -1,0 +1,65 @@
+--- crates/bam_tide/src/results.rs
++++ crates/bam_tide/src/results.rs
+@@ -308,18 +308,18 @@
+ 
+         match cell_barcode_len {
+             Some(len) => {
+-                self.data(EXONIC)
++                self.data_mut(EXONIC)
+                     .write_sparse_with_cell_len(&exonic_path, gene_index, len)
+                     .map_err(|e| format!("writing exonic truth failed: {e}"))?;
+-                self.data(INTRONIC)
++                self.data_mut(INTRONIC)
+                     .write_sparse_with_cell_len(&intronic_path, gene_index, len)
+                     .map_err(|e| format!("writing intronic truth failed: {e}"))?;
+             }
+             None => {
+-                self.data(EXONIC)
++                self.data_mut(EXONIC)
+                     .write_sparse(&exonic_path, gene_index)
+                     .map_err(|e| format!("writing exonic truth failed: {e}"))?;
+-                self.data(INTRONIC)
++                self.data_mut(INTRONIC)
+                     .write_sparse(&intronic_path, gene_index)
+                     .map_err(|e| format!("writing intronic truth failed: {e}"))?;
+             }
+@@ -332,18 +332,18 @@
+                 .map_err(|e| format!("failed to create {:?}: {e}", alt_path))?;
+             match cell_barcode_len {
+                 Some(len) => {
+-                    self.data(SNP_REF)
++                    self.data_mut(SNP_REF)
+                         .write_sparse_with_cell_len(&ref_path, snp_index, len)
+                         .map_err(|e| format!("writing SNP ref truth failed: {e}"))?;
+-                    self.data(SNP_ALT)
++                    self.data_mut(SNP_ALT)
+                         .write_sparse_with_cell_len(&alt_path, snp_index, len)
+                         .map_err(|e| format!("writing SNP alt truth failed: {e}"))?;
+                 }
+                 None => {
+-                    self.data(SNP_REF)
++                    self.data_mut(SNP_REF)
+                         .write_sparse(&ref_path, snp_index)
+                         .map_err(|e| format!("writing SNP ref truth failed: {e}"))?;
+-                    self.data(SNP_ALT)
++                    self.data_mut(SNP_ALT)
+                         .write_sparse(&alt_path, snp_index)
+                         .map_err(|e| format!("writing SNP alt truth failed: {e}"))?;
+                 }
+@@ -381,8 +381,14 @@
+     pub fn merge_report(&mut self, report: &MappingInfo) { self.report.merge(report); }
+ 
+     pub fn merge_named(&mut self, target: &str, source: &str) {
+-        let source = self.data(source).clone();
+-        let merge = self.data_mut(target).merge(&source);
++        if target == source {
++            panic!("cannot merge QuantData dataset '{source}' into itself");
++        }
++
++        let source_data = self.data.remove(source)
++            .unwrap_or_else(|| panic!("QuantData has no dataset named '{source}'"));
++        let merge = self.data_mut(target).merge(&source_data);
++        self.data.insert(source.to_string(), source_data);
+         self.report.merge(&merge);
+     }
+ 

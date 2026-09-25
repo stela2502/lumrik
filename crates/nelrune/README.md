@@ -116,7 +116,8 @@ On clusters where the compute-node hostname used by your browser differs from
 - `nelrune.log` — stage/progress log plus the original normalizer and quantifier `MappingInfo` reports
 - `nelrune-report.txt` — final quantification report, including permanent cell-calling/accounting diagnostics
 - `exonic/`, `intronic/`, and optional SNP output directories — **filtered canonical-cell matrices**
-- `unfiltered/exonic/`, `unfiltered/intronic/`, and optional SNP directories — **all observed barcode evidence (>=1 UMI) before canonical cell calling**
+- `raw/exonic/`, `raw/intronic/`, and optional SNP directories — **all observed barcode evidence (>=1 UMI) before canonical cell calling**
+- `filtered/exonic/`, `filtered/intronic/`, and optional SNP directories — **canonical called cells only**
 - mapper BAM only when `--bam-out` is supplied; otherwise the temporary mapper BAM is removed after quantification
 
 ### Filtered and unfiltered matrices are both part of the output contract

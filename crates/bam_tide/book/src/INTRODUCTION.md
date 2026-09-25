@@ -328,21 +328,6 @@ See: [sum_up_ont_tab_result](tools/sum_up_ont_tab_result.md)
 
 ---
 
-## `bam-quant-testdata`
-
-Generate synthetic or controlled test datasets for quantification validation.
-
-Useful for:
-
-- integration testing
-- reproducibility checks
-- benchmarking
-- and development validation
-
-See: [bam-quant-testdata](tools/bam-quant-testdata.md)
-
----
-
 
 # Intended Use Cases
 

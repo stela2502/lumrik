@@ -23,9 +23,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[command(
     author,
     version,
-    name = "nelrune-vdj",
+    name = "vdj",
     about = "Reconstruct single-cell V(D)J receptors from a retained Nelrune BAM",
-    after_help = "LIVE STATUS\n  By default nelrune-vdj serves the Lumrik live dashboard on --health-port 8787.\n  Open the printed URL in a browser. On a cluster, use --health-hostname to control\n  the hostname shown in that URL, or forward the port over SSH.\n  Use --no-health-server to disable it."
+    after_help = "LIVE STATUS\n  By default nelrune vdj serves the Lumrik live dashboard on --health-port 8787.\n  Open the printed URL in a browser. On a cluster, use --health-hostname to control\n  the hostname shown in that URL, or forward the port over SSH.\n  Use --no-health-server to disable it."
 )]
 struct Cli {
     #[arg(long)]
@@ -53,7 +53,7 @@ struct Cli {
     /// Stop the initial evidence-collection BAM pass after approximately this many
     /// records, finishing the current physical query before reconstruction.
     /// Later confirmation/rescan passes still scan the full BAM.
-    #[arg(long)]
+    #[arg(long = "max-reads", alias = "max-bam-records")]
     max_bam_records: Option<usize>,
     /// BD/Rhapsody whitelist version used to emit the official positional
     /// Rustody cell id in AIRR output (v1, v2.96, or v2.384).
@@ -568,7 +568,7 @@ fn preliminary_cell_ids(exonic: Option<&Path>) -> Result<Option<HashSet<u64>>> {
     let cells = scdata::read_mtx_cell_ids(path)
         .with_context(|| format!("reading preliminary Nelrune cells from {}", path.display()))?;
     eprintln!(
-        "[nelrune-vdj] preliminary allowed-cell set: {} barcode(s) from {}",
+        "[nelrune vdj] preliminary allowed-cell set: {} barcode(s) from {}",
         cells.len(),
         path.display()
     );
@@ -859,8 +859,10 @@ fn write_static_report(path: &Path, state: &VdjRunStatus) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
-    let c = Cli::parse();
+pub fn run() -> Result<()> {
+    let c = Cli::parse_from(
+        std::iter::once("vdj".to_string()).chain(std::env::args().skip(2)),
+    );
     let status = Arc::new(RwLock::new(VdjRunStatus::new(c.threads.max(1))));
     let _status_server = if c.no_health_server {
         None
@@ -870,8 +872,8 @@ fn main() -> Result<()> {
         let hostname = public_hostname(c.health_hostname.as_deref());
         let url = format!("http://{}:{}", hostname, server.addr().port());
         update_status(&status, |state| state.public_url = Some(url.clone()));
-        eprintln!("[nelrune-vdj] live dashboard: {url}");
-        eprintln!("[nelrune-vdj] status JSON: {url}/status   health probe: {url}/health");
+        eprintln!("[nelrune vdj] live dashboard: {url}");
+        eprintln!("[nelrune vdj] status JSON: {url}/status   health probe: {url}/health");
         Some(server)
     };
 
@@ -902,7 +904,7 @@ fn main() -> Result<()> {
     let preliminary_cells = preliminary_cell_ids(c.exonic.as_deref())?;
     if preliminary_cells.is_none() {
         eprintln!(
-            "[nelrune-vdj] no --exonic cell gate supplied; collecting receptor evidence from all BAM cell IDs"
+            "[nelrune vdj] no --exonic cell gate supplied; collecting receptor evidence from all BAM cell IDs"
         );
     }
     update_status(&status, |state| {
@@ -918,10 +920,9 @@ fn main() -> Result<()> {
     runner.set_threads(c.threads);
 
     advance_stage(&status, 1, "1/3 initial V(D)J evidence collection");
-    mapping_info.start_counter();
-    mapping_info.start_timer("vdj.bam_read");
+    mapping_info.start_timer("vdj.initial_evidence_collection");
     let status_for_read = Arc::clone(&status);
-    let n = runner.read_bam_with_progress_for_cells_limited(
+    let (n, initial_timing) = runner.read_bam_with_progress_for_cells_limited(
         &c.bam,
         &NelruneIdentityResolver,
         preliminary_cells.as_ref(),
@@ -933,8 +934,14 @@ fn main() -> Result<()> {
     // The final callback already contains the exact BAM denominator counters.
     // `n` remains the public return value: receptor-overlap records ingested.
     let _ = n;
-    mapping_info.stop_timer("vdj.bam_read");
-    mapping_info.stop_file_io_time();
+    mapping_info.stop_timer("vdj.initial_evidence_collection");
+    mapping_info.add_timer_duration("vdj.initial_bam_read", initial_timing.bam_read);
+    mapping_info.add_timer_duration(
+        "vdj.initial_evidence_processing",
+        initial_timing.evidence_processing,
+    );
+    mapping_info.file_io_time += initial_timing.bam_read;
+    mapping_info.multi_processor_time += initial_timing.evidence_processing;
 
     let knee_selection = runner.receptor_knee_selection();
     update_status(&status, |state| {
@@ -962,7 +969,7 @@ fn main() -> Result<()> {
         mapping_info.report_n(format!("{prefix}.evidence_cells"), selection.evidence_cells);
         mapping_info.report_n(format!("{prefix}.selected_cells"), selection.selected_cells);
         eprintln!(
-            "[nelrune-vdj] {} V/J knee: >= {} reads; {}/{} evidence cell(s) selected",
+            "[nelrune vdj] {} V/J knee: >= {} reads; {}/{} evidence cell(s) selected",
             selection.chain,
             selection.threshold_records,
             selection.selected_cells,
@@ -1001,7 +1008,6 @@ fn main() -> Result<()> {
         3,
         "3/3 remapping CDR3s and confirming constant regions",
     );
-    mapping_info.start_counter();
     mapping_info.start_timer("vdj.receptor_rediscovery");
     let status_for_rescan = Arc::clone(&status);
     let rescan = runner.rediscover_receptor_linkage_from_bam_with_report_and_progress(
@@ -1023,8 +1029,14 @@ fn main() -> Result<()> {
             });
         },
     )?;
+    mapping_info.add_timer_duration("vdj.rediscovery_bam_read", rescan.bam_read_time);
+    mapping_info.add_timer_duration(
+        "vdj.rediscovery_evidence_processing",
+        rescan.evidence_processing_time,
+    );
     mapping_info.stop_timer("vdj.receptor_rediscovery");
-    mapping_info.stop_multi_processor_time();
+    mapping_info.file_io_time += rescan.bam_read_time;
+    mapping_info.multi_processor_time += rescan.evidence_processing_time;
     update_status(&status, |state| {
         state.rescan_records = rescan.bam_records_scanned;
         state.rescan_wanted_records = rescan.wanted_cell_records;
@@ -1124,8 +1136,8 @@ fn main() -> Result<()> {
         .read()
         .map_err(|_| anyhow::anyhow!("VDJ run-status lock poisoned"))?
         .clone();
-    write_run_summary_yaml(&c.out.join("vdj-run-summary.yaml"), &final_status)?;
-    write_static_report(&c.out.join("vdj-report.html"), &final_status)?;
+    write_run_summary_yaml(&c.out.join("vdjlog.jaml"), &final_status)?;
+    write_static_report(&c.out.join("vdj.log.html"), &final_status)?;
 
     // Keep a conventional persistent log beside the structured/static status
     // reports. The YAML/HTML files remain the authoritative final dashboard

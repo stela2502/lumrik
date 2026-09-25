@@ -1,0 +1,1 @@
+target/release/nelrune vdj --bam ~/sens05_home/NAS/NELRUNE/REAL_TEST_M39_v4_42cores/ZD-4631-BcellsLaneF/nelrune/nelrune.mapper.bam  --index ~/sens05_home/NAS/NELRUNE/indexes/GRCm39_M39_v2/mouse_GRCm39_M39.vdjidx  --out /tmp/test --max-reads 1000000

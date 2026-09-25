@@ -219,20 +219,26 @@ fn integration_tiny_star_snp() {
     // 5. Full output stack exists
     // --------------------------------------------------------
 
-    let exonic = out.join("exonic");
+    let exonic = out.join("filtered/exonic");
+    let raw_exonic = out.join("raw/exonic");
 
-    let intronic = out.join("intronic");
+    let intronic = out.join("filtered/intronic");
+    let raw_intronic = out.join("raw/intronic");
 
-    let snp_ref = out.join("ref");
+    let snp_ref = out.join("filtered/ref");
+    let raw_snp_ref = out.join("raw/ref");
 
-    let snp_alt = out.join("alt");
+    let snp_alt = out.join("filtered/alt");
+    let raw_snp_alt = out.join("raw/alt");
 
+    assert_matrix_files(&raw_exonic);
+    assert_matrix_files(&raw_intronic);
     assert_matrix_files(&exonic);
-
     assert_matrix_files(&intronic);
 
+    assert_matrix_files(&raw_snp_ref);
+    assert_matrix_files(&raw_snp_alt);
     assert_matrix_files(&snp_ref);
-
     assert_matrix_files(&snp_alt);
 
     assert!(out.join("nelrune.log").is_file(), "Nelrune log is missing");

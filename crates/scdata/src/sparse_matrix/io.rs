@@ -18,7 +18,7 @@ impl Scdata {
     ///
     /// Rows = cells  
     /// Columns = features
-    pub fn write_dense<I: FeatureIndex>(
+    pub fn write_dense<I: FeatureIndex + ?Sized>(
         &self,
         file_path: &PathBuf,
         index: &I,
@@ -76,7 +76,7 @@ impl Scdata {
     /// - matrix.mtx.gz
     /// - barcodes.tsv.gz
     /// - features.tsv.gz
-    pub fn write_sparse<I: FeatureIndex>(
+    pub fn write_sparse<I: FeatureIndex + ?Sized>(
         &mut self,
         outdir: &PathBuf,
         index: &I,
@@ -86,7 +86,7 @@ impl Scdata {
 
     /// Write a sparse MatrixMarket matrix using the known biological barcode
     /// length instead of rendering the complete 32-base `u64` capacity.
-    pub fn write_sparse_with_cell_len<I: FeatureIndex>(
+    pub fn write_sparse_with_cell_len<I: FeatureIndex + ?Sized>(
         &mut self,
         outdir: &PathBuf,
         index: &I,
@@ -321,7 +321,8 @@ impl Scdata {
             }
 
             for umi in 0..val as u64 {
-                scdata.try_insert(&cell_id, GeneUmiHash(feature_id, umi), 0.0, &mut report);
+                let state = scdata.try_insert(&cell_id, GeneUmiHash(feature_id, umi), 0.0);
+                report.report(state.as_str());
             }
         }
 

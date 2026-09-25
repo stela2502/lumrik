@@ -3,12 +3,12 @@ use anyhow::Result;
 use gtf_splice_index::{MatchClass, MatchOptions, SpliceIndex};
 use rayon::prelude::*;
 use scdata::cell_data::GeneUmiHash;
+use mapping_info::MappingInfo;
 
-use crate::quantification::cli::QuantMode;
 use crate::quantification::job::Job;
 use crate::quantification::processor_options::ProcessorOptions;
 use crate::quantification::snp::SnpSideChannel;
-use crate::results::QuantData;
+use scdata::QuantData;
 
 pub struct ChunkProcessor<'a> {
     idx: &'a SpliceIndex,
@@ -35,9 +35,9 @@ impl<'a> ChunkProcessor<'a> {
 
     pub fn process_into(
         &self,
-        quant_mode: QuantMode,
         jobs: &[Job],
         merged: &mut QuantData,
+        report: &mut MappingInfo,
     ) -> Result<()> {
         if jobs.is_empty() {
             return Ok(());
@@ -46,73 +46,65 @@ impl<'a> ChunkProcessor<'a> {
         let threads = rayon::current_num_threads().max(1);
         let chunk_size = (jobs.len() / threads).max(10_000);
 
-        merged.report.start_counter();
-        merged
-            .report
-            .start_timer("bam_tide/multi_cpu/quantify_chunk");
+        report.start_counter();
+        report.start_timer("bam_tide/multi_cpu/quantify_chunk");
 
-        let partials: Vec<QuantData> = jobs
+        let partials: Vec<(QuantData, MappingInfo)> = jobs
             .par_chunks(chunk_size)
-            .map(|chunk| self.process_partial(quant_mode, chunk))
+            .map(|chunk| self.process_partial(chunk))
             .collect();
 
-        merged
-            .report
-            .stop_timer("bam_tide/multi_cpu/quantify_chunk");
-        merged.report.stop_multi_processor_time();
+        report.stop_timer("bam_tide/multi_cpu/quantify_chunk");
+        report.stop_multi_processor_time();
 
-        merged
-            .report
-            .start_timer("bam_tide/single_cpu/merge_quantification");
-        for partial in partials {
-            merged.merge(&partial);
+        report.start_timer("bam_tide/single_cpu/merge_quantification");
+        for (partial_data, partial_report) in partials {
+            let merge_report = merged.merge(&partial_data);
+            report.merge(&partial_report);
+            report.merge(&merge_report);
         }
-        merged
-            .report
-            .stop_timer("bam_tide/single_cpu/merge_quantification");
-        merged.report.stop_single_processor_time();
+        report.stop_timer("bam_tide/single_cpu/merge_quantification");
+        report.stop_single_processor_time();
 
         Ok(())
     }
 
-    fn process_partial(&self, quant_mode: QuantMode, jobs: &[Job]) -> QuantData {
-        let mut out = QuantData::new();
+    fn process_partial(&self, jobs: &[Job]) -> (QuantData, MappingInfo) {
+        let mut out = QuantData::standard();
+        let mut report = MappingInfo::new(None, 0.0, jobs.len());
 
         for job in jobs {
-            match quant_mode {
-                QuantMode::Gene => self.add_gene_hit(job, &mut out),
-                QuantMode::Transcript => self.add_transcript_hit(job, &mut out),
-            }
+            self.add_hit(job, &mut out, &mut report);
 
-            self.add_snp_hits(job, &mut out);
+            self.add_snp_hits(job, &mut out, &mut report);
         }
 
-        out
+        (out, report)
     }
 
     fn record_splice_mismatch_histograms(
         &self,
         job: &Job,
         transcript: &gtf_splice_index::Transcript,
-        out: &mut QuantData,
+        report: &mut MappingInfo,
     ) {
         const MAX_REPORTED_OFFSET_BP: i32 = 50;
         for (donor, acceptor) in transcript
             .junction_mismatch_offsets(&job.spliced, self.match_opts.allowed_intronic_gap_size)
         {
-            out.report.observe_signed_histogram(
+            report.observe_signed_histogram(
                 "splice donor offset [bp]",
                 donor,
                 -MAX_REPORTED_OFFSET_BP,
                 MAX_REPORTED_OFFSET_BP,
             );
-            out.report.observe_signed_histogram(
+            report.observe_signed_histogram(
                 "splice acceptor offset [bp]",
                 acceptor,
                 -MAX_REPORTED_OFFSET_BP,
                 MAX_REPORTED_OFFSET_BP,
             );
-            out.report.observe_signed_histogram(
+            report.observe_signed_histogram(
                 "splice nearest-boundary miss [bp]",
                 donor.abs().max(acceptor.abs()),
                 0,
@@ -121,87 +113,31 @@ impl<'a> ChunkProcessor<'a> {
         }
     }
 
-    fn add_gene_hit(&self, job: &Job, out: &mut QuantData) {
-        let hits = self.idx.match_genes(&job.spliced, self.match_opts);
+    fn add_hit(&self, job: &Job, out: &mut QuantData, report: &mut MappingInfo) {
+        let hits = self.idx.match_features(&job.spliced, self.match_opts);
 
         if hits.is_empty() {
-            out.report.report("no hit");
+            report.report("no hit");
             return;
         }
 
         let hit = &hits[0];
-        out.report.report(hit.best_hit.class.to_string());
-
-        if matches!(
-            hit.best_hit.class,
-            MatchClass::JunctionMismatch | MatchClass::Intronic | MatchClass::Incompatible
-        ) {
-            if let Some(transcript) = hit.winning_transcripts.first() {
-                self.record_splice_mismatch_histograms(job, transcript, out);
-            }
-        }
-
-        let feature_id = hit.gene_id as u64;
-        let feature_umi = GeneUmiHash(feature_id, job.umi);
-
-        match hit.best_hit.class {
-            MatchClass::Compatible
-            | MatchClass::ExactJunctionChain
-            | MatchClass::JunctionMismatch => {
-                out.gene
-                    .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
-            }
-            MatchClass::Intronic => {
-                out.intron
-                    .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
-            }
-            MatchClass::Incompatible
-            | MatchClass::OverhangTooLarge
-            | MatchClass::NoOverlap
-            | MatchClass::StrandMismatch => {}
-        }
-    }
-
-    fn add_transcript_hit(&self, job: &Job, out: &mut QuantData) {
-        let hits = self.idx.match_transcripts(&job.spliced, self.match_opts);
-
-        if hits.is_empty() {
-            out.report.report("no hit");
-            return;
-        }
-
-        let hit = &hits[0];
-        out.report.report(hit.hit.class.to_string());
+        report.report(hit.hit.class.to_string());
 
         if matches!(
             hit.hit.class,
             MatchClass::JunctionMismatch | MatchClass::Intronic | MatchClass::Incompatible
         ) {
-            self.record_splice_mismatch_histograms(job, hit.transcript, out);
+            self.record_splice_mismatch_histograms(job, hit.transcript, report);
         }
 
-        let feature_id = hit.transcript_id as u64;
-        let feature_umi = GeneUmiHash(feature_id, job.umi);
-
-        match hit.hit.class {
-            MatchClass::Compatible
-            | MatchClass::ExactJunctionChain
-            | MatchClass::JunctionMismatch => {
-                out.gene
-                    .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
-            }
-            MatchClass::Intronic => {
-                out.intron
-                    .try_insert(&job.cell, feature_umi, 1.0, &mut out.report);
-            }
-            MatchClass::Incompatible
-            | MatchClass::OverhangTooLarge
-            | MatchClass::NoOverlap
-            | MatchClass::StrandMismatch => {}
+        let feature_umi = GeneUmiHash(hit.feature_id, job.umi);
+        if let Some(class) = hit.hit.class.quant_class() {
+            out.try_insert(class.as_str(), &job.cell, feature_umi, 1.0, report);
         }
     }
 
-    fn add_snp_hits(&self, job: &Job, out: &mut QuantData) {
+    fn add_snp_hits(&self, job: &Job, out: &mut QuantData, report: &mut MappingInfo) {
         let Some(snp) = self.snp else {
             return;
         };
@@ -210,9 +146,8 @@ impl<'a> ChunkProcessor<'a> {
             job.aligned.as_ref(),
             job.cell,
             job.umi,
-            &mut out.snp_ref,
-            &mut out.snp_alt,
-            &mut out.report,
+            out,
+            report,
         );
     }
 }
@@ -275,16 +210,17 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
             ProcessorOptions::default(),
         );
 
-        let mut merged = QuantData::new();
+        let mut merged = QuantData::standard();
+        let mut report = MappingInfo::new(None, 0.0, 1);
 
         processor
-            .process_into(QuantMode::Gene, &[job], &mut merged)
+            .process_into(&[job], &mut merged, &mut report)
             .unwrap();
 
         // At minimum: it must not become "no hit".
         // Depending on QuantData internals, this may need adapting to your matrix API.
         assert!(
-            !merged.gene.is_empty() || !merged.intron.is_empty(),
+            !merged.is_empty(QuantData::EXONIC) || !merged.is_empty(QuantData::INTRONIC),
             "expected one gene or intron count from chr14/14 alias match"
         );
     }
@@ -320,16 +256,17 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
             ProcessorOptions::default(),
         );
 
-        let mut merged = QuantData::new();
+        let mut merged = QuantData::standard();
+        let mut report = MappingInfo::new(None, 0.0, 1);
 
         processor
-            .process_into(QuantMode::Gene, &[job], &mut merged)
+            .process_into(&[job], &mut merged, &mut report)
             .unwrap();
 
         // At minimum: it must not become "no hit".
         // Depending on QuantData internals, this may need adapting to your matrix API.
         assert!(
-            !merged.gene.is_empty() || !merged.intron.is_empty(),
+            !merged.is_empty(QuantData::EXONIC) || !merged.is_empty(QuantData::INTRONIC),
             "expected one gene or intron count from chr14/14 alias match"
         );
     }

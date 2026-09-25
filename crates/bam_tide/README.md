@@ -19,7 +19,6 @@ High-throughput BAM/FASTQ normalization, quantification, coverage, tag handling 
 - `bam-read-tag-stats`
 - `fastq-primer-restore`
 - `sc-identify-cells`
-- `bam-quant-testdata`
 - `bam-quant-collector`
 - `sum_up_ont_tab_result`
 
@@ -86,7 +85,6 @@ Instead, `bam_tide` aims to provide:
 | `bw-compare` | Compare BigWig coverage tracks |
 | `bam-subset-tag` | Split BAMs using barcode/tag values |
 | `bam-read-tag-stats` | QC and summarize read-tag tables |
-| `bam-quant-testdata` | Generate quantification test datasets |
 
 Detailed documentation for the software suite is available at [bam_tide documentation](https://stela2502.github.io/bam_tide/)
 

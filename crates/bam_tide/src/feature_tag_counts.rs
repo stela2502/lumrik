@@ -190,13 +190,11 @@ impl FeatureTagCounts {
             .with_context(|| format!("reading legacy observations from {}", path.display()))?;
 
         let mut ret = Self::from_sources(sources, min_hits)?;
-        let mut report = mapping_info::MappingInfo::new(None, 0.0, 0);
         for observation in observations {
             ret.data.try_insert(
                 &observation.cell,
                 scdata::GeneUmiHash(observation.feature, observation.umi),
                 0.0,
-                &mut report,
             );
         }
         Ok(ret)
@@ -241,13 +239,11 @@ impl FeatureTagCounts {
             mapper: FastTagMapper::new(),
             features: payload.features,
         };
-        let mut report = mapping_info::MappingInfo::new(None, 0.0, 0);
         for observation in payload.observations {
             ret.data.try_insert(
                 &observation.cell,
                 scdata::GeneUmiHash(observation.feature, observation.umi),
                 0.0,
-                &mut report,
             );
         }
         Ok(ret)

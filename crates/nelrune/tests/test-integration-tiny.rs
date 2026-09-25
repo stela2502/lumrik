@@ -305,9 +305,11 @@ fn integration_tiny_star() {
     // 5. Full output stack exists
     // --------------------------------------------------------
 
-    let exonic = out.join("exonic");
+    let exonic = out.join("filtered/exonic");
+    let raw_exonic = out.join("raw/exonic");
 
-    let intronic = out.join("intronic");
+    let intronic = out.join("filtered/intronic");
+    let raw_intronic = out.join("raw/intronic");
 
     assert_matrix_files(&exonic);
     assert_matrix_files(&intronic);

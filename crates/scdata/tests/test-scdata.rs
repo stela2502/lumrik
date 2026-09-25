@@ -1,5 +1,5 @@
 use mapping_info::MappingInfo;
-use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
+use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata, ScdataInsertState};
 
 use std::collections::HashMap;
 use std::fs;
@@ -92,7 +92,8 @@ fn singlecelldata_to_sparse_integer_roundtrip() {
     );
 
     assert!(
-        !celldata.try_insert(&13_452_355_u64, GeneUmiHash(gene1, 0), 1.0, &mut report),
+        celldata.try_insert(&13_452_355_u64, GeneUmiHash(gene1, 0), 1.0)
+            == ScdataInsertState::Duplicate,
         "duplicate Gene1 umi 0 should fail"
     );
 

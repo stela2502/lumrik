@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -5,14 +6,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bam_tide::FeatureTagCounts;
-use bam_tide::index::{GeneFeatureIndex, TranscriptFeatureIndex};
+use scdata::QuantData;
 use bam_tide::quantification::bam_collector::{BamCollector, BamCollectorConfig};
-use bam_tide::quantification::cli::QuantMode;
 use clap::Parser;
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use gtf_splice_index::SpliceIndex;
+use gtf_splice_index::{QuantClass, SpliceIndex};
 use lumrik_status::{public_hostname, spawn_status_server};
 use nelrune::progress::RunProgress;
 use sc_primer::{BdCellVersion, Chemistry, PrimerCli, RhapsodyWhitelist};
@@ -28,6 +28,9 @@ pub struct QuantCli {
     primer: PrimerCli,
     #[command(flatten)]
     bam_collector: BamCollectorConfig,
+    /// Rayon worker threads used for BAM quantification (0 = Rayon default).
+    #[arg(long, default_value_t = 0)]
+    threads: usize,
     /// Minimum unique exonic gene-associated UMIs required to call a barcode a cell.
     /// When omitted, sc-beacon barcode-rank cell calling is used.
     #[arg(long)]
@@ -48,10 +51,15 @@ pub struct QuantCli {
 
 pub fn run() -> Result<()> {
     let args = QuantCli::parse_from(std::env::args().skip(1));
+    if args.threads > 0 {
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global();
+    }
     fs::create_dir_all(&args.outpath)?;
 
     let mut progress = RunProgress::new();
-    progress.open_log(args.outpath.join("nelrune.log"))?;
+    progress.open_log(args.outpath.join("nelrune_quant.log"))?;
     let _health_server = if args.no_health_server {
         progress.stage("health server disabled");
         None
@@ -83,30 +91,32 @@ pub fn run() -> Result<()> {
         BamCollector::from_cli(args.bam_collector.clone())?.with_grammar(primer.grammar().clone());
 
     progress.stage("quantifying BAM");
-    let result = collector.run_paths_with_progress(&args.bam, |data| {
-        progress.update_quantification_live(data);
+    let result = collector.run_paths_with_progress(&args.bam, |data, report| {
+        progress.update_quantification_live(data, report);
     })?;
-    progress.update_quantification_live(&result.data);
+    progress.update_quantification_live(&result.data, &result.report);
     let mut data = result.data;
+    let report = result.report;
 
     if args.include_intronic {
         // Merge at (cell, feature, UMI) level, so a molecule represented in both layers
         // remains one molecule. Keep `intron` untouched as an auditable evidence layer.
-        data.gene.merge(&data.intron);
+        data.merge_named(QuantData::EXONIC, QuantData::INTRONIC);
         progress.stage("including intronic GEX evidence in canonical expression");
     }
 
     progress.stage("loading output feature index");
     progress.update_memory();
-    let index = SpliceIndex::load(&args.bam_collector.index)?;
+    let index = SpliceIndex::load(&args.bam_collector.index)?
+        .with_match_mode(args.bam_collector.quant_mode.splice_match_mode());
 
     // IMPORTANT OUTPUT CONTRACT:
     //
     // Quantification must preserve BOTH views of the GEX evidence:
-    //   <outpath>/unfiltered/{exonic,intronic,...}  all observed barcodes (>=1 UMI)
-    //   <outpath>/{exonic,intronic,...}             canonical called cells only
+    //   <outpath>/raw/{exonic,intronic,...}       all observed barcodes (>=1 UMI)
+    //   <outpath>/filtered/{exonic,intronic,...}  canonical called cells only
     //
-    // The unfiltered matrices are not disposable debug output. They are required
+    // The raw matrices are not disposable debug output. They are required
     // for auditing cell calling and recovering evidence when a caller is too
     // stringent. Do not replace this with a filtered-only writer.
     progress.stage("calling canonical GEX cells");
@@ -117,7 +127,7 @@ pub fn run() -> Result<()> {
         );
         (data.cells_with_min_exonic_umis(min), None)
     } else {
-        let calling = data.beacon_cell_calling().map_err(anyhow::Error::msg)?;
+        let calling = bam_tide::results::beacon_cell_calling(&data).map_err(anyhow::Error::msg)?;
         calling
             .write_tsv(args.outpath.join("cell_calling.tsv"))
             .map_err(anyhow::Error::msg)?;
@@ -130,30 +140,22 @@ pub fn run() -> Result<()> {
 
     progress.stage("writing filtered + unfiltered GEX matrices");
     progress.update_memory();
-    let cell_accounting = match args.bam_collector.quant_mode {
-        QuantMode::Gene => {
-            let features = GeneFeatureIndex::new(&index);
-            data.write_with_unfiltered_for_cells(
-                &args.outpath,
-                &retained_cells,
-                &features,
-                result.snp.as_ref().map(|s| &s.index),
-                Some(cell_barcode_len),
-            )
-            .map_err(anyhow::Error::msg)?
-        }
-        QuantMode::Transcript => {
-            let features = TranscriptFeatureIndex::new(&index);
-            data.write_with_unfiltered_for_cells(
-                &args.outpath,
-                &retained_cells,
-                &features,
-                result.snp.as_ref().map(|s| &s.index),
-                Some(cell_barcode_len),
-            )
-            .map_err(anyhow::Error::msg)?
-        }
-    };
+    let features = index.feature_index();
+    let mut indexes: HashMap<String, &dyn scdata::FeatureIndex> = HashMap::new();
+    indexes.insert(QuantClass::Exonic.as_str().to_string(), &features);
+    indexes.insert(QuantClass::Intronic.as_str().to_string(), &features);
+    if let Some(snp) = result.snp.as_ref() {
+        indexes.insert(QuantData::SNP_REF.to_string(), &snp.index);
+        indexes.insert(QuantData::SNP_ALT.to_string(), &snp.index);
+    }
+    let cell_accounting = data
+        .write_raw_and_filtered_for_cells(
+            &args.outpath,
+            &retained_cells,
+            &indexes,
+            Some(cell_barcode_len),
+        )
+        .map_err(anyhow::Error::msg)?;
 
     let matrix_feature_counts = MatrixFeatureCounts::from_output(&args.outpath)?;
 
@@ -166,17 +168,22 @@ pub fn run() -> Result<()> {
         progress.update_memory();
         // Preserve the existing Nelrune integration point: canonical GEX cells
         // are decided from BAM quantification, then applied to FASTQ observations.
-        feature_counts.finalize_and_write(&retained_cells, cell_barcode_len, &args.outpath)?;
+        feature_counts.finalize_and_write_all(cell_barcode_len, &args.outpath.join("raw"))?;
+        feature_counts.finalize_and_write(
+            &retained_cells,
+            cell_barcode_len,
+            &args.outpath.join("filtered"),
+        )?;
     }
 
     progress.stage("writing numeric cell identifiers");
     progress.update_memory();
     if let Some(whitelist) = rhapsody_whitelist(&args.primer.chemistry) {
         for dir in [
-            args.outpath.join("exonic"),
-            args.outpath.join("intronic"),
-            args.outpath.join("unfiltered/exonic"),
-            args.outpath.join("unfiltered/intronic"),
+            args.outpath.join("filtered/exonic"),
+            args.outpath.join("filtered/intronic"),
+            args.outpath.join("raw/exonic"),
+            args.outpath.join("raw/intronic"),
         ] {
             write_numeric_barcodes(&dir, &whitelist)?;
         }
@@ -235,20 +242,20 @@ pub fn run() -> Result<()> {
     };
     progress.stage("writing final quantification report");
     progress.set_quantification_summary(
-        data.report.get_issue_count("bam_records_seen"),
-        data.report.get_issue_count("quantified_bam_records"),
-        data.report.get_issue_count("compatible"),
-        data.report.get_issue_count("unmapped"),
+        report.get_issue_count("bam_records_seen"),
+        report.get_issue_count("quantified_bam_records"),
+        report.get_issue_count("compatible"),
+        report.get_issue_count("unmapped"),
         retained_cells.len(),
     );
-    progress.update_quantification_live(&data);
+    progress.update_quantification_live(&data, &report);
     let report = format!(
         "{}\n\n{}\n\n{}",
-        data.report, calling_report, matrix_feature_counts
+        report, calling_report, matrix_feature_counts
     );
     fs::write(args.outpath.join("nelrune-report.txt"), report)?;
     eprintln!(
-        "[nelrune quant] unfiltered exonic cells: {}",
+        "[nelrune quant] raw exonic cells: {}",
         cell_accounting.exonic_cells
     );
     eprintln!(
@@ -262,53 +269,53 @@ pub fn run() -> Result<()> {
             .saturating_sub(retained_cells.len())
     );
     eprintln!(
-        "[nelrune quant] unfiltered exonic features written: {}",
-        matrix_feature_counts.unfiltered_exonic
+        "[nelrune quant] raw exonic features written: {}",
+        matrix_feature_counts.raw_exonic
     );
     eprintln!(
         "[nelrune quant] filtered exonic features written: {}",
         matrix_feature_counts.filtered_exonic
     );
     eprintln!(
-        "[nelrune quant] unfiltered intronic features written: {}",
-        matrix_feature_counts.unfiltered_intronic
+        "[nelrune quant] raw intronic features written: {}",
+        matrix_feature_counts.raw_intronic
     );
     eprintln!(
         "[nelrune quant] filtered intronic features written: {}",
         matrix_feature_counts.filtered_intronic
     );
     eprintln!(
-        "[nelrune quant] unfiltered matrices: {}",
-        args.outpath.join("unfiltered").display()
+        "[nelrune quant] raw matrices: {}",
+        args.outpath.join("raw").display()
     );
     eprintln!(
         "[nelrune quant] filtered matrices: {}",
-        args.outpath.display()
+        args.outpath.join("filtered").display()
     );
     progress.finish();
-    progress.write_final_status(&args.outpath)?;
+    progress.write_final_status(&args.outpath, "quant")?;
     Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
 struct MatrixFeatureCounts {
-    unfiltered_exonic: usize,
+    raw_exonic: usize,
     filtered_exonic: usize,
-    unfiltered_intronic: usize,
+    raw_intronic: usize,
     filtered_intronic: usize,
 }
 
 impl MatrixFeatureCounts {
     fn from_output(outpath: &Path) -> Result<Self> {
         Ok(Self {
-            unfiltered_exonic: count_gzip_lines(
-                &outpath.join("unfiltered/exonic/features.tsv.gz"),
+            raw_exonic: count_gzip_lines(
+                &outpath.join("raw/exonic/features.tsv.gz"),
             )?,
-            filtered_exonic: count_gzip_lines(&outpath.join("exonic/features.tsv.gz"))?,
-            unfiltered_intronic: count_gzip_lines(
-                &outpath.join("unfiltered/intronic/features.tsv.gz"),
+            filtered_exonic: count_gzip_lines(&outpath.join("filtered/exonic/features.tsv.gz"))?,
+            raw_intronic: count_gzip_lines(
+                &outpath.join("raw/intronic/features.tsv.gz"),
             )?,
-            filtered_intronic: count_gzip_lines(&outpath.join("intronic/features.tsv.gz"))?,
+            filtered_intronic: count_gzip_lines(&outpath.join("filtered/intronic/features.tsv.gz"))?,
         })
     }
 }
@@ -319,8 +326,8 @@ impl std::fmt::Display for MatrixFeatureCounts {
         writeln!(f, "---------------------")?;
         writeln!(
             f,
-            "unfiltered exonic features written: {}",
-            self.unfiltered_exonic
+            "raw exonic features written: {}",
+            self.raw_exonic
         )?;
         writeln!(
             f,
@@ -329,8 +336,8 @@ impl std::fmt::Display for MatrixFeatureCounts {
         )?;
         writeln!(
             f,
-            "unfiltered intronic features written: {}",
-            self.unfiltered_intronic
+            "raw intronic features written: {}",
+            self.raw_intronic
         )?;
         writeln!(
             f,

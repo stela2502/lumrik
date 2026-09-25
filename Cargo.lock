@@ -232,7 +232,6 @@ dependencies = [
  "int-to-dna",
  "mapping_info",
  "onehot_dna",
- "rand 0.8.7",
  "rayon",
  "read-tag-table",
  "rust-htslib",
@@ -1326,6 +1325,7 @@ dependencies = [
  "flate2",
  "int-to-dna",
  "int-to-prot",
+ "scdata",
  "serde",
  "zstd",
 ]
@@ -2084,6 +2084,7 @@ dependencies = [
  "reference_curator",
  "rust-htslib",
  "sc-mapper",
+ "sc-vdj",
  "sc_primer",
  "scdata",
  "snp-index",

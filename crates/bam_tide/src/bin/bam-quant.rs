@@ -5,16 +5,15 @@
 //! chunk processing, and quantification are owned by `BamCollector`.
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 
 use clap::Parser;
-
-use bam_tide::index::{GeneFeatureIndex, TranscriptFeatureIndex};
 
 use bam_tide::quantification::{
     bam_collector::{BamCollector, BamCollectorConfig},
     cli::{CellCallingMode, QuantCli, QuantMode},
 };
-use gtf_splice_index::SpliceIndex;
+use gtf_splice_index::{SpliceIndex, SpliceMatchMode};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -34,7 +33,11 @@ fn main() -> Result<()> {
 }
 
 fn run(args: QuantCli) -> Result<()> {
-    configure_rayon(args.threads);
+    if args.threads > 0 {
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global();
+    }
 
     let config = BamCollectorConfig {
         index: args.index.clone(),
@@ -91,7 +94,7 @@ fn run(args: QuantCli) -> Result<()> {
         .context("collecting BAM quantification")?;
 
     let mut data = result.data;
-
+    let mut report = result.report;
     let snp = result.snp;
 
     /*
@@ -102,28 +105,22 @@ fn run(args: QuantCli) -> Result<()> {
      * remove this second load later when its result exposes the
      * export index cleanly.
      */
+    let match_mode = match args.quant_mode {
+        QuantMode::Gene => SpliceMatchMode::Gene,
+        QuantMode::Transcript => SpliceMatchMode::Transcript,
+    };
     let idx = SpliceIndex::load(&args.index)
-        .with_context(|| format!("reading splice index {} for export", args.index.display()))?;
+        .with_context(|| format!("reading splice index {} for export", args.index.display()))?
+        .with_match_mode(match_mode);
+    let features = idx.feature_index();
 
     println!("Writing outfiles");
+    write_quantification(&mut data, &args, &features, snp.as_ref().map(|s| &s.index))
+        .context("writing quantification")?;
 
-    match args.quant_mode {
-        QuantMode::Gene => {
-            let features = GeneFeatureIndex::new(&idx);
-            write_quantification(&mut data, &args, &features, snp.as_ref().map(|s| &s.index))
-                .context("writing gene quantification")?;
-        }
+    report.stop_file_io_time();
 
-        QuantMode::Transcript => {
-            let features = TranscriptFeatureIndex::new(&idx);
-            write_quantification(&mut data, &args, &features, snp.as_ref().map(|s| &s.index))
-                .context("writing transcript quantification")?;
-        }
-    }
-
-    data.report.stop_file_io_time();
-
-    println!("{}", data.report);
+    println!("{}", report);
 
     Ok(())
 }
@@ -138,22 +135,16 @@ where
     T: scdata::FeatureIndex,
     F: scdata::FeatureIndex,
 {
-    match args.cell_calling {
-        CellCallingMode::Fixed => {
-            let (retained, accounting) = data
-                .write_with_unfiltered(&args.outpath, args.min_umi_count, features, snp_index, None)
-                .map_err(anyhow::Error::msg)?;
-            println!(
-                "{accounting}Cell calling\n------------\nmethod: fixed\nminimum UMIs: {}\nretained cells: {}\nremoved by exonic cutoff: {}",
-                args.min_umi_count,
-                retained.len(),
-                accounting.exonic_cells.saturating_sub(retained.len())
-            );
-        }
+    let accounting = data.cell_accounting();
+
+    let (retained, calling) = match args.cell_calling {
+        CellCallingMode::Fixed => (
+            data.cells_with_min_exonic_umis(args.min_umi_count),
+            None,
+        ),
         CellCallingMode::Beacon => {
             println!("Running sc-beacon barcode-rank knee cell identification and QC...");
-            let calling = data.beacon_cell_calling().map_err(anyhow::Error::msg)?;
-            let retained_count = calling.retained.len();
+            let calling = bam_tide::results::beacon_cell_calling(&data).map_err(anyhow::Error::msg)?;
 
             std::fs::create_dir_all(&args.outpath)
                 .with_context(|| format!("creating {}", args.outpath.display()))?;
@@ -164,37 +155,41 @@ where
                 .write_qc(args.outpath.join("qc"))
                 .map_err(anyhow::Error::msg)?;
 
-            let accounting = data
-                .write_with_unfiltered_for_cells(
-                    &args.outpath,
-                    &calling.retained,
-                    features,
-                    snp_index,
-                    None,
-                )
-                .map_err(anyhow::Error::msg)?;
-
-            println!(
-                "sc-beacon cell identification complete\n{accounting}Cell calling\n------------\nmethod: sc-beacon barcode-rank knee\ncandidate barcodes: {}\ninformative barcodes (>1 UMI): {}\nknee rank: {}\nUMI cutoff: {}\nknee score: {:.6}\nretained cells: {}\nnot called: {}\ncell diagnostics: {}\ncell QC plots: {}",
-                calling.fit.candidate_barcodes,
-                calling.fit.informative_barcodes,
-                calling.fit.knee_rank,
-                calling.fit.umi_cutoff,
-                calling.fit.score,
-                retained_count,
-                accounting.exonic_cells.saturating_sub(retained_count),
-                args.outpath.join("cell_calling.tsv").display(),
-                args.outpath.join("qc").display(),
-            );
+            (calling.retained.clone(), Some(calling))
         }
-    }
-    Ok(())
-}
+    };
 
-fn configure_rayon(threads: usize) {
-    if threads > 0 {
-        let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build_global();
+    let mut indexes: HashMap<String, &dyn scdata::FeatureIndex> = HashMap::new();
+    indexes.insert(gtf_splice_index::QuantClass::Exonic.as_str().to_string(), features);
+    indexes.insert(gtf_splice_index::QuantClass::Intronic.as_str().to_string(), features);
+    if let Some(snp_index) = snp_index {
+        indexes.insert(scdata::QuantData::SNP_REF.to_string(), snp_index);
+        indexes.insert(scdata::QuantData::SNP_ALT.to_string(), snp_index);
     }
+
+    data.write_raw_and_filtered_for_cells(&args.outpath, &retained, &indexes, None)
+        .map_err(anyhow::Error::msg)?;
+
+    match calling {
+        None => println!(
+            "{accounting}Cell calling\n------------\nmethod: fixed\nminimum UMIs: {}\nretained cells: {}\nremoved by exonic cutoff: {}",
+            args.min_umi_count,
+            retained.len(),
+            accounting.exonic_cells.saturating_sub(retained.len())
+        ),
+        Some(calling) => println!(
+            "sc-beacon cell identification complete\n{accounting}Cell calling\n------------\nmethod: sc-beacon barcode-rank knee\ncandidate barcodes: {}\ninformative barcodes (>1 UMI): {}\nknee rank: {}\nUMI cutoff: {}\nknee score: {:.6}\nretained cells: {}\nnot called: {}\ncell diagnostics: {}\ncell QC plots: {}",
+            calling.fit.candidate_barcodes,
+            calling.fit.informative_barcodes,
+            calling.fit.knee_rank,
+            calling.fit.umi_cutoff,
+            calling.fit.score,
+            retained.len(),
+            accounting.exonic_cells.saturating_sub(retained.len()),
+            args.outpath.join("cell_calling.tsv").display(),
+            args.outpath.join("qc").display(),
+        ),
+    }
+
+    Ok(())
 }
