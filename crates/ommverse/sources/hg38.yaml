@@ -1,0 +1,108 @@
+schema_version: 1
+reference:
+  name: hg38
+  species: Homo sapiens
+  assembly: GRCh38
+  assembly_accession: GCF_000001405.40
+  taxonomy_id: 9606
+resources:
+  - kind: reference
+    source: UCSC
+    release: null
+    format: ucsc-reference-tree
+    file: null
+    providers:
+      - name: UCSC
+        url: https://hgdownload.soe.ucsc.edu
+        priority: 10
+        adapter: ucsc
+
+  - kind: chromatin_enhancers
+    source: FANTOM5
+    release: hg38_latest
+    format: bed.gz
+    file: Chromatin/FANTOM5/F5.hg38.enhancers.bed.gz
+    providers:
+      - name: RIKEN FANTOM
+        url: https://fantom.gsc.riken.jp/5/datafiles/reprocessed/hg38_latest/extra/enhancer/F5.hg38.enhancers.bed.gz
+        priority: 10
+
+  - kind: protein_binding
+    source: ENCODE4
+    release: null
+    format: bigBed
+    file: Chromatin/ENCODE4/TFrPeakClusters.bb
+    providers:
+      - name: UCSC ENCODE mirror
+        url: https://hgdownload.soe.ucsc.edu/gbdb/hg38/encode4/regulation/tfRpeak/TFrPeakClusters.bb
+        priority: 10
+
+  - kind: variants
+    source: dbSNP
+    release: latest
+    format: vcf.gz
+    file: Variants/GCF_000001405.40.gz
+    providers:
+      - name: NCBI
+        url: https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz
+        priority: 10
+  - kind: variants_index
+    source: dbSNP
+    release: latest
+    format: tbi
+    file: Variants/GCF_000001405.40.gz.tbi
+    providers:
+      - name: NCBI
+        url: https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz.tbi
+        priority: 10
+
+  - kind: clinical_effects
+    source: ClinVar
+    release: current
+    format: vcf.gz
+    file: Effects/Clinical/clinvar.vcf.gz
+    providers:
+      - name: NCBI
+        url: https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz
+        priority: 10
+  - kind: clinical_effects_index
+    source: ClinVar
+    release: current
+    format: tbi
+    file: Effects/Clinical/clinvar.vcf.gz.tbi
+    providers:
+      - name: NCBI
+        url: https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz.tbi
+        priority: 10
+
+  # STRING is organism-scoped rather than assembly-scoped. Keep the files in a
+  # generic biological Interactions/ layer; STRING remains provenance, not layout.
+  - kind: protein_interaction_nodes
+    source: STRING
+    release: "12.0"
+    format: txt.gz
+    file: Interactions/protein.info.v12.0.txt.gz
+    providers:
+      - name: STRING
+        url: https://stringdb-downloads.org/download/protein.info.v12.0/9606.protein.info.v12.0.txt.gz
+        priority: 10
+
+  - kind: protein_interaction_aliases
+    source: STRING
+    release: "12.0"
+    format: txt.gz
+    file: Interactions/protein.aliases.v12.0.txt.gz
+    providers:
+      - name: STRING
+        url: https://stringdb-downloads.org/download/protein.aliases.v12.0/9606.protein.aliases.v12.0.txt.gz
+        priority: 10
+
+  - kind: protein_interactions
+    source: STRING
+    release: "12.0"
+    format: txt.gz
+    file: Interactions/protein.links.full.v12.0.txt.gz
+    providers:
+      - name: STRING
+        url: https://stringdb-downloads.org/download/protein.links.full.v12.0/9606.protein.links.full.v12.0.txt.gz
+        priority: 10

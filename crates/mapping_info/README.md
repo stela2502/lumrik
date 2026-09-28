@@ -16,10 +16,8 @@ Create and update `MappingInfo` from library code; its display/reporting impleme
 
 ## Detailed documentation
 
-[![Rust](https://github.com/stela2502/mapping_info/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/mapping_info/actions/workflows/rust.yml)
 # mapping_info
 
-[![Rust](https://github.com/stela2502/mapping_info/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/mapping_info/actions/workflows/rust.yml)
 
 A lightweight Rust helper library for collecting, timing, logging and
 reporting mapping statistics in sequencing pipelines.
@@ -59,7 +57,7 @@ mapping_info.report("some_error_type");
 # Installation
 
 ```toml
-mapping_info = { git = "https://github.com/stela2502/mapping_info" }
+mapping_info = { git = "https://github.com/stela2502/lumrik" }
 ```
 
 ---

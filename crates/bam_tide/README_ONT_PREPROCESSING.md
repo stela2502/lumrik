@@ -220,7 +220,7 @@ If you use this tool, please cite via the repository:
 
 ```
 Lang, S. bam-ont-normalizer. GitHub.
-https://github.com/stela2502/bam_tide
+https://github.com/stela2502/lumrik/tree/main/crates/bam_tide
 ```
 
 ---

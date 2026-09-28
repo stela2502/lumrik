@@ -1,6 +1,6 @@
 use crate::cluster::MergeStep;
 use crate::data::SingleCellData;
-use crate::norn::BeaconBlock;
+use crate::norn::{BeaconBlock, ClonomapBlock};
 use crate::qc::QcMetrics;
 use crate::stats::{bh_adjust, mann_whitney};
 use anyhow::Result;
@@ -23,13 +23,14 @@ pub(crate) fn write_all(
     umap: &Array2<f32>,
     history: &[MergeStep],
     beacon: &[BeaconBlock],
+    clonomap: Option<&ClonomapBlock>,
     pseudo_groups: usize,
 ) -> Result<()> {
     fs::create_dir_all(out)?;
     fs::create_dir_all(out.join("normalized"))?;
     fs::create_dir_all(out.join("stats"))?;
     write_mex(&out.join("normalized"), norm)?;
-    write_cells(out, norm, qc, labels, initial, holdout, umap, beacon)?;
+    write_cells(out, norm, qc, labels, initial, holdout, umap, beacon, clonomap)?;
     write_clusters(out, labels, holdout)?;
     write_beacon_summary(out, labels, beacon)?;
     write_qc_summary(out, qc)?;
@@ -90,6 +91,7 @@ fn write_cells(
     h: &[bool],
     u: &Array2<f32>,
     beacon: &[BeaconBlock],
+    clonomap: Option<&ClonomapBlock>,
 ) -> Result<()> {
     let plasma = marker_score(d, &["Jchain", "Mzb1", "Sdc1", "Xbp1", "Prdm1"]);
     let b_cell = marker_score(d, &["Cd79a", "Cd79b", "Ms4a1", "Cd37", "H2-Aa"]);
@@ -104,6 +106,11 @@ fn write_cells(
             "\t{}_assignment\t{}_called_features\t{}_n_called\t{}_best_feature\t{}_best_log_odds",
             b.name, b.name, b.name, b.name, b.name
         )?;
+    }
+    if let Some(c) = clonomap {
+        for header in &c.headers {
+            write!(w, "\t{header}")?;
+        }
     }
     writeln!(w)?;
     for i in 0..d.n_cells() {
@@ -138,6 +145,11 @@ fn write_cells(
                 b.best_feature[i],
                 b.best_log_odds[i]
             )?;
+        }
+        if let Some(c) = clonomap {
+            for column in &c.columns {
+                write!(w, "\t{}", column[i])?;
+            }
         }
         writeln!(w)?;
     }

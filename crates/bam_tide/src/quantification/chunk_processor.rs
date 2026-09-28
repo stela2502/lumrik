@@ -1,6 +1,6 @@
 //chunk_processor.rs
 use anyhow::Result;
-use gtf_splice_index::{MatchClass, MatchOptions, SpliceIndex};
+use gtf_splice_index::{MatchClass, MatchOptions, QuantClass, SpliceIndex};
 use rayon::prelude::*;
 use scdata::cell_data::GeneUmiHash;
 use mapping_info::MappingInfo;
@@ -133,7 +133,15 @@ impl<'a> ChunkProcessor<'a> {
 
         let feature_umi = GeneUmiHash(hit.feature_id, job.umi);
         if let Some(class) = hit.hit.class.quant_class() {
-            out.try_insert(class.as_str(), &job.cell, feature_umi, 1.0, report);
+            let split_name = match class {
+                QuantClass::Exonic => QuantData::EXONIC,
+                QuantClass::Intronic => QuantData::INTRONIC,
+            };
+            out.try_insert(split_name, &job.cell, feature_umi, 1.0, report);
+            // Canonical expression contains every gene-associated molecule,
+            // independent of whether its evidence is exonic or intronic.
+            let mut exprs_report = MappingInfo::new(None, 0.0, 0);
+            out.try_insert(QuantData::EXPRS, &job.cell, feature_umi, 1.0, &mut exprs_report);
         }
     }
 

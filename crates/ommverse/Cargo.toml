@@ -19,3 +19,6 @@ int-to-prot = { path = "../int_to_prot" }
 lumrik-status = { path = "../lumrik-status" }
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+rust-htslib.workspace = true

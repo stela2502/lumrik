@@ -8,10 +8,10 @@ use sc_analysis::{AnalysisConfig, analyze_exon_matrix};
 #[command(
     name = "sc-analyse",
     version,
-    about = "Run Lumrik's basic single-cell analysis pipeline on a Norn result or exonic Matrix Market folder"
+    about = "Run Lumrik's basic single-cell analysis pipeline on a Norn result or expression Matrix Market folder"
 )]
 struct Cli {
-    /// Norn sample/result folder, Nelrune output folder, or exonic Matrix Market folder.
+    /// Norn sample/result folder, Nelrune output folder, or expression Matrix Market folder.
     #[arg(value_name = "INPUT")]
     matrix: PathBuf,
 

@@ -72,15 +72,15 @@ Add the crate and its ecosystem dependencies to your `Cargo.toml`.
 
 ```toml
 [dependencies]
-fast_tag_mapper = { git = "https://github.com/stela2502/fast_tag_mapper" }
-mapping_info = { git = "https://github.com/stela2502/mapping_info" }
-scdata = { git = "https://github.com/stela2502/scdata" }
+fast_tag_mapper = { git = "https://github.com/stela2502/lumrik" }
+mapping_info = { git = "https://github.com/stela2502/lumrik" }
+scdata = { git = "https://github.com/stela2502/lumrik" }
 ```
 
 Internally, `fast_tag_mapper` uses:
 
 ```toml
-stela_int_to_dna = { git = "https://github.com/stela2502/int_to_dna" }
+stela_int_to_dna = { git = "https://github.com/stela2502/lumrik" }
 ```
 
 The crate depends on `stela_int_to_dna` because the original `int_to_dna` package name was not available on crates.io.

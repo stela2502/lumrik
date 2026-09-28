@@ -219,11 +219,11 @@ fn integration_tiny_star_snp() {
     // 5. Full output stack exists
     // --------------------------------------------------------
 
-    let exonic = out.join("filtered/exonic");
-    let raw_exonic = out.join("raw/exonic");
+    let exonic = out.join("filtered/exonic_exprs");
+    let raw_exonic = out.join("raw/exonic_exprs");
 
-    let intronic = out.join("filtered/intronic");
-    let raw_intronic = out.join("raw/intronic");
+    let intronic = out.join("filtered/intronic_exprs");
+    let raw_intronic = out.join("raw/intronic_exprs");
 
     let snp_ref = out.join("filtered/ref");
     let raw_snp_ref = out.join("raw/ref");

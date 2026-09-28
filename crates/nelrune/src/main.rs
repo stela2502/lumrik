@@ -191,8 +191,9 @@ fn run(args: Cli) -> Result<()> {
     };
     let features = index.feature_index();
     let mut indexes: HashMap<String, &dyn scdata::FeatureIndex> = HashMap::new();
-    indexes.insert(QuantClass::Exonic.as_str().to_string(), &features);
-    indexes.insert(QuantClass::Intronic.as_str().to_string(), &features);
+    indexes.insert(QuantData::EXPRS.to_string(), &features);
+    indexes.insert(QuantData::EXONIC.to_string(), &features);
+    indexes.insert(QuantData::INTRONIC.to_string(), &features);
     if let Some(snp) = result.snp.as_ref() {
         indexes.insert(QuantData::SNP_REF.to_string(), &snp.index);
         indexes.insert(QuantData::SNP_ALT.to_string(), &snp.index);

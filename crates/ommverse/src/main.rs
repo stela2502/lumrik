@@ -9,7 +9,7 @@ use ommverse::{
     ProteinFeatureModel, TopologyEvaluation, TopologyState, ingest_interpro_many,
 };
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -34,8 +34,9 @@ enum Command {
         assembly: Option<String>,
         #[arg(long, default_value = ".ommverse-cache")]
         cache: PathBuf,
+        /// Output Ommverse index. Defaults to <cache>/<assembly>/<assembly>.ommverse in --assembly mode.
         #[arg(long)]
-        out: PathBuf,
+        out: Option<PathBuf>,
         #[arg(long)]
         debug_failed_mappings: bool,
         #[arg(long, default_value_t = 8787)]
@@ -69,6 +70,17 @@ enum Command {
         health_hostname: Option<String>,
         #[arg(long)]
         no_health_server: bool,
+    },
+    /// Query the biological reference model with the Ommverse query language.
+    Query {
+        #[arg(long)]
+        index: PathBuf,
+        query: String,
+    },
+    /// Inspect serialized core composition and external reference storage without changing either.
+    Inspect {
+        #[arg(long)]
+        index: PathBuf,
     },
     Protein {
         #[arg(long)]
@@ -166,6 +178,145 @@ enum Command {
         #[arg(long)]
         model: PathBuf,
     },
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.2} {} ({bytes} B)", UNITS[unit])
+    }
+}
+
+fn bincode_size<T: serde::Serialize>(value: &T) -> Result<u64> {
+    bincode::serialized_size(value).context("measuring standalone bincode size")
+}
+
+fn directory_bytes(path: &Path, exclude: Option<&Path>) -> Result<(u64, usize)> {
+    let mut bytes = 0u64;
+    let mut files = 0usize;
+    if !path.exists() {
+        return Ok((0, 0));
+    }
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            if exclude.is_some_and(|excluded| entry_path == excluded) {
+                continue;
+            }
+            let ty = entry.file_type()?;
+            if ty.is_dir() {
+                stack.push(entry_path);
+            } else if ty.is_file() {
+                bytes += entry.metadata()?.len();
+                files += 1;
+            }
+        }
+    }
+    Ok((bytes, files))
+}
+
+fn print_inspection(index: &Path, omm: &Ommverse, load_seconds: f64) -> Result<()> {
+    let index_bytes = std::fs::metadata(index)
+        .with_context(|| format!("reading metadata for {}", index.display()))?
+        .len();
+    println!("Ommverse inspect — {}", omm.assembly);
+    println!("  index:                     {}", index.display());
+    println!("  format version:            {}", ommverse::OMMVERSE_FORMAT_VERSION);
+    println!("  exact index bytes:         {}", human_bytes(index_bytes));
+    println!("  deserialize + rebuild:     {load_seconds:.3} s");
+
+    println!("\nIntegrated object counts (exact)");
+    println!("  splice genes:              {}", omm.splice.genes.len());
+    println!("  splice transcripts:        {}", omm.splice.transcripts.len());
+    println!("  proteins:                  {}", omm.proteins.len());
+    println!("  protein features:          {}", omm.proteins.iter().map(|p| p.features.len()).sum::<usize>());
+    println!("  InterPro entries:          {}", omm.interpro_entries.len());
+    println!("  chromatin elements:        {}", omm.chromatin.len());
+    println!("  binding-union regions:     {}", omm.protein_binding.regions.len());
+    println!("  source binding peaks:      {} (count only; raw peaks are not stored in v{})", omm.protein_binding.source_peak_count, ommverse::OMMVERSE_FORMAT_VERSION);
+    println!("  CTCF anchors:              {}", omm.ctcf.anchors.len());
+    println!("  CTCF domains:              {}", omm.ctcf.domains.len());
+    println!("  observed loop anchors:     {}", omm.experimental_loops.anchors.len());
+    println!("  observed loops:            {}", omm.experimental_loops.loops.len());
+
+    let sections = [
+        ("assembly", bincode_size(&omm.assembly)?),
+        ("source_root", bincode_size(&omm.source_root)?),
+        ("genome_twobit", bincode_size(&omm.genome_twobit)?),
+        ("splice", bincode_size(&omm.splice)?),
+        ("proteins", bincode_size(&omm.proteins)?),
+        ("report", bincode_size(&omm.report)?),
+        ("interpro_entries", bincode_size(&omm.interpro_entries)?),
+        ("chromatin", bincode_size(&omm.chromatin)?),
+        ("protein_binding", bincode_size(&omm.protein_binding)?),
+        ("ctcf", bincode_size(&omm.ctcf)?),
+        ("experimental_loops", bincode_size(&omm.experimental_loops)?),
+        ("sources", bincode_size(&omm.sources)?),
+    ];
+    let diagnostic_sum: u64 = sections.iter().map(|(_, bytes)| *bytes).sum();
+    println!("\nSerialized core diagnostics");
+    println!("  These are exact bincode sizes when each field is serialized standalone.");
+    println!("  They identify large payloads, but are not claimed as byte ranges within the file.");
+    for (name, bytes) in sections {
+        let pct = if index_bytes == 0 { 0.0 } else { 100.0 * bytes as f64 / index_bytes as f64 };
+        println!("  {name:<25} {:>24}  {:>6.2}% of index", human_bytes(bytes), pct);
+    }
+    println!("  diagnostic field sum:      {}", human_bytes(diagnostic_sum));
+    println!("  index framing/difference:  {} B", index_bytes as i128 - 8 - diagnostic_sum as i128);
+    println!("  note: index has an 8-byte Ommverse magic/version header before the bincode payload");
+
+    println!("\nCalculated owned payloads (not allocator/RAM measurements)");
+    let protein_string_bytes: usize = omm.proteins.iter().map(|p| {
+        p.accession.len() + p.entry_name.len() + p.name.len() + p.gene_symbol.len()
+            + p.aliases.iter().map(String::len).sum::<usize>()
+            + p.ensembl_gene.as_ref().map_or(0, String::len)
+            + p.ensembl_protein.as_ref().map_or(0, String::len)
+    }).sum();
+    let feature_string_bytes: usize = omm.proteins.iter().flat_map(|p| &p.features).map(|f| {
+        f.label.len() + f.description.len() + f.chromosome.len() + f.source_db.len()
+    }).sum();
+    println!("  protein UTF-8 contents:    {}", human_bytes(protein_string_bytes as u64));
+    println!("  feature UTF-8 contents:    {}", human_bytes(feature_string_bytes as u64));
+    println!("  protein transcript IDs:    {}", human_bytes((omm.proteins.iter().map(|p| p.transcript_ids.len()).sum::<usize>() * std::mem::size_of::<usize>()) as u64));
+    println!("  binding regions structs:   {}", human_bytes((omm.protein_binding.regions.len() * std::mem::size_of::<ommverse::ProteinBindingRegion>()) as u64));
+    println!("  CTCF anchor structs:       {}", human_bytes((omm.ctcf.anchors.len() * std::mem::size_of::<ommverse::CtcfAnchor>()) as u64));
+    println!("  CTCF domain structs:       {}", human_bytes((omm.ctcf.domains.len() * std::mem::size_of::<ommverse::CtcfDomain>()) as u64));
+    println!("  loop anchor structs:       {}", human_bytes((omm.experimental_loops.anchors.len() * std::mem::size_of::<ommverse::ExperimentalLoopAnchor>()) as u64));
+    println!("  loop structs:              {}", human_bytes((omm.experimental_loops.loops.len() * std::mem::size_of::<ommverse::ExperimentalLoop>()) as u64));
+
+    println!("\nExternal/source estate (exact filesystem bytes)");
+    println!("  source root:               {}", omm.source_root.display());
+    let index_canonical = std::fs::canonicalize(index).ok();
+    let (root_bytes, root_files) = directory_bytes(&omm.source_root, index_canonical.as_deref())?;
+    println!("  source tree excluding index: {} in {} files", human_bytes(root_bytes), root_files);
+    if let Some(manifest) = &omm.sources {
+        let mut manifest_total = 0u64;
+        for resource in &manifest.resources {
+            let Some(rel) = &resource.file else { continue; };
+            let path = omm.source_root.join(rel);
+            match std::fs::metadata(&path) {
+                Ok(meta) if meta.is_file() => {
+                    manifest_total += meta.len();
+                    println!("  {:<27} {:<12} {:>24}  {}", resource.kind, resource.source, human_bytes(meta.len()), rel.display());
+                }
+                _ => println!("  {:<27} {:<12} {:>24}  {}", resource.kind, resource.source, "missing", rel.display()),
+            }
+        }
+        println!("  manifest file total:       {}", human_bytes(manifest_total));
+    } else {
+        println!("  manifest:                  not embedded in this index");
+    }
+    Ok(())
 }
 
 fn percent(n: usize, d: usize) -> f64 {
@@ -357,13 +508,16 @@ impl InterProStatus {
                 .unwrap_or_default()
                 .as_millis(),
             finished_unix_ms: None,
-            stage: "streaming InterPro".to_owned(),
+            stage: "starting".to_owned(),
             public_url: None,
             indices,
             streamed: 0,
             records_per_second: 0.0,
             reports: Vec::new(),
         }
+    }
+    fn stage(&mut self, stage: &str) {
+        self.stage = stage.to_owned();
     }
     fn update(&mut self, streamed: usize, reports: &[InterProImportReport], elapsed: f64) {
         self.streamed = streamed;
@@ -520,8 +674,17 @@ fn main() -> Result<()> {
             let started_unix_ms = state.read().map(|s| s.started_unix_ms).unwrap_or_default();
             let update = |stage: &str, records: usize| {
                 if let Ok(mut s) = state.write() {
+                    if s.stage != stage {
+                        eprintln!("[ommverse] stage: {stage}");
+                    }
                     s.stage(stage, records);
                 }
+            };
+            let out = match (&reference, &assembly, out) {
+                (_, Some(assembly), None) => cache.join(assembly).join(format!("{assembly}.ommverse")),
+                (_, _, Some(out)) => out,
+                (Some(_), None, None) => anyhow::bail!("Build with --reference requires --out"),
+                (None, None, None) => anyhow::bail!("Build requires either --reference or --assembly"),
             };
             let model = match (reference, assembly) {
                 (Some(reference), None) => Ommverse::build_ucsc_with_debug_and_progress(
@@ -539,6 +702,7 @@ fn main() -> Result<()> {
                 s.model(&model);
                 s.stage("serializing Ommverse", model.protein_binding.regions.len());
             }
+            eprintln!("[ommverse] stage: serializing Ommverse");
             model.save(&out)?;
             let finished_unix_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -629,28 +793,7 @@ fn main() -> Result<()> {
                     .collect::<Result<Vec<_>>>()?
             };
 
-            // Fail before deserializing any Ommverse index or starting the status server.
-            validate_readable_file(&protein2ipr, "protein2ipr")?;
-            validate_readable_file(&entry_list, "entry list")?;
-            if let Some(tree) = &parent_child_tree {
-                validate_readable_file(tree, "parent/child tree")?;
-            }
-            for path in &inputs {
-                validate_readable_file(path, "Ommverse index")?;
-            }
-
-            println!("Ommverse InterPro import");
-            println!("  indices:                  {}", inputs.len());
-            println!("  protein2ipr:              {}", protein2ipr.display());
-            println!("  entry list:               {}", entry_list.display());
-            if let Some(tree) = &parent_child_tree {
-                println!("  parent/child tree:        {}", tree.display());
-            }
-            let mut ommverses = Vec::with_capacity(inputs.len());
-            for path in &inputs {
-                println!("  loading:                  {}", path.display());
-                ommverses.push(Ommverse::load(path)?);
-            }
+            // Start observability before any potentially expensive validation or model loading.
             let state = Arc::new(RwLock::new(InterProStatus::new(
                 inputs.iter().map(|p| p.display().to_string()).collect(),
             )));
@@ -672,6 +815,41 @@ fn main() -> Result<()> {
                 eprintln!("[ommverse] health server: {url}");
                 Some(server)
             };
+
+            if let Ok(mut s) = state.write() {
+                s.stage("validating inputs");
+            }
+            eprintln!("[ommverse] stage: validating inputs");
+            validate_readable_file(&protein2ipr, "protein2ipr")?;
+            validate_readable_file(&entry_list, "entry list")?;
+            if let Some(tree) = &parent_child_tree {
+                validate_readable_file(tree, "parent/child tree")?;
+            }
+            for path in &inputs {
+                validate_readable_file(path, "Ommverse index")?;
+            }
+
+            println!("Ommverse InterPro import");
+            println!("  indices:                  {}", inputs.len());
+            println!("  protein2ipr:              {}", protein2ipr.display());
+            println!("  entry list:               {}", entry_list.display());
+            if let Some(tree) = &parent_child_tree {
+                println!("  parent/child tree:        {}", tree.display());
+            }
+
+            if let Ok(mut s) = state.write() {
+                s.stage("loading existing Ommverse models");
+            }
+            eprintln!("[ommverse] stage: loading existing Ommverse models");
+            let mut ommverses = Vec::with_capacity(inputs.len());
+            for path in &inputs {
+                eprintln!("[ommverse] loading: {}", path.display());
+                ommverses.push(Ommverse::load(path)?);
+            }
+            if let Ok(mut s) = state.write() {
+                s.stage("streaming InterPro");
+            }
+            eprintln!("[ommverse] stage: streaming InterPro");
             let started = Instant::now();
             let reports = ingest_interpro_many(
                 &mut ommverses,
@@ -685,8 +863,9 @@ fn main() -> Result<()> {
                 },
             )?;
             if let Ok(mut s) = state.write() {
-                s.stage = "saving enriched indices".to_owned();
+                s.stage("saving enriched indices");
             }
+            eprintln!("[ommverse] stage: saving enriched indices");
             for ((omm, output), report) in ommverses.iter().zip(&outputs).zip(&reports) {
                 omm.save(output)?;
                 println!("  {}", omm.assembly);
@@ -701,6 +880,19 @@ fn main() -> Result<()> {
             if let Ok(mut s) = state.write() {
                 s.finish();
             }
+        }
+        Command::Query { index, query } => {
+            let omm = Ommverse::load(index)?;
+            let query = ommverse::query::Query::parse(&query)?;
+            for row in ommverse::query::execute(&omm, &query)? {
+                println!("{row}");
+            }
+        }
+        Command::Inspect { index } => {
+            let started = Instant::now();
+            let omm = Ommverse::load(&index)?;
+            let load_seconds = started.elapsed().as_secs_f64();
+            print_inspection(&index, &omm, load_seconds)?;
         }
         Command::Protein {
             index,

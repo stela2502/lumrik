@@ -37,6 +37,7 @@ struct UnmappedReadCandidate {
     id: EvidenceId,
     bases: Vec<u8>,
     qualities: Vec<u8>,
+    umi: Option<Vec<u8>>,
     is_last_in_template: bool,
     is_secondary: bool,
     is_supplementary: bool,
@@ -235,6 +236,7 @@ impl UnmappedIghSeeds {
             BamFeatureEvidence {
                 id: candidate.id,
                 sequence: sequence_parts,
+                umi: candidate.umi,
                 mappings,
                 intronic_constant_segments: Vec::new(),
             },
@@ -282,6 +284,13 @@ pub struct ChainKneeSelection {
     pub threshold_records: usize,
     pub evidence_cells: usize,
     pub selected_cells: usize,
+}
+
+fn bam_umi(record: &bam::Record) -> Option<Vec<u8>> {
+    match record.aux(b"UB").ok()? {
+        Aux::String(umi) if !umi.is_empty() => Some(umi.as_bytes().to_vec()),
+        _ => None,
+    }
 }
 
 pub trait BamIdentityResolver {
@@ -621,6 +630,7 @@ impl VdjRunner {
                     id,
                     bases: rec.seq().as_bytes(),
                     qualities: rec.qual().to_vec(),
+                    umi: bam_umi(&rec),
                     is_last_in_template: rec.is_last_in_template(),
                     is_secondary: rec.is_secondary(),
                     is_supplementary: rec.is_supplementary(),
@@ -699,6 +709,7 @@ impl VdjRunner {
                 BamFeatureEvidence {
                     id,
                     sequence,
+                    umi: bam_umi(&rec),
                     mappings,
                     intronic_constant_segments,
                 },
@@ -1038,6 +1049,7 @@ mod knee_tests {
         let candidate = |bases: Vec<u8>| UnmappedReadCandidate {
             cell_id: 7,
             id: EvidenceId { flush: 0, entry: 1 },
+            umi: None,
             qualities: vec![30; bases.len()],
             bases,
             is_last_in_template: false,

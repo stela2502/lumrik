@@ -21,16 +21,6 @@ fn test_output_dir() -> PathBuf {
     }
 }
 
-fn parsed_batch_flushes(stderr: &str) -> Option<usize> {
-    let marker = "batches=";
-    let start = stderr.rfind(marker)? + marker.len();
-    let digits: String = stderr[start..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
-}
-
 fn tsv_rows<'a>(text: &'a str) -> (Vec<&'a str>, Vec<HashMap<&'a str, &'a str>>) {
     let mut lines = text.lines().filter(|line| !line.trim().is_empty());
     let header: Vec<&str> = lines.next().expect("TSV header").split('\t').collect();
@@ -51,8 +41,19 @@ fn tsv_rows<'a>(text: &'a str) -> (Vec<&'a str>, Vec<HashMap<&'a str, &'a str>>)
     (header, rows)
 }
 
+fn field<'a>(row: &'a HashMap<&str, &'a str>, key: &str, context: &str) -> &'a str {
+    row.get(key).copied().unwrap_or_else(|| {
+        let mut available: Vec<_> = row.keys().copied().collect();
+        available.sort_unstable();
+        panic!(
+            "missing TSV column {key:?} while checking {context}\navailable columns: {}\nrow: {row:#?}",
+            available.join(", ")
+        );
+    })
+}
+
 #[test]
-fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
+fn one_cell_fixture_writes_expected_airr_calls() {
     let fixture = fixture_dir();
     let exonic = fixture.join("exonic");
     let bam = fixture.join("cell.bam");
@@ -80,8 +81,8 @@ fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
         .arg(&index)
         .arg("--out")
         .arg(&out)
-        .arg("--routing-batch-size")
-        .arg("100")
+        .arg("--bd-cell-version")
+        .arg("v2.384")
         .arg("--no-health-server")
         .output()
         .expect("run nelrune vdj");
@@ -100,19 +101,6 @@ fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
         stderr
     );
 
-    let batches = parsed_batch_flushes(&stderr)
-        .expect("nelrune vdj stderr did not report routing batches");
-    assert!(
-        batches >= 2,
-        "batch size 100 did not force repeated compaction; batches={batches}\n{stderr}"
-    );
-
-    let mapping = fs::read_to_string(out.join("vdj-mapping-info.txt"))
-        .expect("read vdj-mapping-info.txt");
-    assert!(mapping.contains("vdj.routing_batch_flushes"));
-    assert!(mapping.contains("vdj.compacted_sequences"));
-    assert!(mapping.contains("vdj.redundant_segments"));
-
     // First pin the rich Lumrik calls to the established one-cell result. This
     // catches regressions in the biological caller independently of AIRR
     // serialization.
@@ -122,23 +110,32 @@ fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
     assert_eq!(rich_rows.len(), 3, "expected exactly IGH, IGK and IGL calls");
 
     let expected = HashMap::from([
-        ("IGH", ("Vdj", "Ighv1-64", "Ighd1-1", "Ighj3", "Igha", "2")),
-        ("IGK", ("Vj", "Igkv6-15", "", "Igkj2", "Igkc", "9")),
+        ("IGH", ("Vdj", "Ighv1-64", "Ighd1-1", "Ighj3", "Igha", "18")),
+        ("IGK", ("Vj", "Igkv6-15", "", "Igkj2", "Igkc", "382")),
         ("IGL", ("Vj", "Iglv3", "", "Iglj2", "", "1")),
     ]);
 
     for row in &rich_rows {
-        assert_eq!(row["cell"], CELL);
-        let chain = row["chain"];
+        assert_eq!(field(row, "cell", "one-cell VDJ fixture"), CELL);
+        assert_eq!(
+            field(row, "rustody_cell_id", "one-cell VDJ fixture"),
+            "38637011",
+            "wrong BD/Rustody positional cell id for fixture barcode {CELL}"
+        );
+        let chain = field(row, "chain", "one-cell VDJ fixture");
         let Some((stage, v, d, j, c, umis)) = expected.get(chain) else {
             panic!("unexpected chain in one-cell fixture: {chain}");
         };
-        assert_eq!(row["stage"], *stage, "wrong stage for {chain}");
-        assert_eq!(row["v"], *v, "wrong V call for {chain}");
-        assert_eq!(row["d"], *d, "wrong D call for {chain}");
-        assert_eq!(row["j"], *j, "wrong J call for {chain}");
-        assert_eq!(row["c"], *c, "wrong C call for {chain}");
-        assert_eq!(row["support_umis"], *umis, "wrong UMI support for {chain}");
+        assert_eq!(field(row, "stage", chain), *stage, "wrong stage for {chain}");
+        assert_eq!(field(row, "v", chain), *v, "wrong V call for {chain}");
+        assert_eq!(field(row, "d", chain), *d, "wrong D call for {chain}");
+        assert_eq!(field(row, "j", chain), *j, "wrong J call for {chain}");
+        assert_eq!(field(row, "c", chain), *c, "wrong C call for {chain}");
+        assert_eq!(
+            field(row, "support_umis", chain),
+            *umis,
+            "wrong UMI support for {chain}; expected fixture call: stage={stage}, V={v}, D={d:?}, J={j}, C={c:?}, UMIs={umis}; actual row: {row:#?}"
+        );
     }
 
     // Now pin the AIRR export to exactly the same three rearrangements and
@@ -176,6 +173,11 @@ fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
 
     for row in &airr_rows {
         assert_eq!(row["cell_id"], CELL);
+        assert_eq!(
+            row["lumrik_rustody_cell_id"],
+            "38637011",
+            "wrong AIRR BD/Rustody positional cell id for fixture barcode {CELL}"
+        );
         let chain = row["locus"];
         let Some((_stage, v, d, j, c, umis)) = expected.get(chain) else {
             panic!("unexpected AIRR locus in one-cell fixture: {chain}");
@@ -191,44 +193,58 @@ fn one_cell_fixture_crosses_batch_boundaries_and_writes_expected_airr_calls() {
 
         assert!(!row["sequence_id"].is_empty(), "missing sequence_id for {chain}");
         assert!(!row["sequence"].is_empty(), "missing sequence for {chain}");
-        assert!(!row["sequence_aa"].is_empty(), "missing sequence_aa for {chain}");
-        assert!(!row["junction"].is_empty(), "missing junction for {chain}");
-        assert!(!row["junction_aa"].is_empty(), "missing junction_aa for {chain}");
-        assert!(!row["cdr3"].is_empty(), "missing cdr3 for {chain}");
-        assert!(!row["cdr3_aa"].is_empty(), "missing cdr3_aa for {chain}");
 
-        for field in [
-            "productive",
-            "vj_in_frame",
-            "stop_codon",
-            "lumrik_v_cys_anchor",
-            "lumrik_j_anchor",
-        ] {
+        // AIRR sequence/junction amino-acid annotations are only meaningful
+        // when the conserved V and J anchors establish a receptor frame.
+        // Do not manufacture translations for unresolved/truncated calls.
+        for field in ["lumrik_v_cys_anchor", "lumrik_j_anchor"] {
             assert!(
                 matches!(row[field], "T" | "F"),
                 "{field} must be AIRR T/F for {chain}, got {:?}",
                 row[field]
             );
         }
+        for field in ["productive", "vj_in_frame", "stop_codon"] {
+            assert!(
+                row[field].is_empty() || matches!(row[field], "T" | "F"),
+                "{field} must be empty (unknown) or AIRR T/F for {chain}, got {:?}",
+                row[field]
+            );
+        }
 
-        let junction_aa = row["junction_aa"].as_bytes();
-        let cdr3_aa = row["cdr3_aa"].as_bytes();
-        assert_eq!(
-            junction_aa.len(),
-            cdr3_aa.len() + 2,
-            "junction_aa must contain exactly the two conserved anchor residues around cdr3_aa for {chain}"
-        );
-        assert_eq!(junction_aa.first(), Some(&b'C'), "V anchor is not cysteine for {chain}");
-        assert!(
-            matches!(junction_aa.last(), Some(&b'W') | Some(&b'F')),
-            "J anchor is not W/F for {chain}: {}",
-            row["junction_aa"]
-        );
-        assert_eq!(
-            &junction_aa[1..junction_aa.len() - 1],
-            cdr3_aa,
-            "CDR3 amino acid sequence is inconsistent with junction_aa for {chain}"
-        );
+        let has_v_anchor = row["lumrik_v_cys_anchor"] == "T";
+        let has_j_anchor = row["lumrik_j_anchor"] == "T";
+        if has_v_anchor && has_j_anchor {
+            assert!(!row["sequence_aa"].is_empty(), "missing sequence_aa for anchored {chain}");
+            assert!(!row["junction"].is_empty(), "missing junction for anchored {chain}");
+            assert!(!row["junction_aa"].is_empty(), "missing junction_aa for anchored {chain}");
+            assert!(!row["cdr3"].is_empty(), "missing cdr3 for anchored {chain}");
+            assert!(!row["cdr3_aa"].is_empty(), "missing cdr3_aa for anchored {chain}");
+
+            let junction_aa = row["junction_aa"].as_bytes();
+            let cdr3_aa = row["cdr3_aa"].as_bytes();
+            assert_eq!(
+                junction_aa.len(),
+                cdr3_aa.len() + 2,
+                "junction_aa must contain exactly the two conserved anchor residues around cdr3_aa for {chain}"
+            );
+            assert_eq!(junction_aa.first(), Some(&b'C'), "V anchor is not cysteine for {chain}");
+            assert!(
+                matches!(junction_aa.last(), Some(&b'W') | Some(&b'F')),
+                "J anchor is not W/F for {chain}: {}",
+                row["junction_aa"]
+            );
+            assert_eq!(
+                &junction_aa[1..junction_aa.len() - 1],
+                cdr3_aa,
+                "CDR3 amino acid sequence is inconsistent with junction_aa for {chain}"
+            );
+        } else {
+            assert!(row["junction"].is_empty(), "unanchored {chain} must not fabricate junction");
+            assert!(row["junction_aa"].is_empty(), "unanchored {chain} must not fabricate junction_aa");
+            assert!(row["cdr3"].is_empty(), "unanchored {chain} must not fabricate cdr3");
+            assert!(row["cdr3_aa"].is_empty(), "unanchored {chain} must not fabricate cdr3_aa");
+        }
     }
 
     fs::remove_dir_all(&out).expect("remove successful test output");

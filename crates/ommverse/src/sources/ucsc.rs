@@ -52,7 +52,7 @@ fn hrefs(index: &str) -> impl Iterator<Item = &str> {
         .filter_map(|s| s.split('"').next())
 }
 
-pub fn fetch(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
+pub fn fetch_from_base(assembly: &str, cache_root: &Path, base_url: &str) -> Result<PathBuf> {
     let root = cache_root.join(assembly);
     let genome_dir = root.join("Genome");
     let genes_dir = root.join("Genes");
@@ -61,7 +61,7 @@ pub fn fetch(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&genes_dir)?;
     std::fs::create_dir_all(&protein_dir)?;
 
-    let bigzips = format!("{BASE_URL}/goldenPath/{assembly}/bigZips");
+    let bigzips = format!("{base_url}/goldenPath/{assembly}/bigZips");
     let latest = format!("{bigzips}/latest");
     for (name, required) in [
         (format!("{assembly}.2bit"), true),
@@ -96,7 +96,7 @@ pub fn fetch(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
         bail!("no supported UCSC GTF annotation available for {assembly} under {genes}");
     }
 
-    let uniprot_root = format!("{BASE_URL}/goldenPath/archive/{assembly}/uniprot");
+    let uniprot_root = format!("{base_url}/goldenPath/archive/{assembly}/uniprot");
     let index = output(&format!("{uniprot_root}/"))?;
     let mut releases: Vec<_> = hrefs(&index)
         .filter_map(|h| h.strip_suffix('/'))
@@ -144,4 +144,9 @@ pub fn fetch(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
     }
 
     Ok(root)
+}
+
+#[allow(dead_code)]
+pub fn fetch(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
+    fetch_from_base(assembly, cache_root, BASE_URL)
 }

@@ -236,6 +236,8 @@ pub struct Recombination {
     pub cdr3: Vec<u8>,
     pub cdr3_aa: Vec<u8>,
     pub supporting_features: u32,
+    /// Independent corrected molecule barcodes supporting this receptor.
+    pub supporting_umis: u32,
     pub receptor_linkage: ReceptorLinkageSupport,
     pub stable_id: RecombinationId,
 }
@@ -374,6 +376,7 @@ fn identify_summary(
         cdr3: productivity.cdr3.clone(),
         cdr3_aa: productivity.cdr3_aa.clone(),
         supporting_features: assembled.support_features,
+        supporting_umis: assembled.supporting_umis.len().try_into().unwrap_or(u32::MAX),
         receptor_linkage: ReceptorLinkageSupport::default(),
         stable_id: RecombinationId::placeholder(chain),
     };

@@ -12,7 +12,7 @@ use clap::Parser;
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use gtf_splice_index::{QuantClass, SpliceIndex};
+use gtf_splice_index::SpliceIndex;
 use lumrik_status::{public_hostname, spawn_status_server};
 use nelrune::progress::RunProgress;
 use sc_primer::{BdCellVersion, Chemistry, PrimerCli, RhapsodyWhitelist};
@@ -35,10 +35,6 @@ pub struct QuantCli {
     /// When omitted, sc-beacon barcode-rank cell calling is used.
     #[arg(long)]
     min_umi_count: Option<usize>,
-    /// Include intronic GEX molecules in the canonical expression matrix and cell calling.
-    /// The separate intronic matrix is still retained for QC/auditing.
-    #[arg(long, default_value_t = false)]
-    include_intronic: bool,
     #[arg(long, default_value_t = 8787)]
     health_port: u16,
     #[arg(long)]
@@ -98,13 +94,6 @@ pub fn run() -> Result<()> {
     let mut data = result.data;
     let report = result.report;
 
-    if args.include_intronic {
-        // Merge at (cell, feature, UMI) level, so a molecule represented in both layers
-        // remains one molecule. Keep `intron` untouched as an auditable evidence layer.
-        data.merge_named(QuantData::EXONIC, QuantData::INTRONIC);
-        progress.stage("including intronic GEX evidence in canonical expression");
-    }
-
     progress.stage("loading output feature index");
     progress.update_memory();
     let index = SpliceIndex::load(&args.bam_collector.index)?
@@ -113,8 +102,8 @@ pub fn run() -> Result<()> {
     // IMPORTANT OUTPUT CONTRACT:
     //
     // Quantification must preserve BOTH views of the GEX evidence:
-    //   <outpath>/raw/{exonic,intronic,...}       all observed barcodes (>=1 UMI)
-    //   <outpath>/filtered/{exonic,intronic,...}  canonical called cells only
+    //   <outpath>/raw/{exprs,exonic_exprs,intronic_exprs,...}       all observed barcodes (>=1 UMI)
+    //   <outpath>/filtered/{exprs,exonic_exprs,intronic_exprs,...}  canonical called cells only
     //
     // The raw matrices are not disposable debug output. They are required
     // for auditing cell calling and recovering evidence when a caller is too
@@ -142,8 +131,9 @@ pub fn run() -> Result<()> {
     progress.update_memory();
     let features = index.feature_index();
     let mut indexes: HashMap<String, &dyn scdata::FeatureIndex> = HashMap::new();
-    indexes.insert(QuantClass::Exonic.as_str().to_string(), &features);
-    indexes.insert(QuantClass::Intronic.as_str().to_string(), &features);
+    indexes.insert(QuantData::EXPRS.to_string(), &features);
+    indexes.insert(QuantData::EXONIC.to_string(), &features);
+    indexes.insert(QuantData::INTRONIC.to_string(), &features);
     if let Some(snp) = result.snp.as_ref() {
         indexes.insert(QuantData::SNP_REF.to_string(), &snp.index);
         indexes.insert(QuantData::SNP_ALT.to_string(), &snp.index);
@@ -180,10 +170,12 @@ pub fn run() -> Result<()> {
     progress.update_memory();
     if let Some(whitelist) = rhapsody_whitelist(&args.primer.chemistry) {
         for dir in [
-            args.outpath.join("filtered/exonic"),
-            args.outpath.join("filtered/intronic"),
-            args.outpath.join("raw/exonic"),
-            args.outpath.join("raw/intronic"),
+            args.outpath.join("filtered/exprs"),
+            args.outpath.join("filtered/exonic_exprs"),
+            args.outpath.join("filtered/intronic_exprs"),
+            args.outpath.join("raw/exprs"),
+            args.outpath.join("raw/exonic_exprs"),
+            args.outpath.join("raw/intronic_exprs"),
         ] {
             write_numeric_barcodes(&dir, &whitelist)?;
         }
@@ -309,13 +301,13 @@ impl MatrixFeatureCounts {
     fn from_output(outpath: &Path) -> Result<Self> {
         Ok(Self {
             raw_exonic: count_gzip_lines(
-                &outpath.join("raw/exonic/features.tsv.gz"),
+                &outpath.join("raw/exonic_exprs/features.tsv.gz"),
             )?,
-            filtered_exonic: count_gzip_lines(&outpath.join("filtered/exonic/features.tsv.gz"))?,
+            filtered_exonic: count_gzip_lines(&outpath.join("filtered/exonic_exprs/features.tsv.gz"))?,
             raw_intronic: count_gzip_lines(
-                &outpath.join("raw/intronic/features.tsv.gz"),
+                &outpath.join("raw/intronic_exprs/features.tsv.gz"),
             )?,
-            filtered_intronic: count_gzip_lines(&outpath.join("filtered/intronic/features.tsv.gz"))?,
+            filtered_intronic: count_gzip_lines(&outpath.join("filtered/intronic_exprs/features.tsv.gz"))?,
         })
     }
 }

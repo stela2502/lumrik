@@ -28,8 +28,6 @@ Use the normalizer and collector APIs when embedding BAM/FASTQ processing in ano
 
 ## Detailed documentation
 
-[![Rust](https://github.com/stela2502/bam_tide/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/bam_tide/actions/workflows/rust.yml)
-
 # bam_tide
 
 `bam_tide` is a collection of high-performance genomics and single-cell analysis tools written in Rust.

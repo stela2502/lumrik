@@ -138,8 +138,7 @@ Lumrik is a workspace, not a single monolithic implementation. The crate READMEs
 | [`scdata`](crates/scdata/README.md) | Sparse UMI-aware single-cell count accumulation and export |
 | [`sc-beacon`](crates/sc-beacon/README.md) | Ambient-aware cellular feature/guide calling |
 | [`sc-vdj`](crates/sc-vdj/README.md) | V(D)J indexing, receptor reconstruction and AIRR-compatible output |
-| [`valkyrn`](crates/valkyrn/README.md) | Repertoire interpretation, structural clone analysis and structure prioritization |
-| [`clonomap`](crates/clonomap/README.md) | Mutation-aware PCA/MST geometry and plots for large receptor clones |
+| [`clonomap_family`](crates/clonomap_family/README.md) | Mutation-aware receptor-family modelling and clone analysis |
 | [`sc-te`](crates/sc-te/README.md) | Single-cell transposable-element analysis and multimapper resolution |
 | [`read-tag-table`](crates/read-tag-table/README.md) | External read/cell/UMI tag tables |
 | [`mapping_info`](crates/mapping_info/README.md) | Shared counters, timings and reports |

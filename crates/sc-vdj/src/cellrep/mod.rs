@@ -70,6 +70,9 @@ pub struct MapperEvidence {
 pub struct BamFeatureEvidence {
     pub id: EvidenceId,
     pub sequence: BamFeatureSequenceParts,
+    /// Corrected molecule barcode (BAM UB tag), retained so receptor support can
+    /// be reported as independent UMIs rather than amplified/read-level evidence.
+    pub umi: Option<Vec<u8>>,
     pub mappings: Vec<MapperEvidence>,
     /// Constant-gene spans covered outside annotated exons. These are retained
     /// only as compact intronic-state evidence and never seed reconstruction.

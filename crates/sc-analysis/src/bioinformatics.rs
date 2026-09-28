@@ -3,7 +3,7 @@ use crate::data::{CellAnnotations, SingleCellData};
 use crate::embedding::umap_2d;
 use crate::mex::load_mex;
 use crate::normalize::normalize_surviving;
-use crate::norn::{load_beacon_blocks, resolve_exonic};
+use crate::norn::{load_beacon_blocks, load_clonomap, resolve_exonic};
 use crate::partition::spatial_patches;
 use crate::pca::pca;
 use crate::qc::qc;
@@ -264,6 +264,10 @@ pub fn analyze_exon_matrix(
     let started = Instant::now();
     let beacon = load_beacon_blocks(&exonic, &norm.cells)?;
     finish_stage(&mut timings, "Beacon integration", started);
+    eprintln!("Starting ClonoMap integration...");
+    let started = Instant::now();
+    let clonomap = load_clonomap(path.as_ref(), &norm.cells)?;
+    finish_stage(&mut timings, "ClonoMap integration", started);
     eprintln!("Starting pseudo-deep holdout...");
     let started = Instant::now();
     let mut by = HashMap::<usize, Vec<usize>>::new();
@@ -296,6 +300,7 @@ pub fn analyze_exon_matrix(
         &viz,
         &history,
         &beacon,
+        clonomap.as_ref(),
         config.pseudo_samples,
     )?;
     finish_stage(&mut timings, "output writing", started);
@@ -313,8 +318,7 @@ pub fn analyze_exon_matrix(
     )?;
     finish_stage(&mut timings, "plot generation", started);
 
-    let annotations = CellAnnotations::from_columns(
-        vec![
+    let mut annotation_columns = vec![
             ("cell", norm.cells.clone()),
             (
                 "cluster",
@@ -386,9 +390,13 @@ pub fn analyze_exon_matrix(
                     })
                     .collect(),
             ),
-        ],
-        n_cells,
-    )?;
+        ];
+    if let Some(c) = &clonomap {
+        for (header, values) in c.headers.iter().zip(&c.columns) {
+            annotation_columns.push((header.as_str(), values.clone()));
+        }
+    }
+    let annotations = CellAnnotations::from_columns(annotation_columns, n_cells)?;
     let data = SingleCellData::new(norm.matrix, norm.features, norm.cells, annotations)?;
     Ok((
         data,

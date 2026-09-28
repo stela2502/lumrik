@@ -16,7 +16,6 @@ Build a `SpliceIndex` from GTF/GFF and query it with `SplicedRead` objects; the 
 
 ## Detailed documentation
 
-[![Rust](https://github.com/stela2502/gtf_splice_index/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/gtf_splice_index/actions/workflows/rust.yml)
 
 
 A flexible, streaming **GTF/GFF3 parser** plus a **splice-aware transcript index**
@@ -39,14 +38,14 @@ You can add `gtf_splice_index` directly from GitHub.
 ### Using `cargo add` (recommended)
 
 ```bash
-cargo add gtf_splice_index --git https://github.com/stela2502/gtf_splice_index
+cargo add gtf_splice_index --git https://github.com/stela2502/lumrik
 ```
 
 This will add an entry like this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-gtf_splice_index = { git = "https://github.com/stela2502/gtf_splice_index" }
+gtf_splice_index = { git = "https://github.com/stela2502/lumrik" }
 ```
 
 ---
@@ -59,14 +58,14 @@ For reproducibility, you may want to pin a commit or branch.
 
 ```toml
 [dependencies]
-gtf_splice_index = { git = "https://github.com/stela2502/gtf_splice_index", rev = "COMMIT_HASH" }
+gtf_splice_index = { git = "https://github.com/stela2502/lumrik", rev = "COMMIT_HASH" }
 ```
 
 **Specific branch:**
 
 ```toml
 [dependencies]
-gtf_splice_index = { git = "https://github.com/stela2502/gtf_splice_index", branch = "main" }
+gtf_splice_index = { git = "https://github.com/stela2502/lumrik", branch = "main" }
 ```
 
 ---

@@ -48,14 +48,14 @@ Add the crate directly from GitHub:
 
 ```toml
 [dependencies]
-onehot_dna = { git = "https://github.com/stela2502/onehot_dna" }
+onehot_dna = { git = "https://github.com/stela2502/lumrik" }
 ```
 
 Or, for a fixed revision:
 
 ```toml
 [dependencies]
-onehot_dna = { git = "https://github.com/stela2502/onehot_dna", rev = "<commit>" }
+onehot_dna = { git = "https://github.com/stela2502/lumrik", rev = "<commit>" }
 ```
 
 Then import the types you need:

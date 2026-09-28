@@ -16,7 +16,6 @@ Build an `SnpIndex`, convert alignments to `AlignedRead`, optionally refine agai
 
 ## Detailed documentation
 
-[![Rust](https://github.com/stela2502/snp-index/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/snp-index/actions/workflows/rust.yml)
 
 # snp-index
 

@@ -217,7 +217,7 @@ the inferred biological result is still changing
 
 ## Sparse data representation
 
-`sc_beacon` uses [`scdata`](https://github.com/stela2502/scdata) for its cell-major sparse representation.
+`sc_beacon` uses [`scdata`](https://github.com/stela2502/lumrik/tree/main/crates/scdata) for its cell-major sparse representation.
 
 During MatrixMarket import, a complementary guide-major representation is constructed:
 
@@ -241,8 +241,8 @@ Only the requested guide features are retained.
 Clone the repository and build the release binary:
 
 ```bash
-git clone https://github.com/stela2502/sc_beacon.git
-cd sc_beacon
+git clone https://github.com/stela2502/lumrik.git
+cd lumrik
 
 cargo build --release
 ```
@@ -378,7 +378,7 @@ cells_2_guides              5
 called_guides_total      3,909
 ```
 
-These statistics are generated using [`mapping_info`](https://github.com/stela2502/mapping_info).
+These statistics are generated using [`mapping_info`](https://github.com/stela2502/lumrik/tree/main/crates/mapping_info).
 
 ## Why use the raw matrix?
 
@@ -439,8 +439,8 @@ Results should therefore be validated carefully before using the software as the
 
 Related projects:
 
-- [`scdata`](https://github.com/stela2502/scdata) — sparse single-cell data structures
-- [`mapping_info`](https://github.com/stela2502/mapping_info) — analysis and processing statistics
+- [`scdata`](https://github.com/stela2502/lumrik/tree/main/crates/scdata) — sparse single-cell data structures
+- [`mapping_info`](https://github.com/stela2502/lumrik/tree/main/crates/mapping_info) — analysis and processing statistics
 
 ## License
 

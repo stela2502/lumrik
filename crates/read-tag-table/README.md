@@ -50,7 +50,7 @@ read-tag-table = "0.1"
 
 ```toml
 [dependencies]
-read-tag-table = { git = "https://github.com/stela2502/read-tag-table.git" }
+read-tag-table = { git = "https://github.com/stela2502/lumrik" }
 ```
 
 ---

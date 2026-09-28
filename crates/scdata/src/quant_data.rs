@@ -65,11 +65,13 @@ impl Default for QuantData {
 }
 
 impl QuantData {
-    pub const EXONIC: &'static str = "exonic";
-    pub const INTRONIC: &'static str = "intronic";
+    pub const EXPRS: &'static str = "exprs";
+    pub const EXONIC: &'static str = "exonic_exprs";
+    pub const INTRONIC: &'static str = "intronic_exprs";
     pub const SNP_REF: &'static str = "ref";
     pub const SNP_ALT: &'static str = "alt";
     pub const STANDARD_DATASETS: &'static [&'static str] = &[
+        Self::EXPRS,
         Self::EXONIC,
         Self::INTRONIC,
         Self::SNP_REF,

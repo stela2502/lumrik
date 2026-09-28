@@ -22,10 +22,10 @@ impl ReportWriter {
         fs::create_dir_all(dir)?;
 
         let mut calls = writer(dir.join("vdj_calls.tsv"))?;
-        writeln!(calls, "cell\trustody_cell_id\trecombination_id\tchain\tstage\tv\td\tj\tc\tproductivity_status\tsupport_features\treceptor_rediscovery_reads\tjunction_support_reads\tjunction_spanning_reads\tjunction_conflicting_reads\tjunction_refined_bases\tconstant_link_fragments\tconstant_spanning_reads\tconstant_link_call\tv_del_3\tp_v3_len\tp_v3\tn1_len\tn1\tp_d5_len\tp_d5\td_del_5\td_retained_len\td_retained\td_del_3\tp_d3_len\tp_d3\tn2_len\tn2\tp_j5_len\tp_j5\tj_del_5\tpn_alternative\tobserved_rearrangement\tnaive_recombination\tobserved_receptor_sequence")?;
+        writeln!(calls, "cell\trustody_cell_id\trecombination_id\tchain\tstage\tv\td\tj\tc\tproductivity_status\tsupport_umis\tsupport_features\treceptor_rediscovery_reads\tjunction_support_reads\tjunction_spanning_reads\tjunction_conflicting_reads\tjunction_refined_bases\tconstant_link_fragments\tconstant_spanning_reads\tconstant_link_call\tv_del_3\tp_v3_len\tp_v3\tn1_len\tn1\tp_d5_len\tp_d5\td_del_5\td_retained_len\td_retained\td_del_3\tp_d3_len\tp_d3\tn2_len\tn2\tp_j5_len\tp_j5\tj_del_5\tpn_alternative\tobserved_rearrangement\tnaive_recombination\tobserved_receptor_sequence")?;
 
         let mut airr = writer(dir.join("airr_rearrangements.tsv"))?;
-        writeln!(airr, "sequence_id\tsequence\tproductive\tvj_in_frame\tstop_codon\tcomplete_vdj\tlocus\tv_call\td_call\tj_call\tc_call\tjunction\tjunction_aa\tcdr3\tcdr3_aa\tnp1\tnp2\tnp1_length\tnp2_length\tcell_id\tlumrik_rustody_cell_id\tlumrik_productivity_status\tlumrik_recombination_id\tlumrik_supporting_features\tlumrik_receptor_rediscovery_reads\tlumrik_junction_support_reads\tlumrik_junction_spanning_reads\tlumrik_junction_conflicting_reads\tlumrik_junction_refined_bases\tlumrik_constant_link_fragments\tlumrik_constant_spanning_reads\tlumrik_constant_link_call")?;
+        writeln!(airr, "sequence_id\tsequence\tsequence_aa\tproductive\tvj_in_frame\tstop_codon\tcomplete_vdj\tlocus\tv_call\td_call\tj_call\tc_call\tjunction\tjunction_aa\tcdr3\tcdr3_aa\tnp1\tnp2\tnp1_length\tnp2_length\tcell_id\tlumrik_rustody_cell_id\tlumrik_productivity_status\tlumrik_recombination_id\tlumrik_supporting_umis\tlumrik_supporting_features\tlumrik_receptor_rediscovery_reads\tlumrik_junction_support_reads\tlumrik_junction_spanning_reads\tlumrik_junction_conflicting_reads\tlumrik_junction_refined_bases\tlumrik_constant_link_fragments\tlumrik_constant_spanning_reads\tlumrik_constant_link_call\tlumrik_v_cys_anchor\tlumrik_j_anchor")?;
 
         let mut receptors = writer(dir.join("vdj_receptors.tsv"))?;
         writeln!(receptors, "cell\theavy_recombination_id\tlight_recombination_id\theavy_chain\theavy_v\theavy_d\theavy_j\theavy_c\theavy_support_features\theavy_receptor_rediscovery_reads\theavy_constant_link_fragments\theavy_constant_spanning_reads\theavy_naive_recombination\tlight_chain\tlight_v\tlight_j\tlight_c\tlight_support_features\tlight_receptor_rediscovery_reads\tlight_constant_link_fragments\tlight_constant_spanning_reads\tlight_naive_recombination")?;
@@ -91,6 +91,7 @@ impl ReportWriter {
                 j,
                 c,
                 r.productivity_status.as_str().to_string(),
+                r.supporting_umis.to_string(),
                 r.supporting_features.to_string(),
                 r.receptor_linkage.rediscovery_reads.to_string(),
                 r.receptor_linkage.junction_support_reads.to_string(),
@@ -138,9 +139,13 @@ impl ReportWriter {
             } else {
                 Vec::new()
             };
+            let sequence_aa = airr_sequence_aa(&r.observed_receptor_sequence, &r.airr_junction);
+            let v_cys_anchor = matches!(r.airr_junction_aa.first(), Some(&b'C'));
+            let j_anchor = matches!(r.airr_junction_aa.last(), Some(&b'W') | Some(&b'F'));
             let airr = vec![
                 format!("{}|{}", cell, r.stable_id),
                 dna(&r.observed_receptor_sequence),
+                sequence_aa,
                 airr_tf(r.productive, r.productivity_status.is_unknown()),
                 airr_tf(r.in_frame, r.productivity_status.is_unknown()),
                 airr_tf(r.stop_codon, r.productivity_status.is_unknown()),
@@ -169,6 +174,7 @@ impl ReportWriter {
                     .unwrap_or_default(),
                 r.productivity_status.as_str().to_string(),
                 r.stable_id.to_string(),
+                r.supporting_umis.to_string(),
                 r.supporting_features.to_string(),
                 r.receptor_linkage.rediscovery_reads.to_string(),
                 r.receptor_linkage.junction_support_reads.to_string(),
@@ -181,6 +187,8 @@ impl ReportWriter {
                     .constant_segment
                     .map(|segment| seg(index, Some(segment)))
                     .unwrap_or_default(),
+                airr_bool(v_cys_anchor),
+                airr_bool(j_anchor),
             ];
             writeln!(self.airr, "{}", airr.join("\t"))?;
 
@@ -322,6 +330,49 @@ fn dna(x: &[u8]) -> String {
 fn opt(x: Option<u16>) -> String {
     x.map(|x| x.to_string()).unwrap_or_default()
 }
+
+fn airr_sequence_aa(sequence: &[u8], junction: &[u8]) -> String {
+    if junction.len() < 3 {
+        return String::new();
+    }
+    let Some(junction_start) = find_subslice(sequence, junction) else {
+        return String::new();
+    };
+    let frame = junction_start % 3;
+    String::from_utf8_lossy(&translate_dna(&sequence[frame..])).into_owned()
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    (!needle.is_empty() && needle.len() <= haystack.len())
+        .then(|| haystack.windows(needle.len()).position(|w| w == needle))
+        .flatten()
+}
+
+fn translate_dna(seq: &[u8]) -> Vec<u8> {
+    seq.chunks_exact(3)
+        .map(|c| codon_aa(c[0], c[1], c[2]))
+        .collect()
+}
+
+fn codon_aa(a: u8, b: u8, c: u8) -> u8 {
+    let idx = |x: u8| match x.to_ascii_uppercase() {
+        b'T' | b'U' => Some(0usize),
+        b'C' => Some(1),
+        b'A' => Some(2),
+        b'G' => Some(3),
+        _ => None,
+    };
+    let (Some(a), Some(b), Some(c)) = (idx(a), idx(b), idx(c)) else {
+        return b'X';
+    };
+    const TABLE: &[u8; 64] = b"FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG";
+    TABLE[a * 16 + b * 4 + c]
+}
+
+fn airr_bool(x: bool) -> String {
+    if x { "T".into() } else { "F".into() }
+}
+
 fn airr_tf(x: bool, unknown: bool) -> String {
     if unknown {
         String::new()

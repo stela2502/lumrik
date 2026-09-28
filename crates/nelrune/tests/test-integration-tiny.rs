@@ -305,12 +305,18 @@ fn integration_tiny_star() {
     // 5. Full output stack exists
     // --------------------------------------------------------
 
-    let exonic = out.join("filtered/exonic");
-    let raw_exonic = out.join("raw/exonic");
+    let exprs = out.join("filtered/exprs");
+    let raw_exprs = out.join("raw/exprs");
+    let exonic = out.join("filtered/exonic_exprs");
+    let raw_exonic = out.join("raw/exonic_exprs");
 
-    let intronic = out.join("filtered/intronic");
-    let raw_intronic = out.join("raw/intronic");
+    let intronic = out.join("filtered/intronic_exprs");
+    let raw_intronic = out.join("raw/intronic_exprs");
 
+    assert_matrix_files(&exprs);
+    assert_matrix_files(&raw_exprs);
+    assert_matrix_files(&raw_exonic);
+    assert_matrix_files(&raw_intronic);
     assert_matrix_files(&exonic);
     assert_matrix_files(&intronic);
 
@@ -338,6 +344,9 @@ fn integration_tiny_star() {
     let minus_gene = gene_index
         .feature_id("gene_minus")
         .expect("gene_minus missing from feature index");
+
+    let exprs_data = Scdata::read_matrix_market(&exprs, &gene_index)
+        .expect("failed to reload canonical expression Nelrune matrix");
 
     let exonic_data = Scdata::read_matrix_market(&exonic, &gene_index)
         .expect("failed to reload exonic Nelrune matrix");
@@ -399,6 +408,10 @@ fn integration_tiny_star() {
             intronic_cell.total_umis_4_gene_id(&minus_gene),
         ));
 
+        let exprs_cell = exprs_data
+            .get(&cell_id)
+            .expect("cell missing from canonical expression Scdata");
+        assert_eq!(exprs_cell.total_umis(), 2, "exprs must contain exonic + intronic molecules");
         assert_eq!(exonic_cell.total_umis(), 1);
         assert_eq!(intronic_cell.total_umis(), 1);
     }

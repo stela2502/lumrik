@@ -16,8 +16,6 @@ Use the exported conversion types/functions directly; this crate is a library-on
 
 ## Detailed documentation
 
-[![Rust](https://github.com/stela2502/int_to_dna/actions/workflows/rust.yml/badge.svg)](https://github.com/stela2502/int_to_dna/actions/workflows/rust.yml)
-[![Rust](https://github.com/stela2502/int_to_dna/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/int_to_dna/actions/workflows/rust.yml)
 
 # int_to_dna (v0.2.0)
 
@@ -35,7 +33,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-int_to_dna = { git = "https://github.com/stela2502/int_to_dna.git", version = "0.2.0" }
+int_to_dna = { git = "https://github.com/stela2502/lumrik", version = "0.2.0" }
 ```
 
 ---
@@ -97,7 +95,7 @@ Version **0.2.0** introduces an optional `alignment` feature that adds sequence 
 
 ```toml
 [dependencies]
-int_to_dna = { git = "https://github.com/stela2502/int_to_dna.git", version = "0.2.0", features = ["alignment"] }
+int_to_dna = { git = "https://github.com/stela2502/lumrik", version = "0.2.0", features = ["alignment"] }
 ```
 
 or:

@@ -20,6 +20,8 @@ pub struct ReceptorSequenceEvidence {
     /// a merge/indexing identity and for downstream support scoring.
     pub germline_anchors: Vec<GermlineAnchor>,
     pub support_features: u32,
+    /// Unique corrected molecule barcodes contributing to this assembled receptor.
+    pub supporting_umis: Vec<Vec<u8>>,
     /// Packed current best sequence. Kept in lock-step with the A/C/G/T
     /// evidence so hot-path matching and the later rediscovery pass do not
     /// have to rebuild a sequence representation from the count vectors.
@@ -43,6 +45,7 @@ struct PendingPackedRead {
     qualities: Vec<u8>,
     segment_ids: Vec<SegmentId>,
     germline_anchors: Vec<GermlineAnchor>,
+    umi: Option<Vec<u8>>,
 }
 
 impl PendingPackedRead {
@@ -52,6 +55,7 @@ impl PendingPackedRead {
         reverse: bool,
         index: &VdjIndex,
         min_overlap: usize,
+        umi: Option<&[u8]>,
     ) -> Option<Self> {
         let bases = if reverse {
             crate::index::reverse_complement(&part.bases)
@@ -82,6 +86,7 @@ impl PendingPackedRead {
             qualities,
             segment_ids: segment_ids.to_vec(),
             germline_anchors,
+            umi: umi.map(Vec::from),
         })
     }
 
@@ -98,6 +103,7 @@ impl PendingPackedRead {
             segment_support: Vec::with_capacity(self.segment_ids.len()),
             germline_anchors: self.germline_anchors,
             support_features: 1,
+            supporting_umis: self.umi.into_iter().collect(),
             packed_consensus: Some(self.packed.clone()),
         };
         for pos in 0..n {
@@ -243,6 +249,7 @@ impl ReceptorSequenceEvidence {
         reverse: bool,
         index: &VdjIndex,
         min_overlap: usize,
+        umi: Option<&[u8]>,
     ) -> Self {
         let bases = if reverse {
             crate::index::reverse_complement(&part.bases)
@@ -260,6 +267,7 @@ impl ReceptorSequenceEvidence {
             segment_support: Vec::with_capacity(segment_ids.len()),
             germline_anchors: Vec::with_capacity(segment_ids.len()),
             support_features: 1,
+            supporting_umis: Vec::new(),
             packed_consensus: None,
         };
         for (i, &base) in bases.iter().enumerate() {
@@ -283,6 +291,9 @@ impl ReceptorSequenceEvidence {
                     });
                 }
             }
+        }
+        if let Some(umi) = umi {
+            out.supporting_umis.push(umi.to_vec());
         }
         out.refresh_packed_consensus(index);
         out
@@ -466,6 +477,7 @@ impl ReceptorSequenceEvidence {
             add_segment_support(&mut self.segment_support, id, n);
         }
         self.support_features = self.support_features.saturating_add(other.support_features);
+        merge_umis(&mut self.supporting_umis, &other.supporting_umis);
     }
 
     fn trace_split_dump(&self, label: &str, index: &VdjIndex) {
@@ -561,6 +573,9 @@ impl ReceptorSequenceEvidence {
             }
         }
         self.support_features = self.support_features.saturating_add(1);
+        if let Some(umi) = &other.umi {
+            insert_umi(&mut self.supporting_umis, umi);
+        }
         self.refresh_packed_consensus(index);
     }
 
@@ -616,6 +631,7 @@ impl ReceptorSequenceEvidence {
             }
         }
         self.support_features = self.support_features.saturating_add(other.support_features);
+        merge_umis(&mut self.supporting_umis, &other.supporting_umis);
     }
 }
 
@@ -725,6 +741,18 @@ pub(crate) fn merge_summary_batch(
     }
 
     summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
+}
+
+fn insert_umi(umis: &mut Vec<Vec<u8>>, umi: &[u8]) {
+    if !umis.iter().any(|x| x.as_slice() == umi) {
+        umis.push(umi.to_vec());
+    }
+}
+
+fn merge_umis(dst: &mut Vec<Vec<u8>>, src: &[Vec<u8>]) {
+    for umi in src {
+        insert_umi(dst, umi);
+    }
 }
 
 pub(crate) fn consume_chain_features(
@@ -864,7 +892,7 @@ pub(crate) fn consume_chain_features(
                 continue;
             }
             if let Some(read) =
-                PendingPackedRead::from_part(part, &segment_ids, reverse, index, min_overlap)
+                PendingPackedRead::from_part(part, &segment_ids, reverse, index, min_overlap, feature.umi.as_deref())
             {
                 pending.push(read);
                 if pending.len() == PACKED_BOOTSTRAP_READS {
@@ -882,6 +910,7 @@ pub(crate) fn consume_chain_features(
                     reverse,
                     index,
                     min_overlap,
+                    feature.umi.as_deref(),
                 );
                 merge_summary_batch(summaries, vec![incoming], index, min_overlap);
             }

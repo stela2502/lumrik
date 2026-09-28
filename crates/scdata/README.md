@@ -16,7 +16,6 @@ Use `Scdata` for incremental molecule insertion and `FeatureIndex` for determini
 
 ## Detailed documentation
 
-[![Rust](https://github.com/stela2502/scdata/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/stela2502/scdata/actions/workflows/rust.yml)
 
 A high-performance Rust library for constructing **sparse single-cell UMI count data**, with deterministic export to Matrix Market (10x-style) format.
 

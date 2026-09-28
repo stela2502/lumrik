@@ -46,7 +46,7 @@ Git dependency.
 
 ```toml
 [dependencies]
-sc_primer = { git = "https://github.com/stela2502/bam_tide", package = "sc_primer" }
+sc_primer = { git = "https://github.com/stela2502/lumrik", package = "sc_primer" }
 ```
 
 For local development:

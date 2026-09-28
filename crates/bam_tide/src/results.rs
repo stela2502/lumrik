@@ -37,7 +37,7 @@ impl BeaconCellCalling {
 }
 
 pub fn beacon_cell_calling(data: &QuantData) -> Result<BeaconCellCalling, String> {
-    let cell_counts = data.cell_umi_counts(QuantData::EXONIC);
+    let cell_counts = data.cell_umi_counts(QuantData::EXPRS);
     let counts: Vec<u32> = cell_counts.iter().map(|(_, count)| *count).collect();
     let fit = fit_knee_counts(&counts).map_err(|e| e.to_string())?;
     let cells: Vec<(u64, u32, bool)> = cell_counts

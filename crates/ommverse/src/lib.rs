@@ -19,9 +19,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 const MAGIC: &[u8; 4] = b"OMM1";
-pub const OMMVERSE_FORMAT_VERSION: u32 = 7;
+pub const OMMVERSE_FORMAT_VERSION: u32 = 8;
 
 pub mod sources;
+pub mod query;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReviewStatus {
@@ -495,6 +496,21 @@ struct OmmverseV3 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct OmmverseV7 {
+    assembly: String,
+    source_root: PathBuf,
+    genome_twobit: PathBuf,
+    splice: SpliceIndex,
+    proteins: Vec<Protein>,
+    report: BuildReport,
+    interpro_entries: HashMap<String, InterProEntry>,
+    chromatin: Vec<ChromatinElement>,
+    protein_binding: ProteinBindingUnion,
+    ctcf: CtcfArchitecture,
+    experimental_loops: ExperimentalLoopArchitecture,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OmmverseV6 {
     assembly: String,
     source_root: PathBuf,
@@ -670,6 +686,8 @@ pub struct Ommverse {
     pub ctcf: CtcfArchitecture,
     /// Compact recurrence map from experimentally observed chromatin loops.
     pub experimental_loops: ExperimentalLoopArchitecture,
+    /// Resolved biological sources and retrieval recipes used for this build.
+    pub sources: Option<sources::SourceManifest>,
     #[serde(skip)]
     protein_by_accession: HashMap<String, usize>,
     #[serde(skip)]
@@ -962,12 +980,8 @@ impl Ommverse {
         cache_root: impl AsRef<Path>,
         mut progress: impl FnMut(&str, usize),
     ) -> Result<Self> {
-        progress("resolving UCSC sources", 0);
-        let root = sources::ucsc::fetch(assembly, cache_root.as_ref())?;
-        progress("resolving FANTOM5 sources", 0);
-        sources::fantom5::fetch(assembly, &root)?;
-        progress("resolving ENCODE4 sources", 0);
-        sources::encode4::fetch(assembly, &root)?;
+        progress("resolving reference sources", 0);
+        let root = sources::fetch_assembly(assembly, cache_root.as_ref())?;
         Self::build_ucsc_with_debug_and_progress(root, false, progress)
     }
 
@@ -1717,6 +1731,9 @@ impl Ommverse {
             feature_records_without_protein: orphan_features,
             warnings,
         };
+        let sources_path = root.join("sources.yaml");
+        let sources = sources::SourceManifest::load_optional(&sources_path)?;
+
         let mut out = Self {
             assembly,
             source_root: root,
@@ -1729,6 +1746,7 @@ impl Ommverse {
             protein_binding: ProteinBindingUnion::default(),
             ctcf: CtcfArchitecture::default(),
             experimental_loops: ExperimentalLoopArchitecture::default(),
+            sources,
             protein_by_accession: HashMap::new(),
             proteins_by_gene: HashMap::new(),
             gene_by_name: HashMap::new(),
@@ -2723,6 +2741,16 @@ impl Ommverse {
         let version = u32::from_le_bytes(version);
         let mut out = match version {
             OMMVERSE_FORMAT_VERSION => bincode::deserialize_from(file)?,
+            7 => {
+                let old: OmmverseV7 = bincode::deserialize_from(file)?;
+                Self {
+                    assembly: old.assembly, source_root: old.source_root, genome_twobit: old.genome_twobit,
+                    splice: old.splice, proteins: old.proteins, report: old.report,
+                    interpro_entries: old.interpro_entries, chromatin: old.chromatin,
+                    protein_binding: old.protein_binding, ctcf: old.ctcf, experimental_loops: old.experimental_loops,
+                    sources: None, protein_by_accession: HashMap::new(), proteins_by_gene: HashMap::new(), gene_by_name: HashMap::new(),
+                }
+            }
             6 => {
                 let old: OmmverseV6 = bincode::deserialize_from(file)?;
                 Self {
@@ -2737,6 +2765,7 @@ impl Ommverse {
                     protein_binding: old.protein_binding,
                     ctcf: old.ctcf,
                     experimental_loops: ExperimentalLoopArchitecture::default(),
+                    sources: None,
                     protein_by_accession: HashMap::new(),
                     proteins_by_gene: HashMap::new(),
                     gene_by_name: HashMap::new(),
@@ -2756,6 +2785,7 @@ impl Ommverse {
                     protein_binding: old.protein_binding,
                     ctcf: CtcfArchitecture::default(),
                     experimental_loops: ExperimentalLoopArchitecture::default(),
+                    sources: None,
                     protein_by_accession: HashMap::new(),
                     proteins_by_gene: HashMap::new(),
                     gene_by_name: HashMap::new(),
@@ -2777,6 +2807,7 @@ impl Ommverse {
                     protein_binding: ProteinBindingUnion::default(),
                     ctcf: CtcfArchitecture::default(),
                     experimental_loops: ExperimentalLoopArchitecture::default(),
+                    sources: None,
                     protein_by_accession: HashMap::new(),
                     proteins_by_gene: HashMap::new(),
                     gene_by_name: HashMap::new(),
@@ -2796,6 +2827,7 @@ impl Ommverse {
                     protein_binding: ProteinBindingUnion::default(),
                     ctcf: CtcfArchitecture::default(),
                     experimental_loops: ExperimentalLoopArchitecture::default(),
+                    sources: None,
                     protein_by_accession: HashMap::new(),
                     proteins_by_gene: HashMap::new(),
                     gene_by_name: HashMap::new(),
@@ -2815,6 +2847,7 @@ impl Ommverse {
                     protein_binding: ProteinBindingUnion::default(),
                     ctcf: CtcfArchitecture::default(),
                     experimental_loops: ExperimentalLoopArchitecture::default(),
+                    sources: None,
                     protein_by_accession: HashMap::new(),
                     proteins_by_gene: HashMap::new(),
                     gene_by_name: HashMap::new(),
@@ -2834,6 +2867,7 @@ impl Ommverse {
                     protein_binding: ProteinBindingUnion::default(),
                     ctcf: CtcfArchitecture::default(),
                     experimental_loops: ExperimentalLoopArchitecture::default(),
+                    sources: None,
                     protein_by_accession: HashMap::new(),
                     proteins_by_gene: HashMap::new(),
                     gene_by_name: HashMap::new(),
