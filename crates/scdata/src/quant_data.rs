@@ -125,13 +125,17 @@ impl QuantData {
         indexes: &HashMap<String, &dyn FeatureIndex>,
     ) -> Result<(), String> {
         for (name, data) in &mut self.data {
-            if data.is_empty() {
-                continue;
-            }
-            let index = indexes
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("missing feature index for QuantData dataset '{name}'"))?;
+            // An index supplied by the caller is also the declaration that this
+            // dataset belongs to the output contract. Finalize it even when it
+            // has no observations so it can be exported as a valid 0-entry
+            // MatrixMarket dataset. Empty optional datasets (for example SNP
+            // ref/alt when SNP calling is disabled) have no index and stay absent.
+            let Some(index) = indexes.get(name).copied() else {
+                if data.is_empty() {
+                    continue;
+                }
+                return Err(format!("missing feature index for QuantData dataset '{name}'"));
+            };
             data.finalize_for_cells(keep, index);
         }
         Ok(())
@@ -181,13 +185,12 @@ impl QuantData {
         // Finalizing each Scdata against its own cells creates a valid sparse
         // matrix without manufacturing empty barcode columns from other data.
         for (name, data) in &mut self.data {
-            if data.is_empty() {
-                continue;
-            }
-            let index = indexes
-                .get(name)
-                .copied()
-                .unwrap_or_else(|| panic!("missing feature index for QuantData dataset '{name}'"));
+            let Some(index) = indexes.get(name).copied() else {
+                if data.is_empty() {
+                    continue;
+                }
+                panic!("missing feature index for QuantData dataset '{name}'");
+            };
             let observed = data.cell_ids();
             data.finalize_for_cells(&observed, index);
         }
@@ -221,13 +224,12 @@ impl QuantData {
             .map_err(|e| format!("failed to create {}: {e}", base.display()))?;
 
         for (name, data) in &mut self.data {
-            if data.is_empty() {
-                continue;
-            }
-            let index = indexes
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("missing feature index for QuantData dataset '{name}'"))?;
+            let Some(index) = indexes.get(name).copied() else {
+                if data.is_empty() {
+                    continue;
+                }
+                return Err(format!("missing feature index for QuantData dataset '{name}'"));
+            };
             let out = base.join(name);
             match cell_barcode_len {
                 Some(len) => data
