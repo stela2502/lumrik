@@ -468,17 +468,18 @@ const DASHBOARD_HTML: &str = r##"<!doctype html>
 </head>
 <body>
 <main>
-<header><div><h1 id="title">Lumrik</h1><p class="subtitle" id="subtitle">Live processing status</p></div><div class="badge">live</div></header>
+<header><div><h1 id="title">Lumrik</h1><p class="subtitle" id="subtitle">Live processing status</p></div><div class="badge" id="status-badge">live</div></header>
 <div class="summary"><div><span>Stage</span><strong id="stage">startup</strong></div><div><span>Elapsed</span><strong id="elapsed">00:00:00</strong></div></div>
 <div class="sections" id="sections"></div>
 <footer id="updated">Waiting for status...</footer>
 </main>
 <script>
-let runStartedMs=null,runFinishedMs=null;
-function updateElapsed(){if(runStartedMs===null)return;const end=runFinishedMs??Date.now();const s=Math.floor(Math.max(0,end-runStartedMs)/1000);const sec=s%60,min=Math.floor(s/60)%60,h=Math.floor(s/3600);document.getElementById("elapsed").textContent=String(h).padStart(2,"0")+":"+String(min).padStart(2,"0")+":"+String(sec).padStart(2,"0")}
+let runStartedMs=null,runFinishedMs=null,lastStatusMs=null;
+const STATUS_STALE_AFTER_MS=5000;
+function updateElapsed(){if(runStartedMs===null)return;const now=Date.now();const live=runFinishedMs===null&&lastStatusMs!==null&&now-lastStatusMs<=STATUS_STALE_AFTER_MS;const end=runFinishedMs??(live?now:lastStatusMs??runStartedMs);const s=Math.floor(Math.max(0,end-runStartedMs)/1000);const sec=s%60,min=Math.floor(s/60)%60,h=Math.floor(s/3600);document.getElementById("elapsed").textContent=String(h).padStart(2,"0")+":"+String(min).padStart(2,"0")+":"+String(sec).padStart(2,"0");if(runFinishedMs!==null){document.getElementById("status-badge").textContent="finished"}else if(!live&&lastStatusMs!==null){document.getElementById("status-badge").textContent="stale"}}
 function formatMetricValue(value){if(!/^\d/.test(value))return value;return value.replace(/\d{4,}/g,digits=>digits.replace(/\B(?=(\d{3})+(?!\d))/g," "))}
 function renderSections(sections){const root=document.getElementById("sections");root.replaceChildren();for(const section of sections){const panel=document.createElement("section");panel.className="panel";const heading=document.createElement("h2");heading.textContent=section.title;panel.appendChild(heading);const rows=document.createElement("div");rows.className="rows";for(const item of section.metrics){const row=document.createElement("div");row.className="row";const label=document.createElement("div");label.className="label";label.textContent=item.label;const metric=document.createElement("div");metric.className="metric";metric.textContent=formatMetricValue(item.value);row.append(label,metric);rows.appendChild(row)}panel.appendChild(rows);root.appendChild(panel)}}
-async function updateStatus(){try{const response=await fetch("/status",{cache:"no-store"});if(!response.ok)throw new Error("HTTP "+response.status);const s=await response.json();document.title=s.title;document.getElementById("title").textContent=s.title;document.getElementById("subtitle").textContent=s.subtitle;document.getElementById("stage").textContent=s.stage;runStartedMs=Number(s.started_unix_ms);runFinishedMs=s.finished_unix_ms===null?null:Number(s.finished_unix_ms);renderSections(s.sections);document.getElementById("updated").textContent="Updated "+new Date().toLocaleTimeString();updateElapsed()}catch(error){document.getElementById("updated").textContent="Status unavailable: "+error}}
+async function updateStatus(){try{const response=await fetch("/status",{cache:"no-store"});if(!response.ok)throw new Error("HTTP "+response.status);const s=await response.json();const receivedAt=Date.now();document.title=s.title;document.getElementById("title").textContent=s.title;document.getElementById("subtitle").textContent=s.subtitle;document.getElementById("stage").textContent=s.stage;runStartedMs=Number(s.started_unix_ms);runFinishedMs=s.finished_unix_ms===null?null:Number(s.finished_unix_ms);lastStatusMs=receivedAt;document.getElementById("status-badge").textContent=runFinishedMs===null?"live":"finished";renderSections(s.sections);document.getElementById("updated").textContent="Updated "+new Date(receivedAt).toLocaleTimeString();updateElapsed()}catch(error){document.getElementById("status-badge").textContent="stale";document.getElementById("updated").textContent="Status unavailable — elapsed frozen at last confirmed update";updateElapsed()}}
 setInterval(updateElapsed,1000);setInterval(updateStatus,2000);updateStatus();
 </script>
 </body>
@@ -498,6 +499,14 @@ mod tests {
         );
         assert_eq!(format_metric_value("932"), "932");
         assert_eq!(format_metric_value("ZD-4631.fastq.gz"), "ZD-4631.fastq.gz");
+    }
+
+    #[test]
+    fn live_dashboard_freezes_elapsed_when_status_becomes_stale() {
+        assert!(DASHBOARD_HTML.contains("STATUS_STALE_AFTER_MS=5000"));
+        assert!(DASHBOARD_HTML.contains("elapsed frozen at last confirmed update"));
+        assert!(DASHBOARD_HTML.contains("status-badge"));
+        assert!(DASHBOARD_HTML.contains("runFinishedMs??(live?now:lastStatusMs??runStartedMs)"));
     }
 
     #[test]
