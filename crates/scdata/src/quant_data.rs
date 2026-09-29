@@ -14,7 +14,6 @@ use crate::{FeatureIndex, MatrixValueType, Scdata};
 
 use mapping_info::MappingInfo;
 
-use crate::sparse_matrix::scdata;
 
 pub struct QuantData {
     data: HashMap<String, Scdata>,

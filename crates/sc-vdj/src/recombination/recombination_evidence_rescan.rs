@@ -72,6 +72,7 @@ pub struct RecombinationEvidenceRescanReport {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RecombinationEvidenceRescanProgress {
     pub bam_records_scanned: usize,
+    pub bam_read_time: Duration,
     pub wanted_cell_records: usize,
     pub batches_completed: usize,
     pub receptor_hit_records: usize,
@@ -609,6 +610,7 @@ where
             ) = evidence.progress_counts();
             progress(RecombinationEvidenceRescanProgress {
                 bam_records_scanned: report.bam_records_scanned,
+                bam_read_time: report.bam_read_time,
                 wanted_cell_records: report.wanted_cell_records,
                 batches_completed,
                 receptor_hit_records,
@@ -677,6 +679,7 @@ where
                 ) = evidence.progress_counts();
                 progress(RecombinationEvidenceRescanProgress {
                     bam_records_scanned: report.bam_records_scanned,
+                    bam_read_time: report.bam_read_time,
                     wanted_cell_records: report.wanted_cell_records,
                     batches_completed,
                     receptor_hit_records,
@@ -729,6 +732,7 @@ where
         ) = evidence.progress_counts();
         progress(RecombinationEvidenceRescanProgress {
             bam_records_scanned: report.bam_records_scanned,
+            bam_read_time: report.bam_read_time,
             wanted_cell_records: report.wanted_cell_records,
             batches_completed,
             receptor_hit_records,

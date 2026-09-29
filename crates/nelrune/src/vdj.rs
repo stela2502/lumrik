@@ -82,12 +82,12 @@ struct VdjRunStatus {
     phase_times: [Option<Duration>; 5],
     reference_segments: usize,
 
+    bam_path: String,
+    initial_bam_read_time: Duration,
+    rescan_bam_read_time: Duration,
     bam_records: usize,
     allowed_cell_records: usize,
     receptor_overlap_records: usize,
-    early_reject_finished_vj: usize,
-    early_reject_umi_lt4bp: usize,
-    early_admit_new_umi: usize,
     unmapped_candidates: usize,
     unmapped_igh_admitted: usize,
     unmapped_igh_rescued_cells: usize,
@@ -144,12 +144,12 @@ impl VdjRunStatus {
             phase_started: Instant::now(),
             phase_times: [None; 5],
             reference_segments: 0,
+            bam_path: String::new(),
+            initial_bam_read_time: Duration::ZERO,
+            rescan_bam_read_time: Duration::ZERO,
             bam_records: 0,
             allowed_cell_records: 0,
             receptor_overlap_records: 0,
-            early_reject_finished_vj: 0,
-            early_reject_umi_lt4bp: 0,
-            early_admit_new_umi: 0,
             unmapped_candidates: 0,
             unmapped_igh_admitted: 0,
             unmapped_igh_rescued_cells: 0,
@@ -209,6 +209,27 @@ impl VdjRunStatus {
         let end_ms = self.finished_unix_ms.unwrap_or_else(unix_ms);
         Duration::from_millis(end_ms.saturating_sub(self.started_unix_ms) as u64)
     }
+
+    fn initial_bam_records_per_second(&self) -> f64 {
+        let seconds = self.initial_bam_read_time.as_secs_f64();
+        if seconds > 0.0 { self.bam_records as f64 / seconds } else { 0.0 }
+    }
+
+    fn rescan_bam_records_per_second(&self) -> f64 {
+        let seconds = self.rescan_bam_read_time.as_secs_f64();
+        if seconds > 0.0 { self.rescan_records as f64 / seconds } else { 0.0 }
+    }
+
+    fn models_per_second(&self) -> f64 {
+        let seconds = if let Some(elapsed) = self.phase_times.get(1).and_then(|x| *x) {
+            elapsed.as_secs_f64()
+        } else if self.phase == 1 {
+            self.phase_started.elapsed().as_secs_f64()
+        } else {
+            0.0
+        };
+        if seconds > 0.0 { self.compact_summaries as f64 / seconds } else { 0.0 }
+    }
 }
 
 impl ServerContent for VdjRunStatus {
@@ -255,6 +276,35 @@ impl ServerContent for VdjRunStatus {
                 StatusSection::new(
                     "Receptor evidence",
                     vec![
+                        StatusMetric::new("BAM entries", self.bam_records.to_string()),
+                        StatusMetric::new(
+                            "BAM entries / second",
+                            format!("{:.0}", self.initial_bam_records_per_second()),
+                        ),
+                        StatusMetric::new("Models", self.compact_summaries.to_string()),
+                        StatusMetric::new(
+                            "Models / second",
+                            format!("{:.0}", self.models_per_second()),
+                        ),
+                        StatusMetric::new(
+                            "IGH / IGK / IGL evidence cells",
+                            format!(
+                                "{} / {} / {}",
+                                self.receptor_evidence_cells[0],
+                                self.receptor_evidence_cells[1],
+                                self.receptor_evidence_cells[2],
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "TRA / TRB / TRG / TRD evidence cells",
+                            format!(
+                                "{} / {} / {} / {}",
+                                self.receptor_evidence_cells[3],
+                                self.receptor_evidence_cells[4],
+                                self.receptor_evidence_cells[5],
+                                self.receptor_evidence_cells[6],
+                            ),
+                        ),
                         StatusMetric::new("Cells with evidence", self.evidence_cells.to_string()),
                         StatusMetric::new(
                             "V / J evidence cells",
@@ -382,6 +432,10 @@ impl ServerContent for VdjRunStatus {
                             format_count_pct(self.rescan_records, self.bam_records),
                         ),
                         StatusMetric::new(
+                            "BAM entries / second",
+                            format!("{:.0}", self.rescan_bam_records_per_second()),
+                        ),
+                        StatusMetric::new(
                             "Full BAM pass",
                             if rescan_complete {
                                 "complete"
@@ -448,6 +502,10 @@ impl ServerContent for VdjRunStatus {
                             format!("{:.0} MiB", memory.system_available_mib),
                         ),
                     ],
+                ),
+                StatusSection::new(
+                    "Source",
+                    vec![StatusMetric::new("BAM", self.bam_path.clone())],
                 ),
             ],
         }
@@ -544,6 +602,7 @@ fn sync_evidence_status(
     let mut summaries = 0usize;
     let mut fragments = 0usize;
     let mut cells_by_kind = [0usize; 4];
+    let mut receptor_evidence_cells = [0usize; 7];
     let mut j_constant_linked_cells = 0usize;
     let mut j_constant_linked_fragments = 0usize;
     let mut igh_vj_cells = 0usize;
@@ -578,6 +637,16 @@ fn sync_evidence_status(
             igh_intronic_c_records = igh_intronic_c_records.saturating_add(intronic);
         }
 
+        for chain in Chain::ALL {
+            if [SegmentKind::V, SegmentKind::D, SegmentKind::J]
+                .into_iter()
+                .any(|kind| cell.segment_mappings(chain, kind) > 0)
+            {
+                let slot = chain_slot(chain);
+                receptor_evidence_cells[slot] = receptor_evidence_cells[slot].saturating_add(1);
+            }
+        }
+
         for (slot, kind) in [
             SegmentKind::V,
             SegmentKind::D,
@@ -598,11 +667,9 @@ fn sync_evidence_status(
 
     update_status(status, |state| {
         state.bam_records = progress.bam_records;
+        state.initial_bam_read_time = progress.bam_read_time;
         state.allowed_cell_records = progress.allowed_cell_records;
         state.receptor_overlap_records = progress.receptor_overlap_records;
-        state.early_reject_finished_vj = progress.early_reject_finished_vj;
-        state.early_reject_umi_lt4bp = progress.early_reject_umi_lt4bp;
-        state.early_admit_new_umi = progress.early_admit_new_umi;
         state.unmapped_candidates = progress.unmapped_candidates;
         state.unmapped_igh_admitted = progress.unmapped_igh_admitted;
         state.unmapped_igh_rescued_cells = progress.unmapped_igh_rescued_cells;
@@ -613,6 +680,7 @@ fn sync_evidence_status(
         state.evidence_cells = cells;
         state.compact_summaries = summaries;
         state.physical_fragments = fragments;
+        state.receptor_evidence_cells = receptor_evidence_cells;
         state.cells_with_v = cells_by_kind[0];
         state.cells_with_d = cells_by_kind[1];
         state.cells_with_j = cells_by_kind[2];
@@ -828,6 +896,9 @@ pub fn run() -> Result<()> {
         std::iter::once("vdj".to_string()).chain(std::env::args().skip(2)),
     );
     let status = Arc::new(RwLock::new(VdjRunStatus::new(c.threads.max(1))));
+    update_status(&status, |state| {
+        state.bam_path = c.bam.display().to_string();
+    });
     let _status_server = if c.no_health_server {
         None
     } else {
@@ -895,7 +966,6 @@ pub fn run() -> Result<()> {
             sync_evidence_status(&status_for_read, progress, evidence, index);
         },
     )?;
-    // The final callback already contains the exact BAM denominator counters.
     // `n` remains the public return value: receptor-overlap records ingested.
     let _ = n;
     mapping_info.stop_timer("vdj.initial_evidence_collection");
@@ -971,6 +1041,7 @@ pub fn run() -> Result<()> {
         move |progress| {
             update_status(&status_for_rescan, |state| {
                 state.rescan_records = progress.bam_records_scanned;
+                state.rescan_bam_read_time = progress.bam_read_time;
                 state.rescan_wanted_records = progress.wanted_cell_records;
                 state.rescan_batches = progress.batches_completed;
                 state.receptor_rediscovery_hits = progress.receptor_hit_records;
@@ -992,6 +1063,7 @@ pub fn run() -> Result<()> {
     mapping_info.multi_processor_time += rescan.evidence_processing_time;
     update_status(&status, |state| {
         state.rescan_records = rescan.bam_records_scanned;
+        state.rescan_bam_read_time = rescan.bam_read_time;
         state.rescan_wanted_records = rescan.wanted_cell_records;
         state.receptor_rediscovery_hits = rescan.receptor_hit_records;
         state.constant_hits = rescan.constant_hit_records;
@@ -1036,18 +1108,6 @@ pub fn run() -> Result<()> {
         .read()
         .expect("reading VDJ status after BAM ingestion")
         .clone();
-    mapping_info.report_n(
-        "vdj.early_reject.finished_vj",
-        ingest_status.early_reject_finished_vj,
-    );
-    mapping_info.report_n(
-        "vdj.early_reject.umi_lt4bp",
-        ingest_status.early_reject_umi_lt4bp,
-    );
-    mapping_info.report_n(
-        "vdj.early_admit.new_umi",
-        ingest_status.early_admit_new_umi,
-    );
     mapping_info.report_n("vdj.unmapped_candidates", ingest_status.unmapped_candidates);
     mapping_info.report_n(
         "vdj.unmapped_igh_admitted",

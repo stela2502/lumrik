@@ -315,11 +315,9 @@ impl Default for VdjRunnerConfig {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BamIngestProgress {
     pub bam_records: usize,
+    pub bam_read_time: Duration,
     pub allowed_cell_records: usize,
     pub receptor_overlap_records: usize,
-    pub early_reject_finished_vj: usize,
-    pub early_reject_umi_lt4bp: usize,
-    pub early_admit_new_umi: usize,
     pub unmapped_candidates: usize,
     pub unmapped_igh_admitted: usize,
     pub unmapped_igh_rescued_cells: usize,
@@ -356,17 +354,13 @@ impl UnmappedIghRescueStats {
         bam_records: usize,
         allowed_cell_records: usize,
         receptor_overlap_records: usize,
-        early_reject_finished_vj: usize,
-        early_reject_umi_lt4bp: usize,
-        early_admit_new_umi: usize,
+        bam_read_time: Duration,
     ) -> BamIngestProgress {
         BamIngestProgress {
             bam_records,
+            bam_read_time,
             allowed_cell_records,
             receptor_overlap_records,
-            early_reject_finished_vj,
-            early_reject_umi_lt4bp,
-            early_admit_new_umi,
             unmapped_candidates: self.candidates,
             unmapped_igh_admitted: self.admitted,
             unmapped_igh_rescued_cells: self.rescued_cells.len(),
@@ -520,9 +514,6 @@ impl VdjRunner {
         let mut n = 0usize;
         let mut bam_records = 0usize;
         let mut allowed_cell_records = 0usize;
-        let mut early_reject_finished_vj = 0usize;
-        let mut early_reject_umi_lt4bp = 0usize;
-        let mut early_admit_new_umi = 0usize;
         let mut unmapped_rescue = UnmappedIghRescueStats::default();
         let mut entry = 0u32;
         let mut batch = Vec::<(u64, BamFeatureEvidence)>::with_capacity(EVIDENCE_BATCH_SIZE);
@@ -598,7 +589,7 @@ impl VdjRunner {
                     );
                     timing.evidence_processing += processing_started.elapsed();
                     progress(
-                        unmapped_rescue.progress(bam_records, allowed_cell_records, n, early_reject_finished_vj, early_reject_umi_lt4bp, early_admit_new_umi),
+                        unmapped_rescue.progress(bam_records, allowed_cell_records, n, timing.bam_read),
                         &self.evidence,
                         &self.index,
                     );
@@ -614,7 +605,7 @@ impl VdjRunner {
                     n = n.saturating_add(rescue.admitted);
                     unmapped_rescue.add_assign(rescue);
                     progress(
-                        unmapped_rescue.progress(bam_records, allowed_cell_records, n, early_reject_finished_vj, early_reject_umi_lt4bp, early_admit_new_umi),
+                        unmapped_rescue.progress(bam_records, allowed_cell_records, n, timing.bam_read),
                         &self.evidence,
                         &self.index,
                     );
@@ -752,7 +743,7 @@ impl VdjRunner {
                 .consume_batch(batch, &self.index, self.config.min_sequence_overlap);
             timing.evidence_processing += processing_started.elapsed();
             progress(
-                unmapped_rescue.progress(bam_records, allowed_cell_records, n, early_reject_finished_vj, early_reject_umi_lt4bp, early_admit_new_umi),
+                unmapped_rescue.progress(bam_records, allowed_cell_records, n, timing.bam_read),
                 &self.evidence,
                 &self.index,
             );
@@ -769,7 +760,7 @@ impl VdjRunner {
             n = n.saturating_add(rescue.admitted);
             unmapped_rescue.add_assign(rescue);
             progress(
-                unmapped_rescue.progress(bam_records, allowed_cell_records, n, early_reject_finished_vj, early_reject_umi_lt4bp, early_admit_new_umi),
+                unmapped_rescue.progress(bam_records, allowed_cell_records, n, timing.bam_read),
                 &self.evidence,
                 &self.index,
             );
