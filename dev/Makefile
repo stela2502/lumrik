@@ -163,7 +163,10 @@ LUMRIK_IMAGE := ghcr.io/stela2502/lumrik
 SINGULARITY_LOCAL := /data1/nextflow/singularity
 SINGULARITY_SENS := $(HOME)/sens05_home/nextflow/singularity_cache
 
-lumrik-release-image:
+# Prepare a Lumrik release locally.  A release tag is deliberately kept local
+# until install-musl-bins has succeeded; an unpushed local release is reused on
+# the next invocation instead of incrementing the version again.
+bump-tag:
 	@set -e; \
 	cd "$(LUMRIK_DIR)"; \
 	if [ -n "$$(git status --porcelain)" ]; then \
@@ -176,6 +179,9 @@ lumrik-release-image:
 	requested_version="$(VERSION)"; \
 	if [ -n "$$requested_version" ]; then \
 		version="$$requested_version"; \
+	elif [ -n "$$last_tag" ] && ! git ls-remote --exit-code --tags origin "refs/tags/$$last_tag" >/dev/null 2>&1; then \
+		version=$${last_tag#v}; \
+		echo "Unpushed release $$last_tag found; reusing it."; \
 	else \
 		if [ -z "$$last_tag" ]; then \
 			version="0.1.0"; \
@@ -194,9 +200,9 @@ lumrik-release-image:
 		exit 1; \
 	fi; \
 	tag="v$$version"; \
-	echo "Latest tag:      $${last_tag:-none}"; \
-	echo "Release version: $$version"; \
-	echo "Release tag:     $$tag"; \
+	echo "Latest local tag: $${last_tag:-none}"; \
+	echo "Release version:  $$version"; \
+	echo "Release tag:      $$tag"; \
 	if git rev-parse -q --verify "refs/tags/$$tag" >/dev/null; then \
 		tag_commit=$$(git rev-list -n1 "$$tag"); \
 		head_commit=$$(git rev-parse HEAD); \
@@ -209,34 +215,78 @@ lumrik-release-image:
 			echo "ERROR: $$tag exists at HEAD but Cargo.toml says $$cargo_version"; \
 			exit 1; \
 		fi; \
-		echo "Existing release $$tag found at HEAD; reusing it."; \
+		echo "Existing local release $$tag found at HEAD; reusing it."; \
+		exit 0; \
+	fi; \
+	old_version=$$(awk '/^\[workspace.package\]$$/{p=1; next} /^\[/{p=0} p && /^version = "/{gsub(/^version = "|"$$/, ""); print; exit}' Cargo.toml); \
+	if [ -z "$$old_version" ]; then \
+		echo "ERROR: could not read [workspace.package] version from Cargo.toml"; \
+		exit 1; \
+	fi; \
+	if [ "$$old_version" = "$$version" ]; then \
+		echo "ERROR: Cargo.toml is already $$version but tag $$tag does not exist"; \
+		exit 1; \
+	fi; \
+	echo "Updating Cargo workspace version: $$old_version -> $$version"; \
+	awk -v version="$$version" 'BEGIN{p=0} /^\[workspace.package\]$$/{p=1; print; next} /^\[/{p=0} p && /^version = "/{$$0="version = \"" version "\""} {print}' Cargo.toml > Cargo.toml.release.tmp; \
+	mv Cargo.toml.release.tmp Cargo.toml; \
+	find crates -name Cargo.toml -type f -print | while read manifest; do \
+		if grep -Fq "version = \"$$old_version\"" "$$manifest" && grep -Fq 'path = ' "$$manifest"; then \
+			sed -i "s/version = \"$$old_version\"/version = \"$$version\"/g" "$$manifest"; \
+		fi; \
+	done; \
+	cargo generate-lockfile; \
+	git add Cargo.toml Cargo.lock crates/*/Cargo.toml; \
+	git commit -m "Set version to $$version"; \
+	git tag "$$tag"; \
+	echo "Prepared $$tag locally. Tag will be pushed only after the musl build succeeds."
+
+# Publish the already prepared local release.  VERSION=X.Y.Z selects that exact
+# tag; otherwise the newest local release tag is used.
+push-tag:
+	@set -e; \
+	cd "$(LUMRIK_DIR)"; \
+	requested_version="$(VERSION)"; \
+	if [ -n "$$requested_version" ]; then \
+		version="$$requested_version"; \
 	else \
-		old_version=$$(awk '/^\[workspace.package\]$$/{p=1; next} /^\[/{p=0} p && /^version = "/{gsub(/^version = "|"$$/, ""); print; exit}' Cargo.toml); \
-		if [ -z "$$old_version" ]; then \
-			echo "ERROR: could not read [workspace.package] version from Cargo.toml"; \
+		tag=$$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1); \
+		if [ -z "$$tag" ]; then \
+			echo "ERROR: no local Lumrik release tag found"; \
 			exit 1; \
 		fi; \
-		if [ "$$old_version" = "$$version" ]; then \
-			echo "ERROR: Cargo.toml is already $$version but tag $$tag does not exist"; \
-			exit 1; \
-		fi; \
-		echo "Updating Cargo workspace version: $$old_version -> $$version"; \
-		awk -v version="$$version" 'BEGIN{p=0} /^\[workspace.package\]$$/{p=1; print; next} /^\[/{p=0} p && /^version = "/{$$0="version = \"" version "\""} {print}' Cargo.toml > Cargo.toml.release.tmp; \
-		mv Cargo.toml.release.tmp Cargo.toml; \
-		version_changed=1; \
-		trap 'status=$$?; if [ $$status -ne 0 ] && [ "$${version_changed:-0}" = 1 ]; then git restore -- Cargo.toml Cargo.lock 2>/dev/null || true; fi; exit $$status' EXIT; \
-		echo "Running local musl tests for $$version..."; \
-		cargo build -r --target x86_64-unknown-linux-musl; \
-		git add Cargo.toml Cargo.lock; \
-		git commit -m "Set version to $$version"; \
-		version_changed=0; \
-		if [ -n "$$(git status --porcelain)" ]; then \
-			echo "ERROR: release tests left unexpected repository changes"; \
-			git status --short; \
-			exit 1; \
-		fi; \
+		version=$${tag#v}; \
+	fi; \
+	if ! printf '%s\n' "$$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+		echo "ERROR: VERSION must be X.Y.Z, got: $$version"; \
+		exit 1; \
+	fi; \
+	tag="v$$version"; \
+	if ! git rev-parse -q --verify "refs/tags/$$tag" >/dev/null; then \
+		echo "ERROR: local release tag $$tag does not exist; run make bump-tag first"; \
+		exit 1; \
+	fi; \
+	tag_commit=$$(git rev-list -n1 "$$tag"); \
+	head_commit=$$(git rev-parse HEAD); \
+	if [ "$$tag_commit" != "$$head_commit" ]; then \
+		echo "ERROR: $$tag does not point at HEAD"; \
+		exit 1; \
+	fi; \
+	cargo_version=$$(awk '/^\[workspace.package\]$$/{p=1; next} /^\[/{p=0} p && /^version = "/{gsub(/^version = "|"$$/, ""); print; exit}' Cargo.toml); \
+	if [ "$$cargo_version" != "$$version" ]; then \
+		echo "ERROR: $$tag exists at HEAD but Cargo.toml says $$cargo_version"; \
+		exit 1; \
+	fi; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "ERROR: lumrik repository contains uncommitted changes"; \
+		git status --short; \
+		exit 1; \
+	fi; \
+	if git ls-remote --exit-code --tags origin "refs/tags/$$tag" >/dev/null 2>&1; then \
+		echo "Release tag $$tag is already on origin; not pushing it again."; \
+	else \
+		echo "Pushing release commit and $$tag"; \
 		git push origin HEAD; \
-		git tag "$$tag"; \
 		git push origin "$$tag"; \
 	fi; \
 	echo "Waiting for GitHub Actions build for $$tag..."; \
@@ -268,6 +318,15 @@ lumrik-release-image:
 	mkdir -p "$(SINGULARITY_SENS)"; \
 	cp -v "$$sif" "$(SINGULARITY_SENS)/"; \
 	echo "Done: $$tag"
+
+# Full release transaction: prepare/reuse a local tag, validate by building the
+# authoritative musl binaries, then publish the tag and image.
+lumrik-release-image:
+	@$(MAKE) bump-tag VERSION="$(VERSION)"
+	@$(MAKE) install-musl-bins
+	@$(MAKE) push-tag VERSION="$(VERSION)"
+
+.PHONY: bump-tag push-tag lumrik-release-image
 
 NORN_DIR := $(ROOT)/norn
 NORN_CONFIG := $(NORN_DIR)/nextflow.config
