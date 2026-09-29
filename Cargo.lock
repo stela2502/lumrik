@@ -2102,6 +2102,7 @@ dependencies = [
  "int-to-dna",
  "lumrik-status",
  "mapping_info",
+ "ommverse",
  "rayon",
  "reference_curator",
  "rust-htslib",

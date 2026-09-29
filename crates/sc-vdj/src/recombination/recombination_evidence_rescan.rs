@@ -10,6 +10,7 @@ use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
 use rayon::prelude::*;
 use rust_htslib::bam::{self, Read};
+use rust_htslib::bam::record::Cigar;
 use scdata::CellHash;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -421,6 +422,43 @@ pub(crate) fn rescue_missing_constants_from_bam_with_report<
     )
 }
 
+fn aligned_blocks(record: &bam::Record) -> Vec<(u32, u32)> {
+    let mut ref_pos = record.pos().max(0) as u32;
+    let mut out = Vec::new();
+    let mut block_start = None;
+    for cigar in record.cigar().iter() {
+        match *cigar {
+            Cigar::Match(n) | Cigar::Equal(n) | Cigar::Diff(n) => {
+                if block_start.is_none() {
+                    block_start = Some(ref_pos);
+                }
+                ref_pos = ref_pos.saturating_add(n);
+            }
+            Cigar::Del(n) => {
+                if block_start.is_none() {
+                    block_start = Some(ref_pos);
+                }
+                ref_pos = ref_pos.saturating_add(n);
+            }
+            Cigar::RefSkip(n) => {
+                if let Some(start) = block_start.take() {
+                    if start < ref_pos {
+                        out.push((start, ref_pos));
+                    }
+                }
+                ref_pos = ref_pos.saturating_add(n);
+            }
+            Cigar::Ins(_) | Cigar::SoftClip(_) | Cigar::HardClip(_) | Cigar::Pad(_) => {}
+        }
+    }
+    if let Some(start) = block_start {
+        if start < ref_pos {
+            out.push((start, ref_pos));
+        }
+    }
+    out
+}
+
 pub(crate) fn rescue_missing_constants_from_bam_with_report_and_progress<P, R, F>(
     path: P,
     resolver: &R,
@@ -441,11 +479,16 @@ where
     let mut receptor_targets = Vec::<ReceptorTarget>::new();
     let mut receptor_target_by_cell = HashMap::<(usize, u64), ReceptorTarget>::new();
     let mut receptor_feature_by_bait = HashMap::<Vec<u8>, usize>::new();
-    let mut wanted_cells = HashSet::<u64>::new();
+    let mut wanted_cells = CellHash::<BTreeSet<Chain>>::new();
     let mut wanted_chains = BTreeSet::new();
 
     for (call_group, (cell_id, recombinations)) in calls.iter().enumerate() {
         for (call_index, recombination) in recombinations.iter().enumerate() {
+            // The rescan exists only to recover a missing constant region.
+            // Complete cell × locus calls must not seed a second BAM pass.
+            if recombination.constant.is_some() {
+                continue;
+            }
             let Some(bait) = receptor_bait(index, recombination) else {
                 continue;
             };
@@ -478,7 +521,10 @@ where
                 candidates: Vec::new(),
                 rescued_segment: None,
             });
-            wanted_cells.insert(*cell_id);
+            wanted_cells
+                .entry_cell(*cell_id)
+                .or_default()
+                .insert(recombination.chain);
             wanted_chains.insert(recombination.chain);
         }
     }
@@ -533,6 +579,7 @@ where
     // record to EOF. Expensive recombination/constant matching is restricted to
     // cells that already have reconstructed calls, but the BAM denominator and
     // live progress always reflect the complete file scan.
+    let header = reader.header().to_owned();
     let mut records = reader.records();
     loop {
         if max_bam_records.is_some_and(|limit| report.bam_records_scanned >= limit) {
@@ -571,7 +618,27 @@ where
             continue;
         };
         let cell_id = IntToDna::new(cell.as_bytes()).into_u64();
-        if !wanted_cells.contains(&cell_id) {
+        let Some(needed_chains) = wanted_cells.get_cell(&cell_id) else {
+            continue;
+        };
+
+        // Reuse the same genomic overlap semantics as the first evidence pass,
+        // but make the decision cell × locus specific.  A record is useful only
+        // when it overlaps V/D/J or C sequence from a chain for which this cell
+        // still lacks constant-region evidence.
+        let tid = record.tid();
+        if tid < 0 {
+            continue;
+        }
+        let chr = String::from_utf8_lossy(header.tid2name(tid as u32));
+        let blocks = aligned_blocks(&record);
+        let segment_ids = index.overlapping(&chr, &blocks);
+        let needed = segment_ids.iter().any(|id| {
+            index
+                .segment(*id)
+                .is_some_and(|segment| needed_chains.contains(&segment.chain))
+        });
+        if !needed {
             continue;
         }
         report.wanted_cell_records += 1;

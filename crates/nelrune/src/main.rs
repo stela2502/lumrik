@@ -1,4 +1,5 @@
 mod prepare_fastqs;
+mod materialize_norn_test_data;
 mod quant;
 mod vdj;
 use std::collections::HashMap;
@@ -28,6 +29,7 @@ use nelrune::progress::RunProgress;
 fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("prepare-fastqs") => return prepare_fastqs::run(),
+        Some("materialize-norn-test-data") => return materialize_norn_test_data::run(),
         Some("quant") => return quant::run(),
         Some("vdj") => return vdj::run(),
         _ => {}

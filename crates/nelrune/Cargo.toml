@@ -17,6 +17,7 @@ bam_tide = { path = "../bam_tide" }
 gtf_splice_index = { path = "../gtf_splice_index" }
 mapping_info = { path = "../mapping_info" }
 lumrik-status = { path = "../lumrik-status" }
+ommverse = { path = "../ommverse" }
 sc-mapper = { path = "../sc-mapper" }
 sc_primer = { path = "../sc_primer" }
 scdata = { path="../scdata" }
