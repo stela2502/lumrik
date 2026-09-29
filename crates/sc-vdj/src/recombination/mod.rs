@@ -3,6 +3,7 @@ use crate::index::{
     reference_base_matches, reverse_complement, Chain, SegmentId, SegmentKind, VdjIndex,
 };
 use anyhow::{bail, Result};
+use onehot_dna::OneHotSequence;
 
 mod constant_region_linkage;
 mod identifier;
@@ -450,6 +451,139 @@ pub(crate) fn refresh_recombination_from_observed(
         recomb.stable_id = id;
     }
     true
+}
+
+const ANCHOR_GAP_RUN: usize = 6;
+
+/// Recover the V/J geometry already established while assembling this receptor.
+///
+/// Germline anchors place reference coordinate 0 directly into summary/query
+/// coordinates.  As long as that placement remains coherent with the observed
+/// OneHot evidence, a second dynamic-programming alignment is redundant.  Six
+/// consecutive informative incompatible positions are treated as evidence for
+/// an indel/coordinate break and force the existing gapped-aligner fallback.
+fn anchored_vj(
+    observed: &[u8],
+    index: &VdjIndex,
+    chain: Chain,
+    summary: &ReceptorSequenceEvidence,
+) -> Option<(SegmentId, LocalAlignment, SegmentId, LocalAlignment, i32)> {
+    let (v_id, v_aln) = best_anchored_segment(observed, index, chain, SegmentKind::V, summary)?;
+    let (j_id, j_aln) = best_anchored_segment(observed, index, chain, SegmentKind::J, summary)?;
+    Some((v_id, v_aln, j_id, j_aln, v_aln.score + j_aln.score))
+}
+
+fn best_anchored_segment(
+    observed: &[u8],
+    index: &VdjIndex,
+    chain: Chain,
+    kind: SegmentKind,
+    summary: &ReceptorSequenceEvidence,
+) -> Option<(SegmentId, LocalAlignment)> {
+    summary
+        .germline_anchors
+        .iter()
+        .filter_map(|anchor| {
+            let segment = index.segment(anchor.segment_id)?;
+            if segment.chain != chain || segment.kind != kind {
+                return None;
+            }
+            let alignment = direct_anchor_alignment(
+                observed.len(),
+                summary,
+                &segment.sequence,
+                anchor.summary_start,
+            )?;
+            Some((
+                anchor.segment_id,
+                alignment,
+                summary.segment_support(anchor.segment_id),
+            ))
+        })
+        .max_by_key(|(id, aln, support)| (*support, aln.score, std::cmp::Reverse(*id)))
+        .map(|(id, aln, _)| (id, aln))
+}
+
+fn direct_anchor_alignment(
+    observed_len: usize,
+    summary: &ReceptorSequenceEvidence,
+    germline: &[u8],
+    summary_start: isize,
+) -> Option<LocalAlignment> {
+    let query_start = summary_start.max(0) as usize;
+    let reference_start = (-summary_start).max(0) as usize;
+    if query_start >= observed_len || reference_start >= germline.len() {
+        return None;
+    }
+    let overlap = (observed_len - query_start).min(germline.len() - reference_start);
+    if overlap == 0 {
+        return None;
+    }
+
+    // Compare the complete observed OneHot state, not the collapsed consensus.
+    // This preserves mixed evidence and makes the test answer only one cheap
+    // question: has the mapper-established coordinate relationship broken?
+    let observed = summary.mapping_sequence();
+    let germline_masks: Vec<u8> = germline
+        .iter()
+        .map(|&r| {
+            [b'A', b'C', b'G', b'T']
+                .iter()
+                .enumerate()
+                .fold(0u8, |mask, (base, &q)| {
+                    if reference_base_matches(r, q) {
+                        mask | (1u8 << base)
+                    } else {
+                        mask
+                    }
+                })
+        })
+        .collect();
+    let germline = OneHotSequence::from_masks(&germline_masks);
+
+    let mut informative = 0usize;
+    let mut compatible = 0usize;
+    let mut incompatible_run = 0usize;
+    for i in 0..overlap {
+        let Some((n, ok)) = observed.compatibility_counts(
+            query_start + i,
+            &germline,
+            reference_start + i,
+            1,
+        ) else {
+            incompatible_run = 0;
+            continue;
+        };
+        if n == 0 {
+            incompatible_run = 0;
+            continue;
+        }
+        informative += n;
+        compatible += ok;
+        if ok == 0 {
+            incompatible_run += 1;
+            if incompatible_run >= ANCHOR_GAP_RUN {
+                return None;
+            }
+        } else {
+            incompatible_run = 0;
+        }
+    }
+    if informative == 0 {
+        return None;
+    }
+
+    let incompatible = informative.saturating_sub(compatible);
+    let score = (compatible as i32)
+        .saturating_mul(2)
+        .saturating_sub((incompatible as i32).saturating_mul(2));
+    (score > 0).then_some(LocalAlignment {
+        score,
+        query_start,
+        query_end: query_start + overlap,
+        reference_start,
+        reference_end: reference_start + overlap,
+    })
 }
 
 fn best_vj(

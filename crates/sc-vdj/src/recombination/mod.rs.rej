@@ -1,0 +1,21 @@
+--- crates/sc-vdj/src/recombination/mod.rs
++++ crates/sc-vdj/src/recombination/mod.rs
+@@ -310,9 +311,15 @@
+     // nominated V and J against both the consensus and its reverse complement.
+     // Keep reverse-complement calling only as a fallback for ambiguous/synthetic
+     // evidence where the normal orientation cannot produce a valid V -> J model.
+-    let forward = best_vj(&raw, index, chain, assembled).filter(|(_, va, _, ja, _)| {
+-        va.query_end <= ja.query_start
+-    });
++    // The assembly already carries mapper-derived germline placements.  In the
++    // normal case those placements are still coherent after refinement, so use
++    // them directly instead of locally aligning the finished receptor back to
++    // the same V/J segments merely to confirm them.  A sustained run of six
++    // incompatible informative bases means the coordinate relationship may
++    // contain an indel; only then fall back to the gapped local aligner.
++    let forward = anchored_vj(&raw, index, chain, assembled)
++        .or_else(|| best_vj(&raw, index, chain, assembled))
++        .filter(|(_, va, _, ja, _)| va.query_end <= ja.query_start);
+     let (observed, v_id, v_aln, j_id, j_aln) = if let Some(f) = forward {
+         (raw, f.0, f.1, f.2, f.3)
+     } else {

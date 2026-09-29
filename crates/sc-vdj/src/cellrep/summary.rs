@@ -36,6 +36,8 @@ pub struct GermlineAnchor {
 }
 
 const PACKED_BOOTSTRAP_READS: usize = 50;
+const PACKED_REFINEMENT_READS: usize = 20;
+const MODEL_MIN_EXTENSION: isize = 4;
 const PACKED_STAR_WINDOW_BASES: u32 = 16;
 const PACKED_STAR_WINDOW_MIN_READS: usize = 3;
 
@@ -142,6 +144,53 @@ impl ReceptorSequenceEvidence {
             .iter()
             .find_map(|(x, n)| (*x == id).then_some(*n))
             .unwrap_or(0)
+    }
+
+    /// True once this receptor component has V + J evidence and every
+    /// assembled base is supported by at least `min_depth` observations.
+    pub fn first_pass_finished(&self, index: &VdjIndex, min_depth: u16) -> bool {
+        if self.is_empty() || min_depth == 0 {
+            return false;
+        }
+        let mut has_v = false;
+        let mut has_j = false;
+        for id in self.segment_ids() {
+            match index.segment(id).map(|segment| segment.kind) {
+                Some(crate::index::SegmentKind::V) => has_v = true,
+                Some(crate::index::SegmentKind::J) => has_j = true,
+                _ => {}
+            }
+        }
+        has_v
+            && has_j
+            && (0..self.len()).all(|pos| {
+                self.base_counts
+                    .iter()
+                    .map(|counts| counts.get(pos).copied().unwrap_or(0))
+                    .fold(0u16, u16::saturating_add)
+                    >= min_depth
+            })
+    }
+
+    /// True when this BAM record identifies the same V/J combination as this
+    /// receptor component.  Saturation is tested separately so all matching
+    /// components can be considered together.
+    pub fn matches_vj_segments(
+        &self,
+        index: &VdjIndex,
+        segment_ids: &[SegmentId],
+    ) -> bool {
+        let record_has_matching_v = segment_ids.iter().any(|id| {
+            index.segment(*id).is_some_and(|segment| {
+                segment.kind == crate::index::SegmentKind::V && self.segment_support(*id) > 0
+            })
+        });
+        let record_has_matching_j = segment_ids.iter().any(|id| {
+            index.segment(*id).is_some_and(|segment| {
+                segment.kind == crate::index::SegmentKind::J && self.segment_support(*id) > 0
+            })
+        });
+        record_has_matching_v && record_has_matching_j
     }
 
     /// Packed mapping view of all observed nucleotide states.
@@ -764,6 +813,7 @@ pub(crate) fn consume_chain_features(
 ) {
     let mut pending = Vec::<PendingPackedRead>::with_capacity(PACKED_BOOTSTRAP_READS);
     let mut pending_star_window: Option<(i32, u32)> = None;
+    let mut refinement = std::collections::HashMap::<(Vec<SegmentId>, Vec<SegmentId>), Vec<PendingPackedRead>>::new();
 
     let flush_pending = |pending: &mut Vec<PendingPackedRead>,
                          summaries: &mut Vec<ReceptorSequenceEvidence>| {
@@ -894,10 +944,86 @@ pub(crate) fn consume_chain_features(
             if let Some(read) =
                 PendingPackedRead::from_part(part, &segment_ids, reverse, index, min_overlap, feature.umi.as_deref())
             {
-                pending.push(read);
-                if pending.len() == PACKED_BOOTSTRAP_READS {
-                    flush_pending(&mut pending, summaries);
-                    pending_star_window = None;
+                // Discovery is deliberately unfiltered until an initial model
+                // exists.  Once models exist, route reads matching a known V/J
+                // component through a small model-specific refinement buffer.
+                let target = summaries.iter().position(|summary| {
+                    summary.matches_vj_segments(index, &segment_ids)
+                });
+
+                if let Some(target) = target {
+                    if summaries[target].first_pass_finished(index, 3) {
+                        continue;
+                    }
+
+                    let new_umi = read.umi.as_deref().is_some_and(|umi| {
+                        !summaries[target]
+                            .supporting_umis
+                            .iter()
+                            .any(|known| known.as_slice() == umi)
+                    });
+                    let model_seq = summaries[target].mapping_sequence();
+                    let read_seq = read.mapping_sequence();
+                    let mut useful_extension = false;
+                    for model_anchor in &summaries[target].germline_anchors {
+                        for read_anchor in &read.germline_anchors {
+                            if model_anchor.segment_id != read_anchor.segment_id {
+                                continue;
+                            }
+                            let offset = model_anchor.summary_start - read_anchor.summary_start;
+                            if !known_offset_is_compatible_packed(
+                                &model_seq,
+                                &read_seq,
+                                offset,
+                                min_overlap,
+                                5,
+                            ) {
+                                continue;
+                            }
+                            let read_end = offset + read.packed.size as isize;
+                            useful_extension = offset <= -MODEL_MIN_EXTENSION
+                                || read_end >= summaries[target].len() as isize + MODEL_MIN_EXTENSION;
+                            if useful_extension {
+                                break;
+                            }
+                        }
+                        if useful_extension {
+                            break;
+                        }
+                    }
+
+                    if !new_umi && !useful_extension {
+                        continue;
+                    }
+
+                    let mut v = Vec::new();
+                    let mut j = Vec::new();
+                    for &id in &segment_ids {
+                        match index.segment(id).map(|segment| segment.kind) {
+                            Some(crate::index::SegmentKind::V) => v.push(id),
+                            Some(crate::index::SegmentKind::J) => j.push(id),
+                            _ => {}
+                        }
+                    }
+                    v.sort_unstable();
+                    v.dedup();
+                    j.sort_unstable();
+                    j.dedup();
+                    let buffer = refinement.entry((v, j)).or_default();
+                    buffer.push(read);
+                    if buffer.len() >= PACKED_REFINEMENT_READS {
+                        let incoming: Vec<_> = buffer
+                            .drain(..)
+                            .map(|read| read.into_summary(index))
+                            .collect();
+                        merge_summary_batch(summaries, incoming, index, min_overlap);
+                    }
+                } else {
+                    pending.push(read);
+                    if pending.len() == PACKED_BOOTSTRAP_READS {
+                        flush_pending(&mut pending, summaries);
+                        pending_star_window = None;
+                    }
                 }
             } else {
                 // IUPAC/ambiguous input cannot be represented losslessly in
@@ -918,6 +1044,16 @@ pub(crate) fn consume_chain_features(
     }
 
     flush_pending(&mut pending, summaries);
+    for (_, buffer) in refinement.iter_mut() {
+        if buffer.is_empty() {
+            continue;
+        }
+        let incoming: Vec<_> = buffer
+            .drain(..)
+            .map(|read| read.into_summary(index))
+            .collect();
+        merge_summary_batch(summaries, incoming, index, min_overlap);
+    }
     summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
 }
 

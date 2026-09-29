@@ -278,14 +278,6 @@ impl UnmappedIghSeeds {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChainKneeSelection {
-    pub chain: crate::index::Chain,
-    pub threshold_records: usize,
-    pub evidence_cells: usize,
-    pub selected_cells: usize,
-}
-
 fn bam_umi(record: &bam::Record) -> Option<Vec<u8>> {
     match record.aux(b"UB").ok()? {
         Aux::String(umi) if !umi.is_empty() => Some(umi.as_bytes().to_vec()),
@@ -325,6 +317,9 @@ pub struct BamIngestProgress {
     pub bam_records: usize,
     pub allowed_cell_records: usize,
     pub receptor_overlap_records: usize,
+    pub early_reject_finished_vj: usize,
+    pub early_reject_umi_lt4bp: usize,
+    pub early_admit_new_umi: usize,
     pub unmapped_candidates: usize,
     pub unmapped_igh_admitted: usize,
     pub unmapped_igh_rescued_cells: usize,
@@ -361,11 +356,17 @@ impl UnmappedIghRescueStats {
         bam_records: usize,
         allowed_cell_records: usize,
         receptor_overlap_records: usize,
+        early_reject_finished_vj: usize,
+        early_reject_umi_lt4bp: usize,
+        early_admit_new_umi: usize,
     ) -> BamIngestProgress {
         BamIngestProgress {
             bam_records,
             allowed_cell_records,
             receptor_overlap_records,
+            early_reject_finished_vj,
+            early_reject_umi_lt4bp,
+            early_admit_new_umi,
             unmapped_candidates: self.candidates,
             unmapped_igh_admitted: self.admitted,
             unmapped_igh_rescued_cells: self.rescued_cells.len(),
@@ -519,6 +520,9 @@ impl VdjRunner {
         let mut n = 0usize;
         let mut bam_records = 0usize;
         let mut allowed_cell_records = 0usize;
+        let mut early_reject_finished_vj = 0usize;
+        let mut early_reject_umi_lt4bp = 0usize;
+        let mut early_admit_new_umi = 0usize;
         let mut unmapped_rescue = UnmappedIghRescueStats::default();
         let mut entry = 0u32;
         let mut batch = Vec::<(u64, BamFeatureEvidence)>::with_capacity(EVIDENCE_BATCH_SIZE);
@@ -551,6 +555,14 @@ impl VdjRunner {
             };
             let rec = rec?;
             let cell = resolver.cell(&rec);
+            let umi = rec
+                .aux(b"UB")
+                .ok()
+                .and_then(|aux| match aux {
+                    rust_htslib::bam::record::Aux::String(value) => Some(value.as_bytes().to_vec()),
+                _ => None,
+            });
+
             let query_key = cell.as_ref().map(|cell| {
                 (
                     IntToDna::new(cell.as_bytes()).into_u64(),
@@ -586,7 +598,7 @@ impl VdjRunner {
                     );
                     timing.evidence_processing += processing_started.elapsed();
                     progress(
-                        unmapped_rescue.progress(bam_records, allowed_cell_records, n),
+                        unmapped_rescue.progress(bam_records, allowed_cell_records, n, early_reject_finished_vj, early_reject_umi_lt4bp, early_admit_new_umi),
                         &self.evidence,
                         &self.index,
                     );
@@ -602,7 +614,7 @@ impl VdjRunner {
                     n = n.saturating_add(rescue.admitted);
                     unmapped_rescue.add_assign(rescue);
                     progress(
-                        unmapped_rescue.progress(bam_records, allowed_cell_records, n),
+                        unmapped_rescue.progress(bam_records, allowed_cell_records, n, early_reject_finished_vj, early_reject_umi_lt4bp, early_admit_new_umi),
                         &self.evidence,
                         &self.index,
                     );
@@ -653,11 +665,21 @@ impl VdjRunner {
             let segment_ids = self.index.overlapping(&chr, &blocks);
             let intronic_constant_segments =
                 self.index.intronic_constant_overlapping(&chr, &blocks, 8);
-            let has_rearrangement_segment = segment_ids.iter().any(|id| {
-                self.index
-                    .segment(*id)
-                    .is_some_and(|segment| segment.kind != SegmentKind::C)
-            });
+            let rearrangement_chains: HashSet<_> = segment_ids
+                .iter()
+                .filter_map(|id| self.index.segment(*id))
+                .filter(|segment| segment.kind != SegmentKind::C)
+                .map(|segment| segment.chain)
+                .collect();
+            let admitted_chains = rearrangement_chains;
+
+            // Intronic-C state is independent evidence and must survive even
+            // when every rearrangement chain on this record is already done.
+            if admitted_chains.is_empty() && intronic_constant_segments.is_empty() {
+                continue;
+            }
+
+            let has_rearrangement_segment = !admitted_chains.is_empty();
             // C-exon-only reads are ambiguous: they may belong to a normal
             // rearranged transcript whose fragment simply does not reach J.
             // They neither classify biology nor seed expensive reconstruction.
@@ -686,6 +708,12 @@ impl VdjRunner {
             };
             let mappings = segment_ids
                 .into_iter()
+                .filter(|segment_id| {
+                    self.index.segment(*segment_id).is_some_and(|segment| {
+                        segment.kind == SegmentKind::C
+                            || admitted_chains.contains(&segment.chain)
+                    })
+                })
                 .map(|segment_id| MapperEvidence {
                     segment_id,
                     alignment: geometry.clone(),
@@ -709,7 +737,7 @@ impl VdjRunner {
                 BamFeatureEvidence {
                     id,
                     sequence,
-                    umi: bam_umi(&rec),
+                    umi,
                     mappings,
                     intronic_constant_segments,
                 },
@@ -724,7 +752,7 @@ impl VdjRunner {
                 .consume_batch(batch, &self.index, self.config.min_sequence_overlap);
             timing.evidence_processing += processing_started.elapsed();
             progress(
-                unmapped_rescue.progress(bam_records, allowed_cell_records, n),
+                unmapped_rescue.progress(bam_records, allowed_cell_records, n, early_reject_finished_vj, early_reject_umi_lt4bp, early_admit_new_umi),
                 &self.evidence,
                 &self.index,
             );
@@ -741,7 +769,7 @@ impl VdjRunner {
             n = n.saturating_add(rescue.admitted);
             unmapped_rescue.add_assign(rescue);
             progress(
-                unmapped_rescue.progress(bam_records, allowed_cell_records, n),
+                unmapped_rescue.progress(bam_records, allowed_cell_records, n, early_reject_finished_vj, early_reject_umi_lt4bp, early_admit_new_umi),
                 &self.evidence,
                 &self.index,
             );
@@ -829,97 +857,24 @@ impl VdjRunner {
             self.threads,
         )
     }
-    pub fn receptor_knee_selection(&self) -> Vec<ChainKneeSelection> {
-        crate::index::Chain::ALL
-            .into_iter()
-            .map(|chain| {
-                let mut counts: Vec<usize> = self
-                    .evidence
-                    .cells()
-                    .filter_map(|(_, cell)| {
-                        let v_mappings = cell.segment_mappings(chain, SegmentKind::V);
-                        let j_mappings = cell.segment_mappings(chain, SegmentKind::J);
-                        qualifies_reconstruction_candidate(v_mappings, j_mappings)
-                            .then(|| cell.reconstruction_records(chain))
-                    })
-                    .collect();
-                counts.sort_unstable_by(|a, b| b.cmp(a));
-
-                let threshold_records = receptor_knee_threshold(&counts);
-                let selected_cells = counts
-                    .iter()
-                    .filter(|count| **count >= threshold_records)
-                    .count();
-
-                ChainKneeSelection {
-                    chain,
-                    threshold_records,
-                    evidence_cells: counts.len(),
-                    selected_cells,
-                }
-            })
-            .collect()
-    }
-
-    pub fn identify_with_receptor_knees(
-        &self,
-    ) -> (Vec<(u64, Vec<Recombination>)>, Vec<ChainKneeSelection>) {
-        let selection = self.receptor_knee_selection();
-        let out = self.identify_with_receptor_knee_selection(&selection);
-        (out, selection)
-    }
-
-    pub fn identify_with_receptor_knee_selection(
-        &self,
-        selection: &[ChainKneeSelection],
-    ) -> Vec<(u64, Vec<Recombination>)> {
-        let thresholds: HashMap<_, _> = selection
-            .iter()
-            .map(|x| (x.chain, x.threshold_records))
-            .collect();
-
-        let cells: Vec<_> = self.evidence.cells().collect();
-        let process_cell = |(cell_id, cell): (u64, &CellEvidence)| {
-            let recombinations = cell
-                .chains(&self.index)
-                .into_iter()
-                .filter(|chain| {
-                    let threshold = thresholds.get(chain).copied().unwrap_or(1);
-                    let v_mappings = cell.segment_mappings(*chain, SegmentKind::V);
-                    let j_mappings = cell.segment_mappings(*chain, SegmentKind::J);
+    pub fn receptor_evidence_cells(&self) -> [(crate::index::Chain, usize); 7] {
+        crate::index::Chain::ALL.map(|chain| {
+            let evidence_cells = self
+                .evidence
+                .cells()
+                .filter(|(_, cell)| {
+                    let v_mappings = cell.segment_mappings(chain, SegmentKind::V);
+                    let j_mappings = cell.segment_mappings(chain, SegmentKind::J);
                     qualifies_reconstruction_candidate(v_mappings, j_mappings)
-                        && cell.reconstruction_records(*chain) >= threshold
                 })
-                .flat_map(|chain| {
-                    process_chain_work(ChainWork {
-                        cell,
-                        index: &self.index,
-                        chain,
-                        min_overlap: self.config.min_sequence_overlap,
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            (cell_id, recombinations)
-        };
-
-        let mut out = if self.threads > 1 {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(self.threads)
-                .build()
-                .expect("building sc-vdj Rayon pool")
-                .install(|| cells.into_par_iter().map(process_cell).collect::<Vec<_>>())
-        } else {
-            cells.into_iter().map(process_cell).collect::<Vec<_>>()
-        };
-
-        out.sort_by_key(|x| x.0);
-        out
+                .count();
+            (chain, evidence_cells)
+        })
     }
 
     pub fn identify(&self) -> Vec<(u64, Vec<Recombination>)> {
-        // Library callers keep the unrestricted behavior. The production
-        // nelrune-vdj binary explicitly opts into per-locus knee selection.
+        // Every cell with receptor evidence is allowed into reconstruction;
+        // support depth is reported rather than used as a population-level gate.
         let cells: Vec<_> = self.evidence.cells().collect();
         let process_cell = |(cell_id, cell): (u64, &CellEvidence)| {
             let recombinations = cell
@@ -960,54 +915,11 @@ fn qualifies_reconstruction_candidate(v_mappings: usize, j_mappings: usize) -> b
     v_mappings > 0 && (j_mappings > 0 || v_mappings >= 2)
 }
 
-fn receptor_knee_threshold(counts_desc: &[usize]) -> usize {
-    if counts_desc.is_empty() {
-        return 0;
-    }
-    if counts_desc.len() < 4 || counts_desc[0] == *counts_desc.last().unwrap() {
-        return *counts_desc.last().unwrap();
-    }
-
-    let n = counts_desc.len();
-    let x_max = (n as f64).ln();
-    let y_max = (counts_desc[0] as f64).ln();
-    let y_min = (*counts_desc.last().unwrap() as f64).ln();
-    let y_span = y_max - y_min;
-    if x_max <= 0.0 || y_span <= f64::EPSILON {
-        return *counts_desc.last().unwrap();
-    }
-
-    let mut best_idx = 0usize;
-    let mut best_distance = 0.0f64;
-    for (i, count) in counts_desc
-        .iter()
-        .enumerate()
-        .skip(1)
-        .take(n.saturating_sub(2))
-    {
-        let x = ((i + 1) as f64).ln() / x_max;
-        let y = ((*count as f64).ln() - y_min) / y_span;
-        let distance = (1.0 - x) - y;
-        if distance > best_distance {
-            best_distance = distance;
-            best_idx = i;
-        }
-    }
-
-    // No visible bend: keep every observed cell for this receptor class.
-    if best_idx == 0 || best_distance < 0.05 {
-        return *counts_desc.last().unwrap();
-    }
-
-    // The maximum chord distance lies at the beginning of the low-depth tail.
-    // Keep the last depth immediately before that tail, including all ties.
-    counts_desc[best_idx - 1]
-}
 
 #[cfg(test)]
-mod knee_tests {
+mod runner_tests {
     use super::{
-        qualifies_reconstruction_candidate, receptor_knee_threshold, UnmappedIghSeeds,
+        qualifies_reconstruction_candidate, UnmappedIghSeeds,
         UnmappedReadCandidate, UNMAPPED_IGH_SEED_LEN,
     };
     use crate::cellrep::EvidenceId;
@@ -1094,23 +1006,6 @@ mod knee_tests {
         assert!(!qualifies_reconstruction_candidate(0, 0));
     }
 
-    #[test]
-    fn knee_keeps_sparse_high_depth_head_and_drops_single_read_tail() {
-        let counts = vec![100, 50, 10, 2, 1, 1, 1, 1, 1, 1];
-        assert_eq!(receptor_knee_threshold(&counts), 2);
-    }
-
-    #[test]
-    fn knee_keeps_all_when_distribution_has_no_bend() {
-        let counts = vec![100, 90, 80, 70, 60, 50, 40, 30, 20, 10];
-        assert_eq!(receptor_knee_threshold(&counts), 10);
-    }
-
-    #[test]
-    fn knee_does_not_delete_tiny_receptor_classes() {
-        let counts = vec![5, 2, 1];
-        assert_eq!(receptor_knee_threshold(&counts), 1);
-    }
 }
 
 fn aligned_blocks(record: &bam::Record) -> Vec<(u32, u32)> {

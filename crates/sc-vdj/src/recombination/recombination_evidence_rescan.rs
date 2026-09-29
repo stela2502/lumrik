@@ -388,6 +388,11 @@ impl RescanEvidenceVdj {
     }
 }
 
+#[inline]
+fn second_pass_finished(recombination: &Recombination) -> bool {
+    recombination.constant.is_some()
+}
+
 pub(crate) fn rescue_missing_constants_from_bam<P: AsRef<Path>, R: BamIdentityResolver>(
     path: P,
     resolver: &R,
@@ -486,7 +491,7 @@ where
         for (call_index, recombination) in recombinations.iter().enumerate() {
             // The rescan exists only to recover a missing constant region.
             // Complete cell × locus calls must not seed a second BAM pass.
-            if recombination.constant.is_some() {
+            if second_pass_finished(recombination) {
                 continue;
             }
             let Some(bait) = receptor_bait(index, recombination) else {

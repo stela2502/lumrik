@@ -184,6 +184,19 @@ impl CellEvidenceVdj {
     pub fn get(&self, cell_id: &u64) -> Option<&CellEvidence> {
         self.cells.get_cell(cell_id)
     }
+
+    pub fn first_pass_finished_for_segments(
+        &self,
+        cell_id: u64,
+        chain: Chain,
+        index: &VdjIndex,
+        segment_ids: &[SegmentId],
+        min_depth: u16,
+    ) -> bool {
+        self.get(&cell_id).is_some_and(|cell| {
+            cell.first_pass_finished_for_segments(chain, index, segment_ids, min_depth)
+        })
+    }
     pub fn cell_count(&self) -> usize {
         self.cells.cell_count()
     }
@@ -207,6 +220,27 @@ impl CellEvidence {
 
     pub fn summaries_for_chain(&self, chain: Chain) -> &[ReceptorSequenceEvidence] {
         self.summaries.get(&chain).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// First-pass admission test for one mapped BAM record.  This is
+    /// receptor-component aware rather than a whole-locus switch so a second
+    /// V/J recombination at the same locus can still be discovered.
+    pub fn first_pass_finished_for_segments(
+        &self,
+        chain: Chain,
+        index: &VdjIndex,
+        segment_ids: &[SegmentId],
+        min_depth: u16,
+    ) -> bool {
+        let matching: Vec<_> = self
+            .summaries_for_chain(chain)
+            .iter()
+            .filter(|summary| summary.matches_vj_segments(index, segment_ids))
+            .collect();
+        !matching.is_empty()
+            && matching
+                .into_iter()
+                .all(|summary| summary.first_pass_finished(index, min_depth))
     }
 
     pub fn summary_count(&self) -> usize {

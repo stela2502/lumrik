@@ -85,6 +85,9 @@ struct VdjRunStatus {
     bam_records: usize,
     allowed_cell_records: usize,
     receptor_overlap_records: usize,
+    early_reject_finished_vj: usize,
+    early_reject_umi_lt4bp: usize,
+    early_admit_new_umi: usize,
     unmapped_candidates: usize,
     unmapped_igh_admitted: usize,
     unmapped_igh_rescued_cells: usize,
@@ -113,9 +116,7 @@ struct VdjRunStatus {
     productive: usize,
     mean_calls_per_cell: f64,
     calls_by_chain: [usize; 7],
-    knee_thresholds: [usize; 7],
-    knee_evidence_cells: [usize; 7],
-    knee_selected_cells: [usize; 7],
+    receptor_evidence_cells: [usize; 7],
 
     rescan_records: usize,
     rescan_wanted_records: usize,
@@ -146,6 +147,9 @@ impl VdjRunStatus {
             bam_records: 0,
             allowed_cell_records: 0,
             receptor_overlap_records: 0,
+            early_reject_finished_vj: 0,
+            early_reject_umi_lt4bp: 0,
+            early_admit_new_umi: 0,
             unmapped_candidates: 0,
             unmapped_igh_admitted: 0,
             unmapped_igh_rescued_cells: 0,
@@ -173,9 +177,7 @@ impl VdjRunStatus {
             productive: 0,
             mean_calls_per_cell: 0.0,
             calls_by_chain: [0; 7],
-            knee_thresholds: [0; 7],
-            knee_evidence_cells: [0; 7],
-            knee_selected_cells: [0; 7],
+            receptor_evidence_cells: [0; 7],
             rescan_records: 0,
             rescan_wanted_records: 0,
             rescan_batches: 0,
@@ -324,59 +326,22 @@ impl ServerContent for VdjRunStatus {
                     vec![
                         StatusMetric::new("Stage time", self.phase_time(2)),
                         StatusMetric::new(
-                            "IGH knee",
-                            format_knee(
-                                self.knee_thresholds[0],
-                                self.knee_selected_cells[0],
-                                self.knee_evidence_cells[0],
-                            ),
-                        ),
-                        StatusMetric::new(
-                            "IGK knee",
-                            format_knee(
-                                self.knee_thresholds[1],
-                                self.knee_selected_cells[1],
-                                self.knee_evidence_cells[1],
-                            ),
-                        ),
-                        StatusMetric::new(
-                            "IGL knee",
-                            format_knee(
-                                self.knee_thresholds[2],
-                                self.knee_selected_cells[2],
-                                self.knee_evidence_cells[2],
-                            ),
-                        ),
-                        StatusMetric::new(
-                            "TRA knee",
-                            format_knee(
-                                self.knee_thresholds[3],
-                                self.knee_selected_cells[3],
-                                self.knee_evidence_cells[3],
-                            ),
-                        ),
-                        StatusMetric::new(
-                            "TRB knee",
-                            format_knee(
-                                self.knee_thresholds[4],
-                                self.knee_selected_cells[4],
-                                self.knee_evidence_cells[4],
-                            ),
-                        ),
-                        StatusMetric::new(
-                            "TRG / TRD knee",
+                            "IGH / IGK / IGL evidence cells",
                             format!(
-                                "{} / {}",
-                                format_knee(
-                                    self.knee_thresholds[5],
-                                    self.knee_selected_cells[5],
-                                    self.knee_evidence_cells[5]
-                                ),
-                                format_knee(
-                                    self.knee_thresholds[6],
-                                    self.knee_selected_cells[6],
-                                    self.knee_evidence_cells[6]
-                                )
+                                "{} / {} / {}",
+                                self.receptor_evidence_cells[0],
+                                self.receptor_evidence_cells[1],
+                                self.receptor_evidence_cells[2],
+                            ),
+                        ),
+                        StatusMetric::new(
+                            "TRA / TRB / TRG / TRD evidence cells",
+                            format!(
+                                "{} / {} / {} / {}",
+                                self.receptor_evidence_cells[3],
+                                self.receptor_evidence_cells[4],
+                                self.receptor_evidence_cells[5],
+                                self.receptor_evidence_cells[6],
                             ),
                         ),
                         StatusMetric::new(
@@ -554,12 +519,6 @@ fn format_count_pct(count: usize, denominator: usize) -> String {
     format!("{count} ({pct:.1}%)")
 }
 
-fn format_knee(threshold: usize, selected: usize, observed: usize) -> String {
-    if observed == 0 {
-        return "no evidence".to_string();
-    }
-    format!(">={threshold} reads · {selected}/{observed} cells")
-}
 
 fn preliminary_cell_ids(exonic: Option<&Path>) -> Result<Option<HashSet<u64>>> {
     let Some(path) = exonic else {
@@ -641,6 +600,9 @@ fn sync_evidence_status(
         state.bam_records = progress.bam_records;
         state.allowed_cell_records = progress.allowed_cell_records;
         state.receptor_overlap_records = progress.receptor_overlap_records;
+        state.early_reject_finished_vj = progress.early_reject_finished_vj;
+        state.early_reject_umi_lt4bp = progress.early_reject_umi_lt4bp;
+        state.early_admit_new_umi = progress.early_admit_new_umi;
         state.unmapped_candidates = progress.unmapped_candidates;
         state.unmapped_igh_admitted = progress.unmapped_igh_admitted;
         state.unmapped_igh_rescued_cells = progress.unmapped_igh_rescued_cells;
@@ -761,12 +723,14 @@ fn write_run_summary_yaml(path: &Path, state: &VdjRunStatus) -> Result<()> {
     writeln!(w, "  intronic_c_cells: {}", state.igh_intronic_c_cells)?;
     writeln!(w, "  intronic_c_records: {}", state.igh_intronic_c_records)?;
 
-    writeln!(w, "knees:")?;
+    writeln!(w, "receptor_evidence_cells:")?;
     for (slot, chain) in Chain::ALL.into_iter().enumerate() {
-        writeln!(w, "  {}:", chain.to_string())?;
-        writeln!(w, "    threshold_records: {}", state.knee_thresholds[slot])?;
-        writeln!(w, "    evidence_cells: {}", state.knee_evidence_cells[slot])?;
-        writeln!(w, "    selected_cells: {}", state.knee_selected_cells[slot])?;
+        writeln!(
+            w,
+            "  {}: {}",
+            chain.to_string(),
+            state.receptor_evidence_cells[slot]
+        )?;
     }
 
     writeln!(w, "calls:")?;
@@ -943,37 +907,26 @@ pub fn run() -> Result<()> {
     mapping_info.file_io_time += initial_timing.bam_read;
     mapping_info.multi_processor_time += initial_timing.evidence_processing;
 
-    let knee_selection = runner.receptor_knee_selection();
+    let receptor_evidence = runner.receptor_evidence_cells();
     update_status(&status, |state| {
-        for selection in &knee_selection {
-            let slot = chain_slot(selection.chain);
-            state.knee_thresholds[slot] = selection.threshold_records;
-            state.knee_evidence_cells[slot] = selection.evidence_cells;
-            state.knee_selected_cells[slot] = selection.selected_cells;
+        for (chain, evidence_cells) in receptor_evidence {
+            state.receptor_evidence_cells[chain_slot(chain)] = evidence_cells;
         }
     });
 
     advance_stage(&status, 2, "2/3 reconstructing cell-specific receptors");
     mapping_info.start_counter();
     mapping_info.start_timer("vdj.recombination_calling");
-    let mut calls = runner.identify_with_receptor_knee_selection(&knee_selection);
-    for selection in &knee_selection {
+    let mut calls = runner.identify();
+    for (chain, evidence_cells) in receptor_evidence {
         let prefix = format!(
-            "vdj.knee.{}",
-            selection.chain.to_string().to_ascii_lowercase()
+            "vdj.evidence.{}",
+            chain.to_string().to_ascii_lowercase()
         );
-        mapping_info.report_n(
-            format!("{prefix}.threshold_records"),
-            selection.threshold_records,
-        );
-        mapping_info.report_n(format!("{prefix}.evidence_cells"), selection.evidence_cells);
-        mapping_info.report_n(format!("{prefix}.selected_cells"), selection.selected_cells);
+        mapping_info.report_n(format!("{prefix}.cells"), evidence_cells);
         eprintln!(
-            "[nelrune vdj] {} V/J knee: >= {} reads; {}/{} evidence cell(s) selected",
-            selection.chain,
-            selection.threshold_records,
-            selection.selected_cells,
-            selection.evidence_cells
+            "[nelrune vdj] {} receptor evidence: {} cell(s); all retained",
+            chain, evidence_cells
         );
     }
     mapping_info.stop_timer("vdj.recombination_calling");
@@ -1083,6 +1036,18 @@ pub fn run() -> Result<()> {
         .read()
         .expect("reading VDJ status after BAM ingestion")
         .clone();
+    mapping_info.report_n(
+        "vdj.early_reject.finished_vj",
+        ingest_status.early_reject_finished_vj,
+    );
+    mapping_info.report_n(
+        "vdj.early_reject.umi_lt4bp",
+        ingest_status.early_reject_umi_lt4bp,
+    );
+    mapping_info.report_n(
+        "vdj.early_admit.new_umi",
+        ingest_status.early_admit_new_umi,
+    );
     mapping_info.report_n("vdj.unmapped_candidates", ingest_status.unmapped_candidates);
     mapping_info.report_n(
         "vdj.unmapped_igh_admitted",
