@@ -23,6 +23,147 @@ const RESCAN_PROGRESS_EVERY_BAM_RECORDS: usize = 100_000;
 const MIN_JUNCTION_OVERLAP: usize = 8;
 const MIN_REFINE_DEPTH: u32 = 3;
 
+#[derive(Debug, Clone)]
+struct RescanFetchRegion {
+    chromosome: String,
+    start: u32,
+    end: u32,
+}
+
+fn merged_rescan_fetch_regions(
+    index: &VdjIndex,
+    wanted_chains: &BTreeSet<Chain>,
+) -> Vec<RescanFetchRegion> {
+    let mut by_chr = HashMap::<String, Vec<(u32, u32)>>::new();
+    for segment in &index.segments {
+        if wanted_chains.contains(&segment.chain) {
+            by_chr
+                .entry(segment.chromosome.clone())
+                .or_default()
+                .push((segment.start, segment.end));
+        }
+    }
+
+    let mut out = Vec::new();
+    for (chromosome, mut spans) in by_chr {
+        spans.sort_unstable_by_key(|&(start, end)| (start, end));
+        let mut merged = Vec::<(u32, u32)>::new();
+        for (start, end) in spans {
+            if let Some(last) = merged.last_mut() {
+                if start <= last.1 {
+                    last.1 = last.1.max(end);
+                    continue;
+                }
+            }
+            merged.push((start, end));
+        }
+        out.extend(merged.into_iter().map(|(start, end)| RescanFetchRegion {
+            chromosome: chromosome.clone(),
+            start,
+            end,
+        }));
+    }
+    out.sort_by(|a, b| (&a.chromosome, a.start, a.end).cmp(&(&b.chromosome, b.start, b.end)));
+    out
+}
+
+enum RescanBamInput {
+    Sequential(bam::Reader),
+    Indexed {
+        reader: bam::IndexedReader,
+        regions: Vec<RescanFetchRegion>,
+        next_region: usize,
+        active_region: bool,
+        unmapped_started: bool,
+        done: bool,
+    },
+}
+
+impl RescanBamInput {
+    fn open(path: &Path, index: &VdjIndex, wanted_chains: &BTreeSet<Chain>) -> Result<Self> {
+        match bam::IndexedReader::from_path(path) {
+            Ok(reader) => Ok(Self::Indexed {
+                reader,
+                regions: merged_rescan_fetch_regions(index, wanted_chains),
+                next_region: 0,
+                active_region: false,
+                unmapped_started: false,
+                done: false,
+            }),
+            Err(_) => Ok(Self::Sequential(
+                bam::Reader::from_path(path)
+                    .with_context(|| format!("opening {} for VDJ evidence rescan", path.display()))?,
+            )),
+        }
+    }
+
+    fn set_threads(&mut self, threads: usize) -> Result<()> {
+        match self {
+            Self::Sequential(reader) => reader.set_threads(threads),
+            Self::Indexed { reader, .. } => reader.set_threads(threads),
+        }
+        .context("configuring multithreaded BAM decoding for VDJ evidence rescan")
+    }
+
+    fn header(&self) -> bam::HeaderView {
+        match self {
+            Self::Sequential(reader) => reader.header().to_owned(),
+            Self::Indexed { reader, .. } => reader.header().to_owned(),
+        }
+    }
+
+    fn next_record(&mut self, record: &mut bam::Record) -> Option<Result<()>> {
+        match self {
+            Self::Sequential(reader) => reader.read(record).map(|result| result.map_err(Into::into)),
+            Self::Indexed {
+                reader,
+                regions,
+                next_region,
+                active_region,
+                unmapped_started,
+                done,
+            } => loop {
+                if *done {
+                    return None;
+                }
+                if *active_region {
+                    if let Some(result) = reader.read(record) {
+                        return Some(result.context("reading indexed V(D)J confirmation region"));
+                    }
+                    *active_region = false;
+                }
+                if *next_region < regions.len() {
+                    let region = &regions[*next_region];
+                    *next_region += 1;
+                    if reader
+                        .fetch((
+                            region.chromosome.as_bytes(),
+                            region.start as i64,
+                            region.end as i64,
+                        ))
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    *active_region = true;
+                    continue;
+                }
+                if !*unmapped_started {
+                    *unmapped_started = true;
+                    if reader.fetch(bam::FetchDefinition::Unmapped).is_err() {
+                        *done = true;
+                        return None;
+                    }
+                    *active_region = true;
+                    continue;
+                }
+                *done = true;
+                return None;
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ReceptorTarget {
     call_group: usize,
@@ -542,7 +683,7 @@ where
     let mut constant_mapper = FastLocusMapper::new().with_min_hits(4);
     let mut constant_targets = Vec::<SegmentId>::new();
     let mut seen_constants = BTreeSet::<SegmentId>::new();
-    for chain in wanted_chains {
+    for &chain in &wanted_chains {
         for segment in index.segments_for(chain, SegmentKind::C) {
             if !seen_constants.insert(segment.id) {
                 continue;
@@ -564,16 +705,9 @@ where
         return Ok(report);
     }
 
-    let mut reader = bam::Reader::from_path(path.as_ref()).with_context(|| {
-        format!(
-            "opening {} for VDJ evidence rescan",
-            path.as_ref().display()
-        )
-    })?;
+    let mut reader = RescanBamInput::open(path.as_ref(), index, &wanted_chains)?;
     if threads > 1 {
-        reader
-            .set_threads(threads)
-            .context("configuring multithreaded BAM decoding for VDJ evidence rescan")?;
+        reader.set_threads(threads)?;
     }
     let mut evidence = RescanEvidenceVdj::default();
     let mut batch = Vec::<(u64, RescanRecord)>::with_capacity(RESCAN_EVIDENCE_BATCH_SIZE);
@@ -581,23 +715,23 @@ where
     let mut current_fragment_id = 0u64;
     let mut next_fragment_id = 0u64;
 
-    // This is intentionally a true second pass: reopen the BAM and visit every
-    // record to EOF. Expensive recombination/constant matching is restricted to
-    // cells that already have reconstructed calls, but the BAM denominator and
-    // live progress always reflect the complete file scan.
-    let header = reader.header().to_owned();
-    let mut records = reader.records();
+    // Indexed BAMs only visit V(D)J regions for chains that still need
+    // confirmation, followed by the unmapped bin. Unindexed BAMs retain the
+    // complete sequential pass. Every mapped record still goes through the
+    // normal V(D)J overlap gate below.
+    let header = reader.header();
+    let mut record = bam::Record::new();
     loop {
         if max_bam_records.is_some_and(|limit| report.bam_records_scanned >= limit) {
             break;
         }
         let read_started = Instant::now();
-        let next = records.next();
+        let next = reader.next_record(&mut record);
         report.bam_read_time += read_started.elapsed();
-        let Some(record) = next else {
+        let Some(result) = next else {
             break;
         };
-        let record = record?;
+        result?;
         report.bam_records_scanned += 1;
         if report.bam_records_scanned % RESCAN_PROGRESS_EVERY_BAM_RECORDS == 0 {
             let (
@@ -634,19 +768,18 @@ where
         // when it overlaps V/D/J or C sequence from a chain for which this cell
         // still lacks constant-region evidence.
         let tid = record.tid();
-        if tid < 0 {
-            continue;
-        }
-        let chr = String::from_utf8_lossy(header.tid2name(tid as u32));
-        let blocks = aligned_blocks(&record);
-        let segment_ids = index.overlapping(&chr, &blocks);
-        let needed = segment_ids.iter().any(|id| {
-            index
-                .segment(*id)
-                .is_some_and(|segment| needed_chains.contains(&segment.chain))
-        });
-        if !needed {
-            continue;
+        if tid >= 0 {
+            let chr = String::from_utf8_lossy(header.tid2name(tid as u32));
+            let blocks = aligned_blocks(&record);
+            let segment_ids = index.overlapping(&chr, &blocks);
+            let needed = segment_ids.iter().any(|id| {
+                index
+                    .segment(*id)
+                    .is_some_and(|segment| needed_chains.contains(&segment.chain))
+            });
+            if !needed {
+                continue;
+            }
         }
         report.wanted_cell_records += 1;
 

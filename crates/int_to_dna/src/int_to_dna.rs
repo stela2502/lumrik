@@ -229,7 +229,7 @@ impl IntToDna {
             b'G' | b'g' => Ok(G),
             b'T' | b't' => Ok(T),
             b'N' | b'n' => Ok(A), // this is necessary as we can not even load a N containing sequence
-            _ => Err("cannot encode {c} into 2 bit encoding".to_string()),
+            _ => Err(format!("cannot encode {:?} (0x{c:02x}) into 2 bit encoding", c as char)),
         }
     }
 

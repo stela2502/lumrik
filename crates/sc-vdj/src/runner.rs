@@ -25,6 +25,146 @@ const UNMAPPED_IGH_MIN_J_SEED_SPAN: usize = UNMAPPED_IGH_SEED_LEN;
 const UNMAPPED_IGH_MIN_HARVEST_SEEDS: usize = 2;
 const UNMAPPED_CANDIDATE_BATCH_SIZE: usize = 100_000;
 
+#[derive(Debug, Clone)]
+struct BamFetchRegion {
+    chromosome: String,
+    start: u32,
+    end: u32,
+}
+
+fn merged_vdj_fetch_regions(index: &VdjIndex) -> Vec<BamFetchRegion> {
+    let mut by_chr = HashMap::<String, Vec<(u32, u32)>>::new();
+    for segment in &index.segments {
+        by_chr
+            .entry(segment.chromosome.clone())
+            .or_default()
+            .push((segment.start, segment.end));
+    }
+
+    let mut out = Vec::new();
+    for (chromosome, mut spans) in by_chr {
+        spans.sort_unstable_by_key(|&(start, end)| (start, end));
+        let mut merged = Vec::<(u32, u32)>::new();
+        for (start, end) in spans {
+            if let Some(last) = merged.last_mut() {
+                if start <= last.1 {
+                    last.1 = last.1.max(end);
+                    continue;
+                }
+            }
+            merged.push((start, end));
+        }
+        out.extend(merged.into_iter().map(|(start, end)| BamFetchRegion {
+            chromosome: chromosome.clone(),
+            start,
+            end,
+        }));
+    }
+    out.sort_by(|a, b| (&a.chromosome, a.start, a.end).cmp(&(&b.chromosome, b.start, b.end)));
+    out
+}
+
+enum BamInput {
+    Sequential(bam::Reader),
+    Indexed {
+        reader: bam::IndexedReader,
+        regions: Vec<BamFetchRegion>,
+        next_region: usize,
+        active_region: bool,
+        unmapped_started: bool,
+        done: bool,
+    },
+}
+
+impl BamInput {
+    fn open(path: &Path, index: &VdjIndex) -> Result<Self> {
+        match bam::IndexedReader::from_path(path) {
+            Ok(reader) => Ok(Self::Indexed {
+                reader,
+                regions: merged_vdj_fetch_regions(index),
+                next_region: 0,
+                active_region: false,
+                unmapped_started: false,
+                done: false,
+            }),
+            Err(_) => Ok(Self::Sequential(
+                bam::Reader::from_path(path)
+                    .with_context(|| format!("opening {}", path.display()))?,
+            )),
+        }
+    }
+
+    fn set_threads(&mut self, threads: usize) -> Result<()> {
+        match self {
+            Self::Sequential(reader) => reader.set_threads(threads),
+            Self::Indexed { reader, .. } => reader.set_threads(threads),
+        }
+        .context("configuring multithreaded BAM decoding")
+    }
+
+    fn header(&self) -> bam::HeaderView {
+        match self {
+            Self::Sequential(reader) => reader.header().to_owned(),
+            Self::Indexed { reader, .. } => reader.header().to_owned(),
+        }
+    }
+
+    fn next_record(&mut self, record: &mut bam::Record) -> Option<Result<()>> {
+        match self {
+            Self::Sequential(reader) => reader.read(record).map(|result| result.map_err(Into::into)),
+            Self::Indexed {
+                reader,
+                regions,
+                next_region,
+                active_region,
+                unmapped_started,
+                done,
+            } => loop {
+                if *done {
+                    return None;
+                }
+                if *active_region {
+                    if let Some(result) = reader.read(record) {
+                        return Some(result.context("reading indexed V(D)J BAM region"));
+                    }
+                    *active_region = false;
+                }
+                if *next_region < regions.len() {
+                    let region = &regions[*next_region];
+                    *next_region += 1;
+                    if reader
+                        .fetch((
+                            region.chromosome.as_bytes(),
+                            region.start as i64,
+                            region.end as i64,
+                        ))
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    *active_region = true;
+                    continue;
+                }
+                if !*unmapped_started {
+                    *unmapped_started = true;
+                    if let Err(error) = reader.fetch(bam::FetchDefinition::Unmapped) {
+                        eprintln!(
+                            "[nelrune vdj] indexed BAM unmapped fetch unavailable; skipping unmapped IGH rescue: {}",
+                            error
+                        );
+                        *done = true;
+                        return None;
+                    }
+                    *active_region = true;
+                    continue;
+                }
+                *done = true;
+                return None;
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BamIngestTiming {
     pub bam_read: Duration,
@@ -290,10 +430,25 @@ pub trait BamIdentityResolver {
 }
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NelruneIdentityResolver;
+fn normalize_bam_cell_barcode(cell: &str) -> &str {
+    // Cell Ranger appends the GEM-group identifier to corrected CB tags
+    // (for example ACGT...-1).  Lumrik stores DNA barcodes as 2-bit values,
+    // so keep only the DNA barcode while accepting any numeric GEM group.
+    if let Some((barcode, gem_group)) = cell.rsplit_once('-') {
+        if !barcode.is_empty()
+            && !gem_group.is_empty()
+            && gem_group.bytes().all(|base| base.is_ascii_digit())
+        {
+            return barcode;
+        }
+    }
+    cell
+}
+
 impl BamIdentityResolver for NelruneIdentityResolver {
     fn cell(&self, record: &bam::Record) -> Option<String> {
         if let Ok(Aux::String(s)) = record.aux(b"CB") {
-            return Some(s.to_string());
+            return Some(normalize_bam_cell_barcode(s).to_string());
         }
         let fields: Vec<_> = record.qname().split(|b| *b == b'|').collect();
         decode_hex_ascii(fields.get(1).copied()?)
@@ -503,14 +658,11 @@ impl VdjRunner {
         R: BamIdentityResolver,
         F: FnMut(BamIngestProgress, &CellEvidenceVdj, &VdjIndex),
     {
-        let mut reader = bam::Reader::from_path(path.as_ref())
-            .with_context(|| format!("opening {}", path.as_ref().display()))?;
+        let mut reader = BamInput::open(path.as_ref(), &self.index)?;
         if self.threads > 1 {
-            reader
-                .set_threads(self.threads)
-                .context("configuring multithreaded BAM decoding")?;
+            reader.set_threads(self.threads)?;
         }
-        let header = reader.header().to_owned();
+        let header = reader.header();
         let mut n = 0usize;
         let mut bam_records = 0usize;
         let mut allowed_cell_records = 0usize;
@@ -536,15 +688,15 @@ impl VdjRunner {
         let mut current_evidence_id: Option<EvidenceId> = None;
         let mut timing = BamIngestTiming::default();
 
-        let mut records = reader.records();
+        let mut rec = bam::Record::new();
         loop {
             let read_started = Instant::now();
-            let next = records.next();
+            let next = reader.next_record(&mut rec);
             timing.bam_read += read_started.elapsed();
-            let Some(rec) = next else {
+            let Some(result) = next else {
                 break;
             };
-            let rec = rec?;
+            result?;
             let cell = resolver.cell(&rec);
             let umi = rec
                 .aux(b"UB")
