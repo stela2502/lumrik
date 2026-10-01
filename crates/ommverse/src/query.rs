@@ -8,6 +8,8 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Entity {
     Gene,
+    Transcript,
+    Protein,
     Variant,
 }
 
@@ -21,13 +23,14 @@ pub enum Value {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Predicate {
     Eq { field: String, value: Value },
+    In { field: String, values: Vec<Value> },
     IsNull { field: String, negated: bool },
 }
 
 impl Predicate {
-    fn field(&self) -> &str {
+    pub(crate) fn field(&self) -> &str {
         match self {
-            Self::Eq { field, .. } | Self::IsNull { field, .. } => field,
+            Self::Eq { field, .. } | Self::In { field, .. } | Self::IsNull { field, .. } => field,
         }
     }
 }
@@ -52,8 +55,10 @@ impl Query {
         let entity_text = input[7..where_at].trim();
         let entity = match entity_text.to_ascii_lowercase().as_str() {
             "gene" | "genes" => Entity::Gene,
+            "transcript" | "transcripts" => Entity::Transcript,
+            "protein" | "proteins" => Entity::Protein,
             "variant" | "variants" => Entity::Variant,
-            other => bail!("unsupported SELECT entity '{other}' (currently: gene, variant)"),
+            other => bail!("unsupported SELECT entity '{other}' (currently: gene, transcript, protein, variant)"),
         };
 
         let where_text = &input[where_at + 7..];
@@ -80,14 +85,68 @@ fn parse_predicate(clause: &str) -> Result<Predicate> {
             return Ok(Predicate::IsNull { field, negated });
         }
     }
+    if let Some(in_at) = find_keyword_outside_quotes(clause, " IN ") {
+        let field = clause[..in_at].trim().to_ascii_lowercase();
+        if field.is_empty() {
+            bail!("empty field in WHERE clause");
+        }
+        let raw_values = clause[in_at + 4..].trim();
+        if raw_values.is_empty() {
+            bail!("IN requires at least one value");
+        }
+        let values = split_commas(raw_values)
+            .into_iter()
+            .map(|raw| parse_value(raw.trim()))
+            .collect::<Result<Vec<_>>>()?;
+        if values.is_empty() {
+            bail!("IN requires at least one value");
+        }
+        return Ok(Predicate::In { field, values });
+    }
+
     let (field, raw_value) = clause
         .split_once('=')
-        .with_context(|| format!("expected field = value or field IS [NOT] NULL in '{clause}'"))?;
+        .with_context(|| format!("expected field = value, field IN value[, value...], or field IS [NOT] NULL in '{clause}'"))?;
     let field = field.trim().to_ascii_lowercase();
     if field.is_empty() {
         bail!("empty field in WHERE clause");
     }
     Ok(Predicate::Eq { field, value: parse_value(raw_value.trim())? })
+}
+
+fn find_keyword_outside_quotes(input: &str, keyword: &str) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let mut quoted = false;
+    let mut i = 0usize;
+    while i + keyword.len() <= bytes.len() {
+        if bytes[i] == b'"' {
+            quoted = !quoted;
+            i += 1;
+            continue;
+        }
+        if !quoted && input[i..i + keyword.len()].eq_ignore_ascii_case(keyword) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn split_commas(input: &str) -> Vec<&str> {
+    let bytes = input.as_bytes();
+    let mut values = Vec::new();
+    let mut start = 0usize;
+    let mut quoted = false;
+    for (i, byte) in bytes.iter().enumerate() {
+        if *byte == b'"' {
+            quoted = !quoted;
+        } else if *byte == b',' && !quoted {
+            values.push(&input[start..i]);
+            start = i + 1;
+        }
+    }
+    values.push(&input[start..]);
+    values
 }
 
 fn split_and(input: &str) -> Vec<&str> {
@@ -184,8 +243,45 @@ impl fmt::Display for GeneRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptRow {
+    pub transcript_id: usize,
+    pub gene_id: usize,
+    pub names: Vec<String>,
+    pub chromosome: String,
+    pub strand: String,
+    pub transcript_bases: usize,
+    pub cds_bases: usize,
+}
+
+impl fmt::Display for TranscriptRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}", self.transcript_id, self.gene_id, self.names.join(","), self.chromosome, self.strand, self.transcript_bases, self.cds_bases)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProteinRow {
+    pub protein_id: usize,
+    pub accession: String,
+    pub entry_name: String,
+    pub name: String,
+    pub gene_symbol: String,
+    pub ensembl_protein: Option<String>,
+    pub transcript_ids: Vec<usize>,
+    pub feature_count: usize,
+}
+
+impl fmt::Display for ProteinRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", self.protein_id, self.accession, self.entry_name, self.name, self.gene_symbol, self.ensembl_protein.as_deref().unwrap_or("."), self.transcript_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","), self.feature_count)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryRow {
     Gene(GeneRow),
+    Transcript(TranscriptRow),
+    Protein(ProteinRow),
     Variant(VariantRow),
 }
 
@@ -193,6 +289,8 @@ impl fmt::Display for QueryRow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Gene(row) => row.fmt(f),
+            Self::Transcript(row) => row.fmt(f),
+            Self::Protein(row) => row.fmt(f),
             Self::Variant(row) => row.fmt(f),
         }
     }
@@ -202,24 +300,43 @@ pub fn execute(omm: &Ommverse, query: &Query) -> Result<Vec<QueryRow>> {
     match query.entity {
         Entity::Gene => execute_gene_query(omm, query)
             .map(|rows| rows.into_iter().map(QueryRow::Gene).collect()),
+        Entity::Transcript => execute_transcript_query(omm, query)
+            .map(|rows| rows.into_iter().map(QueryRow::Transcript).collect()),
+        Entity::Protein => execute_protein_query(omm, query)
+            .map(|rows| rows.into_iter().map(QueryRow::Protein).collect()),
         Entity::Variant => execute_variant_query(omm, query)
             .map(|rows| rows.into_iter().map(QueryRow::Variant).collect()),
     }
 }
 
 fn execute_gene_query(omm: &Ommverse, query: &Query) -> Result<Vec<GeneRow>> {
-    let chromosome = text_predicate(query, "chromosome")
-        .or_else(|| text_predicate(query, "chrom"))
-        .or_else(|| text_predicate(query, "chr"))
-        .context("gene query requires chromosome = \"...\"")?;
-    let (start1, end1) = position_predicate_for(query, "gene")?;
-
     for predicate in &query.predicates {
         match predicate.field() {
-            "chromosome" | "chrom" | "chr" | "position" | "pos" => {}
+            "name" | "id" | "symbol" | "chromosome" | "chrom" | "chr" | "position" | "pos" => {}
             other => bail!("gene field '{other}' is not searchable yet"),
         }
     }
+
+    let identities = text_predicate_values(query, &["name", "id", "symbol"])?;
+    if !identities.is_empty() {
+        let mut gene_ids = Vec::new();
+        for name in identities {
+            let gene = omm
+                .gene(name)
+                .or_else(|| omm.gene_for_protein(name))
+                .with_context(|| format!("identity '{name}' does not resolve to a gene"))?;
+            gene_ids.push(gene.id);
+        }
+        gene_ids.sort_unstable();
+        gene_ids.dedup();
+        return gene_ids.into_iter().map(|gene_id| gene_row(omm, gene_id)).collect();
+    }
+
+    let chromosome = text_predicate(query, "chromosome")
+        .or_else(|| text_predicate(query, "chrom"))
+        .or_else(|| text_predicate(query, "chr"))
+        .context("gene query requires name = \"...\" or chromosome = \"...\" with position = N|START:END")?;
+    let (start1, end1) = position_predicate_for(query, "gene")?;
 
     let chr_id = omm.splice.chr_id(chromosome)
         .with_context(|| format!("chromosome '{chromosome}' not present in splice index"))?;
@@ -268,6 +385,75 @@ fn execute_gene_query(omm: &Ommverse, query: &Query) -> Result<Vec<GeneRow>> {
     }
     rows.sort_by_key(|row| (row.start, row.end, row.gene_id));
     Ok(rows)
+}
+
+fn gene_row(omm: &Ommverse, gene_id: usize) -> Result<GeneRow> {
+    let gene = omm.splice.genes.get(gene_id).context("gene id outside splice index")?;
+    let mut span_start = u32::MAX;
+    let mut span_end = 0u32;
+    let mut chr_id = None;
+    let mut strand = None;
+    for &tx_id in gene.transcript_ids() {
+        let tx = &omm.splice.transcripts[tx_id];
+        chr_id.get_or_insert(tx.chr_id);
+        span_start = span_start.min(omm.splice.tx_span_start[tx_id]);
+        span_end = span_end.max(omm.splice.tx_span_end[tx_id]);
+        strand.get_or_insert(tx.strand);
+    }
+    let chr_id = chr_id.context("gene has no transcripts")?;
+    let chromosome = omm.splice.chr_names.get(chr_id).cloned().unwrap_or_else(|| chr_id.to_string());
+    Ok(GeneRow { chromosome, start: span_start as u64 + 1, end: span_end as u64, gene_id, names: gene.names.clone(), strand: match strand { Some(gtf_splice_index::Strand::Plus) => "+", Some(gtf_splice_index::Strand::Minus) => "-", _ => "." }.to_owned() })
+}
+
+fn execute_transcript_query(omm: &Ommverse, query: &Query) -> Result<Vec<TranscriptRow>> {
+    let identities = text_predicate_values(query, &["name", "id"])?;
+    if identities.is_empty() {
+        bail!("transcript query requires name/id = \"...\" or name/id IN \"...\", \"...\"");
+    }
+    let mut transcript_ids = Vec::new();
+    for name in identities {
+        if let Some(tx) = omm.transcript(name) {
+            transcript_ids.push(tx.id);
+        } else {
+            transcript_ids.extend(omm.transcripts_for_protein(name).map(|tx| tx.id));
+        }
+    }
+    transcript_ids.sort_unstable();
+    transcript_ids.dedup();
+    if transcript_ids.is_empty() {
+        bail!("none of the supplied identities resolve to a transcript");
+    }
+    Ok(transcript_ids.into_iter().map(|tx_id| {
+        let tx = &omm.splice.transcripts[tx_id];
+        let chromosome = omm.splice.chr_names.get(tx.chr_id).cloned().unwrap_or_else(|| tx.chr_id.to_string());
+        let cds_bases = tx.cds_transcript_span().map(|(s,e)| e-s).unwrap_or(0);
+        TranscriptRow { transcript_id: tx.id, gene_id: tx.gene_id, names: tx.names.clone(), chromosome, strand: match tx.strand { gtf_splice_index::Strand::Plus => "+", gtf_splice_index::Strand::Minus => "-", _ => "." }.to_owned(), transcript_bases: tx.transcript_len(), cds_bases }
+    }).collect())
+}
+
+fn execute_protein_query(omm: &Ommverse, query: &Query) -> Result<Vec<ProteinRow>> {
+    let identities = text_predicate_values(query, &["name", "id", "accession"])?;
+    if identities.is_empty() {
+        bail!("protein query requires name/id/accession = \"...\" or IN \"...\", \"...\"");
+    }
+    let mut protein_ids = Vec::<usize>::new();
+
+    for name in identities {
+        if let Some(protein_id) = omm.protein_id(name) {
+            protein_ids.push(protein_id);
+        } else if omm.gene(name).is_some() {
+            protein_ids.extend(omm.protein_ids_for_gene(name));
+        } else if omm.transcript(name).is_some() {
+            protein_ids.extend(omm.protein_ids_for_transcript(name));
+        }
+    }
+    protein_ids.sort_unstable();
+    protein_ids.dedup();
+    if protein_ids.is_empty() { bail!("none of the supplied identities resolve to a protein, gene, or transcript with proteins"); }
+    Ok(protein_ids.into_iter().map(|protein_id| {
+        let p = &omm.proteins[protein_id];
+        ProteinRow { protein_id, accession: p.accession.clone(), entry_name: p.entry_name.clone(), name: p.name.clone(), gene_symbol: p.gene_symbol.clone(), ensembl_protein: p.ensembl_protein.clone(), transcript_ids: p.transcript_ids.clone(), feature_count: p.features.len() }
+    }).collect())
 }
 
 fn execute_variant_query(omm: &Ommverse, query: &Query) -> Result<Vec<VariantRow>> {
@@ -378,6 +564,27 @@ fn clinvar_rid(header: &bcf::header::HeaderView, chromosome: &str) -> Option<u32
     [bare, chromosome].into_iter().find_map(|name| header.name2rid(name.as_bytes()).ok())
 }
 
+fn text_predicate_values<'a>(query: &'a Query, fields: &[&str]) -> Result<Vec<&'a str>> {
+    let mut values = Vec::new();
+    for predicate in &query.predicates {
+        match predicate {
+            Predicate::Eq { field, value: Value::Text(value) } if fields.contains(&field.as_str()) => {
+                values.push(value.as_str());
+            }
+            Predicate::In { field, values: in_values } if fields.contains(&field.as_str()) => {
+                for value in in_values {
+                    match value {
+                        Value::Text(value) => values.push(value.as_str()),
+                        _ => bail!("{field} IN currently requires quoted text values"),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(values)
+}
+
 fn text_predicate<'a>(query: &'a Query, field: &str) -> Option<&'a str> {
     query.predicates.iter().find_map(|p| match p {
         Predicate::Eq { field: predicate_field, value: Value::Text(value) } if predicate_field == field => {
@@ -484,6 +691,23 @@ mod tests {
         assert_eq!(
             query.predicates[2],
             Predicate::IsNull { field: "clinical_effect".to_owned(), negated: true }
+        );
+    }
+
+    #[test]
+    fn parses_in_without_parentheses() {
+        let query = Query::parse(
+            r#"SELECT protein WHERE id IN "ENSP00000452874", "ENSP00000453793""#,
+        ).unwrap();
+        assert_eq!(
+            query.predicates[0],
+            Predicate::In {
+                field: "id".to_owned(),
+                values: vec![
+                    Value::Text("ENSP00000452874".to_owned()),
+                    Value::Text("ENSP00000453793".to_owned()),
+                ],
+            }
         );
     }
 

@@ -87,7 +87,30 @@ impl SourceManifest {
 fn builtin(assembly: &str) -> Result<SourceManifest> {
     match assembly {
         "hg38" => SourceManifest::from_yaml(HG38),
-        _ => bail!("no bundled Ommverse source manifest for {assembly}; add crates/ommverse/sources/{assembly}.yaml"),
+        _ => Ok(SourceManifest {
+            schema_version: 1,
+            reference: ReferenceSpec {
+                name: assembly.to_owned(),
+                species: "unknown".to_owned(),
+                assembly: assembly.to_owned(),
+                assembly_accession: None,
+                taxonomy_id: None,
+            },
+            resources: vec![ResourceSpec {
+                kind: "reference".to_owned(),
+                source: "UCSC".to_owned(),
+                release: None,
+                format: Some("ucsc-reference-tree".to_owned()),
+                file: None,
+                providers: vec![ProviderSpec {
+                    name: "UCSC".to_owned(),
+                    url: ucsc::BASE_URL.to_owned(),
+                    priority: 10,
+                    adapter: Some("ucsc".to_owned()),
+                }],
+                resolved: None,
+            }],
+        }),
     }
 }
 
@@ -115,7 +138,15 @@ fn resolved(provider: String, url: String, path: Option<&Path>) -> ResolvedSourc
     ResolvedSource { provider, url, bytes, sha256, retrieved_unix_seconds }
 }
 
-pub fn fetch_assembly(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
+#[derive(Debug, Clone, Default)]
+pub struct AnnotationOptions {
+    /// None means resolve the latest GENCODE release when this assembly is supported.
+    pub gencode_release: Option<String>,
+    /// An explicit user GTF disables automatic GENCODE fetching.
+    pub explicit_gtf: Option<PathBuf>,
+}
+
+pub fn fetch_assembly_with_annotation(assembly: &str, cache_root: &Path, annotation: &AnnotationOptions) -> Result<PathBuf> {
     let mut manifest = builtin(assembly)?;
     if manifest.reference.name != assembly {
         bail!("source manifest names {} but {assembly} was requested", manifest.reference.name);
@@ -133,7 +164,13 @@ pub fn fetch_assembly(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
         let provider_adapter = provider.adapter.clone();
         if provider_adapter.as_deref() == Some("ucsc") {
             if !ran_ucsc {
-                ucsc::fetch_from_base(assembly, cache_root, provider_url.trim_end_matches('/'))?;
+                ucsc::fetch_from_base_with_gencode(
+                    assembly,
+                    cache_root,
+                    provider_url.trim_end_matches('/'),
+                    annotation.gencode_release.as_deref(),
+                    annotation.explicit_gtf.is_none(),
+                )?;
                 ran_ucsc = true;
             }
             resource.resolved = Some(resolved(provider_name, provider_url, None));
@@ -144,6 +181,32 @@ pub fn fetch_assembly(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
         download(&provider_url, &path)?;
         resource.resolved = Some(resolved(provider_name, provider_url, Some(&path)));
     }
+    if let Some(gtf) = &annotation.explicit_gtf {
+        let canonical = gtf.canonicalize().with_context(|| format!("GTF {}", gtf.display()))?;
+        manifest.resources.push(ResourceSpec {
+            kind: "gene_annotation".to_owned(),
+            source: "user".to_owned(),
+            release: None,
+            format: Some("gtf".to_owned()),
+            file: Some(canonical.clone()),
+            providers: Vec::new(),
+            resolved: Some(resolved("user".to_owned(), canonical.display().to_string(), Some(&canonical))),
+        });
+    } else if let Some(series) = match assembly { "hg38" => Some("GENCODE human"), "mm39" => Some("GENCODE mouse"), _ => None } {
+        manifest.resources.push(ResourceSpec {
+            kind: "gene_annotation".to_owned(),
+            source: series.to_owned(),
+            release: Some(annotation.gencode_release.clone().unwrap_or_else(|| "latest".to_owned())),
+            format: Some("gtf.gz".to_owned()),
+            file: None,
+            providers: Vec::new(),
+            resolved: None,
+        });
+    }
     manifest.save(root.join("sources.yaml"))?;
     Ok(root)
+}
+
+pub fn fetch_assembly(assembly: &str, cache_root: &Path) -> Result<PathBuf> {
+    fetch_assembly_with_annotation(assembly, cache_root, &AnnotationOptions::default())
 }

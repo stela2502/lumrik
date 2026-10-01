@@ -52,7 +52,67 @@ fn hrefs(index: &str) -> impl Iterator<Item = &str> {
         .filter_map(|s| s.split('"').next())
 }
 
-pub fn fetch_from_base(assembly: &str, cache_root: &Path, base_url: &str) -> Result<PathBuf> {
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GencodeAnnotation {
+    pub release: String,
+    pub path: PathBuf,
+    pub url: String,
+}
+
+fn gencode_series(assembly: &str) -> Option<(&'static str, &'static str)> {
+    match assembly {
+        "hg38" => Some(("Gencode_human", "")),
+        "mm39" => Some(("Gencode_mouse", "M")),
+        _ => None,
+    }
+}
+
+fn latest_gencode_release(root: &str, prefix: &str) -> Result<String> {
+    let index = output(root)?;
+    let mut releases = hrefs(&index)
+        .filter_map(|href| href.strip_prefix("release_").and_then(|x| x.strip_suffix('/')))
+        .filter(|release| {
+            let numeric = release.strip_prefix(prefix).unwrap_or("");
+            release.starts_with(prefix) && !numeric.is_empty() && numeric.bytes().all(|b| b.is_ascii_digit())
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    releases.sort_by_key(|release| {
+        release.strip_prefix(prefix).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0)
+    });
+    releases.pop().with_context(|| format!("no GENCODE releases found under {root}"))
+}
+
+pub fn fetch_gencode_annotation(
+    assembly: &str,
+    genes_dir: &Path,
+    requested_release: Option<&str>,
+) -> Result<Option<GencodeAnnotation>> {
+    let Some((series, prefix)) = gencode_series(assembly) else {
+        if requested_release.is_some() {
+            bail!("GENCODE annotation is not configured for assembly {assembly}; use --gtf with an explicit annotation");
+        }
+        return Ok(None);
+    };
+    let root = format!("https://ftp.ebi.ac.uk/pub/databases/gencode/{series}");
+    let release = match requested_release {
+        None | Some("latest") => latest_gencode_release(&root, prefix)?,
+        Some(value) => {
+            let value = value.trim();
+            if value.starts_with(prefix) { value.to_owned() } else { format!("{prefix}{value}") }
+        }
+    };
+    let version = release.strip_prefix(prefix).unwrap_or(&release);
+    let tag = if prefix.is_empty() { format!("v{version}") } else { format!("v{prefix}{version}") };
+    let name = format!("gencode.{tag}.annotation.gtf.gz");
+    let url = format!("{root}/release_{release}/{name}");
+    let path = genes_dir.join(&name);
+    download(&url, &path, true)?;
+    Ok(Some(GencodeAnnotation { release, path, url }))
+}
+
+pub fn fetch_from_base_with_gencode(assembly: &str, cache_root: &Path, base_url: &str, gencode_release: Option<&str>, use_gencode: bool) -> Result<PathBuf> {
     let root = cache_root.join(assembly);
     let genome_dir = root.join("Genome");
     let genes_dir = root.join("Genes");
@@ -92,8 +152,16 @@ pub fn fetch_from_base(assembly: &str, cache_root: &Path, base_url: &str) -> Res
     ] {
         have_gtf |= download(&format!("{genes}/{name}"), &genes_dir.join(&name), false)?;
     }
-    if !have_gtf {
-        bail!("no supported UCSC GTF annotation available for {assembly} under {genes}");
+    // Prefer GENCODE when the assembly has a GENCODE annotation.  `latest`
+    // is resolved at build time to a concrete release; unsupported organisms
+    // simply keep the UCSC/RefSeq annotation downloaded above.
+    let gencode = if use_gencode {
+        fetch_gencode_annotation(assembly, &genes_dir, gencode_release)?
+    } else {
+        None
+    };
+    if !have_gtf && gencode.is_none() && use_gencode {
+        bail!("no supported gene annotation available for {assembly}; supply --gtf explicitly");
     }
 
     let uniprot_root = format!("{base_url}/goldenPath/archive/{assembly}/uniprot");
@@ -144,6 +212,10 @@ pub fn fetch_from_base(assembly: &str, cache_root: &Path, base_url: &str) -> Res
     }
 
     Ok(root)
+}
+
+pub fn fetch_from_base(assembly: &str, cache_root: &Path, base_url: &str) -> Result<PathBuf> {
+    fetch_from_base_with_gencode(assembly, cache_root, base_url, None, true)
 }
 
 #[allow(dead_code)]

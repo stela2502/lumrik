@@ -25,7 +25,7 @@ const MAGIC: &[u8; 4] = b"SPX2";
 /// This is deliberately independent of the Lumrik/crate release version.
 /// Increment it only when the serialized representation or its semantics
 /// change incompatibly.
-pub const SPLICE_INDEX_FORMAT_VERSION: u32 = 1;
+pub const SPLICE_INDEX_FORMAT_VERSION: u32 = 2;
 
 /// Configure which attribute keys are used to extract:
 /// - gene stable identifier (used to intern -> GeneId)
@@ -35,7 +35,7 @@ pub const SPLICE_INDEX_FORMAT_VERSION: u32 = 1;
 /// - (GFF3) exon -> transcript linking keys (usually Parent)
 ///
 /// Notes:
-/// - We allow multiple keys per category; first present wins.
+/// - Every present configured key is retained greedily as an alias; the first ID key still anchors interning.
 /// - For GFF3 Parent values, we split by ',' and treat each parent as a transcript ID.
 #[derive(Debug, Clone)]
 pub struct IdNameKeys {
@@ -44,6 +44,8 @@ pub struct IdNameKeys {
 
     pub transcript_id_keys: Vec<String>,
     pub transcript_name_keys: Vec<String>,
+    /// Protein identifiers explicitly attached to a transcript (for example GTF protein_id).
+    pub protein_id_keys: Vec<String>,
 
     /// GFF3 exon->transcript linkage (most commonly: Parent)
     pub parent_keys: Vec<String>,
@@ -57,10 +59,11 @@ impl Default for IdNameKeys {
         Self {
             // Common GTF + some common variants
             gene_id_keys: vec!["gene_id".into(), "gene".into(), "GeneID".into()],
-            gene_name_keys: vec!["gene_name".into(), "Name".into(), "gene".into()],
+            gene_name_keys: vec!["gene_name".into(), "Name".into(), "gene".into(), "hgnc_id".into(), "havana_gene".into()],
 
             transcript_id_keys: vec!["transcript_id".into(), "transcript".into(), "ID".into()],
-            transcript_name_keys: vec!["transcript_name".into(), "Name".into()],
+            transcript_name_keys: vec!["transcript_name".into(), "Name".into(), "havana_transcript".into()],
+            protein_id_keys: vec!["protein_id".into()],
 
             parent_keys: vec!["Parent".into()],
             exon_feature_types: vec!["exon".into()],
@@ -211,6 +214,7 @@ pub struct SpliceIndex {
 
     pub genes: Vec<Gene>,
     pub transcripts: Vec<Transcript>,
+    gene_by_name: HashMap<String, usize>,
     transcript_by_name: HashMap<String, usize>,
 
     pub chr_buckets: Vec<ChrBuckets>,
@@ -334,6 +338,7 @@ impl SpliceIndex {
             chr_to_id: HashMap::new(),
             genes: Vec::new(),
             transcripts: Vec::new(),
+            gene_by_name: HashMap::new(),
             transcript_by_name: HashMap::new(),
             chr_buckets: Vec::new(),
             tx_span_start: Vec::new(),
@@ -472,6 +477,7 @@ impl SpliceIndex {
 
             genes: Vec::new(),
             transcripts: Vec::new(),
+            gene_by_name: HashMap::new(),
             transcript_by_name: HashMap::new(),
 
             chr_buckets: Vec::new(),
@@ -541,6 +547,13 @@ impl SpliceIndex {
         self.genes.get(gene_id).and_then(|g| g.primary_name())
     }
 
+    pub fn gene_by_name(&self, gene_name: &str) -> Result<&Gene, String> {
+        let gene_id = self.gene_by_name.get(gene_name)
+            .ok_or_else(|| format!("unknown gene name {gene_name:?}"))?;
+        self.genes.get(*gene_id)
+            .ok_or_else(|| format!("gene id {gene_id} for {gene_name:?} is out of bounds"))
+    }
+
     pub fn transcript_by_name(&self, transcript_name: &str) -> Result<&Transcript, String> {
         let tx_id = self
             .transcript_by_name
@@ -589,6 +602,7 @@ impl SpliceIndex {
         reader: R,
         keys: IdNameKeys,
     ) -> Result<Self, ParseError> {
+        let mut gene_by_name = HashMap::new();
         let mut transcript_by_name = HashMap::new();
         // stable key string -> internal id
         let mut gene_key_to_id: HashMap<String, GeneId> = HashMap::new();
@@ -600,9 +614,28 @@ impl SpliceIndex {
         // bounds by transcript key and attach them after all exons have created
         // the transcript objects.
         let mut cds_by_tx: HashMap<String, (u32, u32)> = HashMap::new();
+        let mut protein_names_by_tx: HashMap<String, Vec<String>> = HashMap::new();
 
         for rec in AnnotationReader::new(reader).records() {
             let rec = rec?;
+
+            // protein_id is commonly present on CDS records rather than exon records.
+            // Capture it before feature filtering and attach it once the transcript exists.
+            if let Some(tx_key_raw) = rec.pick_first_attr(&keys.transcript_id_keys)
+                .or_else(|| rec.pick_first_attr(&keys.parent_keys))
+            {
+                for tx_key in split_gff3_parent_list(&tx_key_raw) {
+                    let values = protein_names_by_tx.entry(tx_key).or_default();
+                    for key in &keys.protein_id_keys {
+                        if let Some(value) = rec.attr(key) {
+                            let value = value.trim();
+                            if !value.is_empty() && !values.iter().any(|known| known == value) {
+                                values.push(value.to_owned());
+                            }
+                        }
+                    }
+                }
+            }
 
             if rec.feature_type == "CDS" {
                 if let Some(tx_key_raw) = rec
@@ -678,6 +711,13 @@ impl SpliceIndex {
                 self.transcripts[tx_id].add_cds(RefBlock { start, end });
             }
         }
+        for (tx_key, protein_names) in protein_names_by_tx {
+            if let Some(&tx_id) = tx_key_to_id.get(&tx_key) {
+                for protein_name in protein_names {
+                    self.transcripts[tx_id].add_protein_name(&protein_name);
+                }
+            }
+        }
 
         // Finalize transcripts (sort/merge exons)
 
@@ -702,10 +742,12 @@ impl SpliceIndex {
         }
         for g in &mut self.genes {
             g.finalize();
+            for name in &g.names { gene_by_name.entry(name.clone()).or_insert(g.id); }
         }
 
         // Build buckets
         self.build_buckets();
+        self.gene_by_name = gene_by_name;
         self.transcript_by_name = transcript_by_name;
 
         self.chr_to_id = Self::build_chr_map(&self.chr_names);
@@ -884,8 +926,11 @@ impl SpliceIndex {
             .max()
             .unwrap_or(MatchClass::NoOverlap);
 
-        // Keep ties by best class.
-        scored.retain(|m| m.hit.class == best_class);
+        // Keep ties by compatibility rank, not enum identity.
+        // ExactJunctionChain and Compatible deliberately have the same rank:
+        // an observed junction chain that exhausts a short transcript must not
+        // eliminate a longer transcript that supports every observed junction.
+        scored.retain(|m| m.hit.class.rank() == best_class.rank());
 
         // Deterministic: smaller total overhang first, then transcript_id.
         scored.sort_by_key(|m| (m.hit.overhang_5p_bp + m.hit.overhang_3p_bp, m.transcript_id));
@@ -926,7 +971,7 @@ impl SpliceIndex {
                         *best_hit = hit;
                         winners.clear();
                         winners.push(tx_id);
-                    } else if hit.class == *best_class {
+                    } else if hit.class.rank() == best_class.rank() {
                         winners.push(tx_id);
 
                         // Keep a deterministic representative best_hit:
@@ -951,7 +996,7 @@ impl SpliceIndex {
         // Collect tied best genes.
         let mut out: Vec<GeneMatch<'a>> = Vec::new();
         for (gid, (best_class, best_hit, mut txs)) in per_gene {
-            if best_class != overall_best_class {
+            if best_class.rank() != overall_best_class.rank() {
                 continue;
             }
 
@@ -1030,6 +1075,9 @@ impl SpliceIndex {
                     self.genes[gid].add_name(v);
                 }
             }
+            for k in keys.gene_id_keys.iter().chain(keys.gene_name_keys.iter()) {
+                if let Some(v) = rec.attr(k) { self.genes[gid].add_name(v); }
+            }
             self.genes[gid].add_name(gene_key);
             return gid;
         }
@@ -1043,12 +1091,10 @@ impl SpliceIndex {
         self.genes.push(Gene::new(gid, primary));
         gene_key_to_id.insert(gene_key.to_string(), gid);
 
-        // Store stable key as alias + any other display names
+        // Greedily retain every configured identifier/name plus normalized versions.
         self.genes[gid].add_name(gene_key);
-        for k in &keys.gene_name_keys {
-            if let Some(v) = rec.attr(k) {
-                self.genes[gid].add_name(v);
-            }
+        for k in keys.gene_id_keys.iter().chain(keys.gene_name_keys.iter()) {
+            if let Some(v) = rec.attr(k) { self.genes[gid].add_name(v); }
         }
 
         gid
@@ -1065,10 +1111,11 @@ impl SpliceIndex {
     ) -> TranscriptId {
         if let Some(&tid) = tx_key_to_id.get(tx_key) {
             self.transcripts[tid].add_name(tx_key);
-            for k in &keys.transcript_name_keys {
-                if let Some(v) = rec.attr(k) {
-                    self.transcripts[tid].add_name(v);
-                }
+            for k in keys.transcript_id_keys.iter().chain(keys.transcript_name_keys.iter()) {
+                if let Some(v) = rec.attr(k) { self.transcripts[tid].add_name(v); }
+            }
+            for k in &keys.protein_id_keys {
+                if let Some(v) = rec.attr(k) { self.transcripts[tid].add_protein_name(v); }
             }
             return tid;
         }
@@ -1083,10 +1130,11 @@ impl SpliceIndex {
         tx_key_to_id.insert(tx_key.to_string(), tid);
 
         self.transcripts[tid].add_name(tx_key);
-        for k in &keys.transcript_name_keys {
-            if let Some(v) = rec.attr(k) {
-                self.transcripts[tid].add_name(v);
-            }
+        for k in keys.transcript_id_keys.iter().chain(keys.transcript_name_keys.iter()) {
+            if let Some(v) = rec.attr(k) { self.transcripts[tid].add_name(v); }
+        }
+        for k in &keys.protein_id_keys {
+            if let Some(v) = rec.attr(k) { self.transcripts[tid].add_protein_name(v); }
         }
 
         tid

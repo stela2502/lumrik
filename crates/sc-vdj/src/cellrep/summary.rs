@@ -27,6 +27,9 @@ pub struct ReceptorSequenceEvidence {
     /// have to rebuild a sequence representation from the count vectors.
     /// `None` means the current consensus contains an unobserved/ambiguous N.
     packed_consensus: Option<IntToDna>,
+    /// Bounded refinement observations waiting to be folded into this model.
+    /// This state intentionally survives BAM/Rayon batch boundaries.
+    pending_refinement: Vec<PendingPackedRead>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +44,7 @@ const MODEL_MIN_EXTENSION: isize = 4;
 const PACKED_STAR_WINDOW_BASES: u32 = 16;
 const PACKED_STAR_WINDOW_MIN_READS: usize = 3;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct PendingPackedRead {
     packed: IntToDna,
     qualities: Vec<u8>,
@@ -107,6 +110,7 @@ impl PendingPackedRead {
             support_features: 1,
             supporting_umis: self.umi.into_iter().collect(),
             packed_consensus: Some(self.packed.clone()),
+            pending_refinement: Vec::new(),
         };
         for pos in 0..n {
             let byte = self.packed.u8_encoded[pos >> 2];
@@ -318,6 +322,7 @@ impl ReceptorSequenceEvidence {
             support_features: 1,
             supporting_umis: Vec::new(),
             packed_consensus: None,
+            pending_refinement: Vec::new(),
         };
         for (i, &base) in bases.iter().enumerate() {
             let Some(k) = base_index(base) else { continue };
@@ -380,7 +385,7 @@ impl ReceptorSequenceEvidence {
         false
     }
 
-    fn try_consume(&mut self, other: &Self, index: &VdjIndex, min_overlap: usize) -> bool {
+    fn try_consume(&mut self, other: &mut Self, index: &VdjIndex, min_overlap: usize) -> bool {
         if self.has_hard_segment_conflict(other, index) {
             return false;
         }
@@ -422,6 +427,7 @@ impl ReceptorSequenceEvidence {
         if let Some(offset) = offset {
             trace_overlap_placement("packed", self, other, index, offset);
             self.merge_at(other, offset);
+            self.pending_refinement.append(&mut other.pending_refinement);
             self.refresh_packed_consensus(index);
             return true;
         }
@@ -444,6 +450,7 @@ impl ReceptorSequenceEvidence {
             let bc = other.consensus(index);
             if let Some(aln) = needleman_wunsch_overlap(&ac, &bc, min_overlap) {
                 self.merge_aligned(other, &aln.columns);
+                self.pending_refinement.append(&mut other.pending_refinement);
                 self.refresh_packed_consensus(index);
                 return true;
             }
@@ -744,7 +751,18 @@ pub(crate) fn merge_summary_batch(
     index: &VdjIndex,
     min_overlap: usize,
 ) {
-    for incoming in batch_summaries {
+    merge_summary_batch_core(summaries, batch_summaries, index, min_overlap);
+    flush_refinement_buffers(summaries, index, min_overlap, false);
+    summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
+}
+
+fn merge_summary_batch_core(
+    summaries: &mut Vec<ReceptorSequenceEvidence>,
+    batch_summaries: Vec<ReceptorSequenceEvidence>,
+    index: &VdjIndex,
+    min_overlap: usize,
+) {
+    for mut incoming in batch_summaries {
         let mut target = None;
 
         // Shared germline identity is the normal path and is both cheaper and
@@ -753,7 +771,7 @@ pub(crate) fn merge_summary_batch(
             if !summaries[i].shares_segment(&incoming) {
                 continue;
             }
-            if summaries[i].try_consume(&incoming, index, min_overlap) {
+            if summaries[i].try_consume(&mut incoming, index, min_overlap) {
                 target = Some(i);
                 break;
             }
@@ -768,7 +786,7 @@ pub(crate) fn merge_summary_batch(
                 if summaries[i].shares_segment(&incoming) {
                     continue;
                 }
-                if summaries[i].try_consume(&incoming, index, min_overlap) {
+                if summaries[i].try_consume(&mut incoming, index, min_overlap) {
                     target = Some(i);
                     break;
                 }
@@ -788,7 +806,27 @@ pub(crate) fn merge_summary_batch(
         // Reconcile only around the component that changed.
         collapse_from(summaries, target, index, min_overlap);
     }
+}
 
+pub(crate) fn flush_refinement_buffers(
+    summaries: &mut Vec<ReceptorSequenceEvidence>,
+    index: &VdjIndex,
+    min_overlap: usize,
+    flush_all: bool,
+) {
+    loop {
+        let mut incoming = Vec::new();
+        for summary in summaries.iter_mut() {
+            if summary.pending_refinement.is_empty()
+                || (!flush_all && summary.pending_refinement.len() < PACKED_REFINEMENT_READS)
+            {
+                continue;
+            }
+            incoming.extend(summary.pending_refinement.drain(..).map(|read| read.into_summary(index)));
+        }
+        if incoming.is_empty() { break; }
+        merge_summary_batch_core(summaries, incoming, index, min_overlap);
+    }
     summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
 }
 
@@ -813,7 +851,6 @@ pub(crate) fn consume_chain_features(
 ) {
     let mut pending = Vec::<PendingPackedRead>::with_capacity(PACKED_BOOTSTRAP_READS);
     let mut pending_star_window: Option<(i32, u32)> = None;
-    let mut refinement = std::collections::HashMap::<(Vec<SegmentId>, Vec<SegmentId>), Vec<PendingPackedRead>>::new();
 
     let flush_pending = |pending: &mut Vec<PendingPackedRead>,
                          summaries: &mut Vec<ReceptorSequenceEvidence>| {
@@ -996,27 +1033,9 @@ pub(crate) fn consume_chain_features(
                         continue;
                     }
 
-                    let mut v = Vec::new();
-                    let mut j = Vec::new();
-                    for &id in &segment_ids {
-                        match index.segment(id).map(|segment| segment.kind) {
-                            Some(crate::index::SegmentKind::V) => v.push(id),
-                            Some(crate::index::SegmentKind::J) => j.push(id),
-                            _ => {}
-                        }
-                    }
-                    v.sort_unstable();
-                    v.dedup();
-                    j.sort_unstable();
-                    j.dedup();
-                    let buffer = refinement.entry((v, j)).or_default();
-                    buffer.push(read);
-                    if buffer.len() >= PACKED_REFINEMENT_READS {
-                        let incoming: Vec<_> = buffer
-                            .drain(..)
-                            .map(|read| read.into_summary(index))
-                            .collect();
-                        merge_summary_batch(summaries, incoming, index, min_overlap);
+                    summaries[target].pending_refinement.push(read);
+                    if summaries[target].pending_refinement.len() >= PACKED_REFINEMENT_READS {
+                        flush_refinement_buffers(summaries, index, min_overlap, false);
                     }
                 } else {
                     pending.push(read);
@@ -1044,17 +1063,10 @@ pub(crate) fn consume_chain_features(
     }
 
     flush_pending(&mut pending, summaries);
-    for (_, buffer) in refinement.iter_mut() {
-        if buffer.is_empty() {
-            continue;
-        }
-        let incoming: Vec<_> = buffer
-            .drain(..)
-            .map(|read| read.into_summary(index))
-            .collect();
-        merge_summary_batch(summaries, incoming, index, min_overlap);
-    }
-    summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
+    // Refinement buffers deliberately survive this bounded BAM/Rayon batch.
+    // Only full 20-read buffers are folded during collection; the runner
+    // performs one explicit final flush after the complete BAM is consumed.
+    flush_refinement_buffers(summaries, index, min_overlap, false);
 }
 
 fn collapse_from(
@@ -1073,8 +1085,8 @@ fn collapse_from(
                 continue;
             }
 
-            let candidate = summaries[other].clone();
-            if !summaries[target].try_consume(&candidate, index, min_overlap) {
+            let mut candidate = summaries[other].clone();
+            if !summaries[target].try_consume(&mut candidate, index, min_overlap) {
                 continue;
             }
 

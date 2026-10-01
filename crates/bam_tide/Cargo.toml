@@ -27,6 +27,7 @@ hts-sys =  { git = "https://github.com/stela2502/hts-sys.git" }
 
 fast_tag_mapper = { path = "../fast_tag_mapper" }
 gtf_splice_index = { path = "../gtf_splice_index" }
+ommverse = { path = "../ommverse" }
 mapping_info = { path = "../mapping_info" }
 read-tag-table = { path = "../read-tag-table" }
 sc_primer = { path = "../sc_primer" }

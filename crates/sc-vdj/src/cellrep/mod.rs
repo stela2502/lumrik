@@ -14,7 +14,7 @@ mod evidence;
 mod summary;
 
 pub use evidence::{RawEvidenceDisplay, SummarizedEvidenceDisplay};
-use summary::merge_summary_batch;
+use summary::{flush_refinement_buffers, merge_summary_batch};
 pub use summary::{
     summarize_chain_work, ChainSummaryWork, GermlineAnchor, ReceptorSequenceEvidence,
 };
@@ -112,12 +112,17 @@ pub struct CellEvidence {
 #[derive(Debug, Default)]
 pub struct CellEvidenceVdj {
     cells: CellHash<CellEvidence>,
+    /// Cells for which broad B-cell discovery already has a depth-complete
+    /// heavy-chain model and a depth-complete light-chain model. These cells
+    /// no longer need additional first-pass model generation.
+    finished_b_cells: HashSet<u64>,
 }
 
 impl CellEvidenceVdj {
     pub fn new() -> Self {
         Self {
             cells: CellHash::new(),
+            finished_b_cells: HashSet::new(),
         }
     }
 
@@ -172,17 +177,46 @@ impl CellEvidenceVdj {
         // CellHash. This merge is intentionally serial; the expensive raw
         // read summarization above is already complete and lock-free.
         for (cell_id, delta) in deltas {
-            self.cells
-                .entry_cell(cell_id)
-                .or_default()
-                .merge_compact_delta(delta, index, min_overlap);
+            let cell = self.cells.entry_cell(cell_id).or_default();
+            cell.merge_compact_delta(delta, index, min_overlap);
+
+            // Once broad discovery has one depth-complete heavy-chain model
+            // and one depth-complete light-chain model, stop spending future
+            // BAM batches on additional first-pass models for this cell. The
+            // later receptor reconstruction/confirmation stages still run on
+            // the evidence already collected.
+            if cell.first_pass_b_cell_complete(index, 3) {
+                self.finished_b_cells.insert(cell_id);
+            }
         }
         // `batch` dies here: sequence, qualities, mappings and ref_blocks are
         // returned to the allocator before the next BAM batch is accumulated.
     }
 
+    /// Finalize every partial per-model refinement buffer after the complete
+    /// BAM has been consumed. This is intentionally separate from consume_batch:
+    /// BAM/Rayon transport boundaries must not force 1..19-read refinements.
+    pub fn flush_pending_refinement(&mut self, index: &VdjIndex, min_overlap: usize) {
+        self.cells
+            .buckets_mut()
+            .par_iter_mut()
+            .for_each(|bucket| {
+                for cell in bucket.values_mut() {
+                    for summaries in cell.summaries.values_mut() {
+                        flush_refinement_buffers(summaries, index, min_overlap, true);
+                    }
+                }
+            });
+    }
+
     pub fn get(&self, cell_id: &u64) -> Option<&CellEvidence> {
         self.cells.get_cell(cell_id)
+    }
+
+    /// True once the initial broad B-cell discovery pass has enough evidence
+    /// for at least one heavy-chain and one light-chain receptor model.
+    pub fn first_pass_b_cell_complete(&self, cell_id: u64) -> bool {
+        self.finished_b_cells.contains(&cell_id)
     }
 
     pub fn first_pass_finished_for_segments(
@@ -212,6 +246,15 @@ impl CellEvidenceVdj {
 }
 
 impl CellEvidence {
+    fn first_pass_b_cell_complete(&self, index: &VdjIndex, min_depth: u16) -> bool {
+        let chain_complete = |chain| {
+            self.summaries_for_chain(chain)
+                .iter()
+                .any(|summary| summary.first_pass_finished(index, min_depth))
+        };
+        chain_complete(Chain::Igh) && (chain_complete(Chain::Igk) || chain_complete(Chain::Igl))
+    }
+
     pub fn chains(&self, _index: &VdjIndex) -> Vec<Chain> {
         let mut out: Vec<_> = self.summaries.keys().copied().collect();
         out.sort();

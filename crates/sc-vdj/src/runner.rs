@@ -799,6 +799,14 @@ impl VdjRunner {
             }
             allowed_cell_records = allowed_cell_records.saturating_add(1);
 
+            // Broad B-cell discovery is complete for this cell. Avoid all
+            // further overlap lookup, sequence copying and model generation
+            // during the initial pass. Reconstruction and confirmation still
+            // operate on the evidence already retained for the cell.
+            if self.evidence.first_pass_b_cell_complete(cell_id) {
+                continue;
+            }
+
             let tid = rec.tid();
             if tid < 0 {
                 continue;
@@ -917,6 +925,16 @@ impl VdjRunner {
                 &self.index,
             );
         }
+
+        // The complete BAM (including the final unmapped-rescue batch) is now
+        // consumed. Fold every remaining 1..19-read model-local refinement
+        // buffer exactly once before reconstruction starts.
+        let processing_started = Instant::now();
+        self.evidence.flush_pending_refinement(
+            &self.index,
+            self.config.min_sequence_overlap,
+        );
+        timing.evidence_processing += processing_started.elapsed();
 
         self.flush_id = self.flush_id.wrapping_add(1);
         Ok((n, timing))

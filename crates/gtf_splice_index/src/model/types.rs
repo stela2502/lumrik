@@ -97,7 +97,10 @@ impl MatchClass {
     ///
     /// - `ExactJunctionChain`
     ///   Read splice junction chain matches the transcript model exactly.
-    ///   This is the strongest evidence for an exonic/spliced transcript hit.
+    ///   For best-hit selection this has the same compatibility rank as
+    ///   `Compatible`: a shorter transcript must not exclude a longer transcript
+    ///   that contains every junction observed in the read. The distinct class
+    ///   is retained as useful descriptive evidence (especially for long reads).
     ///
     /// - `Compatible`
     ///   Read is compatible with the model, but does not provide an exact
@@ -127,7 +130,7 @@ impl MatchClass {
     pub fn rank(self) -> u8 {
         match self {
             MatchClass::ExactJunctionChain => 6,
-            MatchClass::Compatible => 5,
+            MatchClass::Compatible => 6,
             MatchClass::JunctionMismatch => 3,
             MatchClass::Intronic => 2,
             MatchClass::Incompatible => 1,
@@ -167,6 +170,30 @@ pub struct MatchHit {
     pub class: MatchClass,
     pub overhang_5p_bp: u32,
     pub overhang_3p_bp: u32,
+}
+
+/// Auditable placement of one genomic read alignment against one transcript.
+///
+/// This deliberately lives in `gtf_splice_index`: transcript compatibility is
+/// a property of annotation geometry, not of a downstream abundance model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacementAudit {
+    pub hit: MatchHit,
+    pub read_start: u32,
+    pub read_end: u32,
+    pub transcript_start: u32,
+    pub transcript_end: u32,
+    pub exonic_bases: u32,
+    pub intronic_bases: u32,
+    pub read_junctions: Vec<(u32, u32)>,
+    pub matched_junctions: usize,
+    pub unmatched_junctions: usize,
+    /// Spliced-transcript coordinate of the first aligned genomic base when
+    /// that base is exonic in this transcript.
+    pub transcript_read_start: Option<usize>,
+    /// Spliced-transcript coordinate of the last aligned genomic base when
+    /// that base is exonic in this transcript.
+    pub transcript_read_end: Option<usize>,
 }
 
 impl MatchHit {

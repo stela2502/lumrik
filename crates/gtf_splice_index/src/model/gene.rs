@@ -1,3 +1,4 @@
+use crate::capabilities::Identifiable;
 use crate::model::types::{GeneId, TranscriptId};
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,10 @@ pub struct Gene {
     transcript_ids: Vec<TranscriptId>,
 }
 
+impl Identifiable for Gene {
+    fn aliases(&self) -> &[String] { &self.names }
+}
+
 impl Gene {
     pub fn new(id: GeneId, primary_name: impl Into<String>) -> Self {
         Self {
@@ -25,11 +30,11 @@ impl Gene {
     /// Add an alias/alternative name (deduped).
     pub fn add_name(&mut self, name: &str) {
         let name = name.trim();
-        if name.is_empty() {
-            return;
-        }
-        if !self.names.iter().any(|n| n == name) {
-            self.names.push(name.to_string());
+        if name.is_empty() { return; }
+        if !self.names.iter().any(|known| known == name) { self.names.push(name.to_owned()); }
+        if let Some((base, version)) = name.rsplit_once('.') {
+            if !base.is_empty() && version.chars().all(|c| c.is_ascii_digit())
+                && !self.names.iter().any(|known| known == base) { self.names.push(base.to_owned()); }
         }
     }
 

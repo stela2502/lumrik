@@ -231,6 +231,7 @@ dependencies = [
  "hts-sys",
  "int-to-dna",
  "mapping_info",
+ "ommverse",
  "onehot_dna",
  "rayon",
  "read-tag-table",

@@ -2,15 +2,19 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ops::{Deref, DerefMut};
 
-/// Sparse cell-indexed storage split into 256 buckets.
+/// Sparse cell-indexed storage split into 1024 buckets.
 ///
 /// Cell ids are expected to come from `IntToDna::into_u64()`. That encoding
-/// stores the first packed 4-base byte (`u8_encoded[0]`) in the least
-/// significant byte of the `u64`, so those first four barcode bases select the
-/// bucket regardless of whether the full cell barcode is 16, 27, or 32 bases.
+/// stores the beginning of the packed 2-bit sequence in the least-significant
+/// bits of the `u64`, so the low 10 bits (the first five barcode bases) select
+/// the bucket regardless of whether the full cell barcode is 16, 27, or 32 bases.
+const CELL_HASH_BITS: u32 = 10;
+const CELL_HASH_BUCKETS: usize = 1 << CELL_HASH_BITS;
+const CELL_HASH_MASK: u64 = (CELL_HASH_BUCKETS as u64) - 1;
+
 #[derive(Debug)]
 pub struct CellHash<T> {
-    data: [HashMap<u64, T>; 256],
+    data: [HashMap<u64, T>; CELL_HASH_BUCKETS],
 }
 
 impl<T> Default for CellHash<T> {
@@ -26,10 +30,10 @@ impl<T> CellHash<T> {
         }
     }
 
-    /// Bucket selected by the first four bases encoded by `IntToDna`.
+    /// Bucket selected by the first five bases encoded by `IntToDna`.
     #[inline]
     pub fn bucket_index(cell_id: u64) -> usize {
-        cell_id as u8 as usize
+        (cell_id & CELL_HASH_MASK) as usize
     }
 
     #[inline]
@@ -55,17 +59,17 @@ impl<T> CellHash<T> {
         self.data.iter().all(HashMap::is_empty)
     }
 
-    pub fn buckets(&self) -> &[HashMap<u64, T>; 256] {
+    pub fn buckets(&self) -> &[HashMap<u64, T>; CELL_HASH_BUCKETS] {
         &self.data
     }
 
-    pub fn buckets_mut(&mut self) -> &mut [HashMap<u64, T>; 256] {
+    pub fn buckets_mut(&mut self) -> &mut [HashMap<u64, T>; CELL_HASH_BUCKETS] {
         &mut self.data
     }
 }
 
 impl<T> Deref for CellHash<T> {
-    type Target = [HashMap<u64, T>; 256];
+    type Target = [HashMap<u64, T>; CELL_HASH_BUCKETS];
 
     fn deref(&self) -> &Self::Target {
         &self.data
@@ -80,7 +84,7 @@ impl<T> DerefMut for CellHash<T> {
 
 impl<T> IntoIterator for CellHash<T> {
     type Item = HashMap<u64, T>;
-    type IntoIter = std::array::IntoIter<HashMap<u64, T>, 256>;
+    type IntoIter = std::array::IntoIter<HashMap<u64, T>, CELL_HASH_BUCKETS>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.data.into_iter()

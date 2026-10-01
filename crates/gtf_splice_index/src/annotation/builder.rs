@@ -49,6 +49,12 @@ impl AnnotationBuilder {
         self
     }
 
+    /// Convenience: set transcript-attached protein identifier key(s).
+    pub fn protein_id_keys(mut self, keys: &[&str]) -> Self {
+        self.keys.protein_id_keys = keys.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
     /// Convenience: set parent keys for GFF3 exon->transcript linking (usually ["Parent"]).
     pub fn parent_keys(mut self, keys: &[&str]) -> Self {
         self.keys.parent_keys = keys.iter().map(|s| s.to_string()).collect();
@@ -215,4 +221,20 @@ chr1\tsrc\tCDS\t201\t240\t.\t+\t2\tgene_id \"G1\"; transcript_id \"T1\";
         assert_eq!(tx.exons().len(), 2);
         assert_eq!(tx.cds_span(), Some((120, 240)));
     }
+
+    #[test]
+    fn gencode_ids_are_retained_greedily_with_protein_linkage() {
+        let gtf = "chr2\tsrc\texon\t1001\t1100\t.\t+\t.\tgene_id \"ENSG00000134138.22\"; gene_name \"MEIS2\"; hgnc_id \"HGNC:7001\"; havana_gene \"OTTHUMG00000129781.7\"; transcript_id \"ENST00000560617.5\"; transcript_name \"MEIS2-217\"; havana_transcript \"OTTHUMT00000417572.2\";\n\
+chr2\tsrc\tCDS\t1021\t1080\t.\t+\t0\tgene_id \"ENSG00000134138.22\"; transcript_id \"ENST00000560617.5\"; protein_id \"ENSP00000452874.1\";\n";
+        let idx = AnnotationBuilder::new(100).build_from_reader(Cursor::new(gtf.as_bytes())).unwrap();
+        let gene = idx.gene_by_name("MEIS2").unwrap();
+        assert_eq!(gene.id, idx.gene_by_name("ENSG00000134138.22").unwrap().id);
+        assert_eq!(gene.id, idx.gene_by_name("ENSG00000134138").unwrap().id);
+        assert_eq!(gene.id, idx.gene_by_name("HGNC:7001").unwrap().id);
+        let tx = idx.transcript_by_name("ENST00000560617").unwrap();
+        assert!(tx.names.iter().any(|x| x == "MEIS2-217"));
+        assert!(tx.protein_aliases().iter().any(|x| x == "ENSP00000452874.1"));
+        assert!(tx.protein_aliases().iter().any(|x| x == "ENSP00000452874"));
+    }
+
 }

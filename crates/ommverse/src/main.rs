@@ -34,6 +34,12 @@ enum Command {
         assembly: Option<String>,
         #[arg(long, default_value = ".ommverse-cache")]
         cache: PathBuf,
+        /// Use this GTF exactly. Disables automatic GENCODE annotation selection.
+        #[arg(long, conflicts_with_all = ["reference", "gencode_release"])]
+        gtf: Option<PathBuf>,
+        /// Pin a GENCODE release (for example 50 or M38). Defaults to latest when supported.
+        #[arg(long, conflicts_with_all = ["reference", "gtf"])]
+        gencode_release: Option<String>,
         /// Output Ommverse index. Defaults to <cache>/<assembly>/<assembly>.ommverse in --assembly mode.
         #[arg(long)]
         out: Option<PathBuf>,
@@ -76,6 +82,15 @@ enum Command {
         #[arg(long)]
         index: PathBuf,
         query: String,
+    },
+    /// Print the small capability schema without opening the Ommverse index.
+    Schema {
+        #[arg(long)]
+        index: PathBuf,
+        /// Create or replace the tiny schema sidecar for an existing index.
+        /// This opens the Ommverse once; later schema reads and query validation do not.
+        #[arg(long)]
+        write: bool,
     },
     /// Inspect serialized core composition and external reference storage without changing either.
     Inspect {
@@ -636,12 +651,20 @@ fn main() -> Result<()> {
             reference,
             assembly,
             cache,
+            gtf,
+            gencode_release,
             out,
             debug_failed_mappings,
             health_port,
             health_hostname,
             no_health_server,
         } => {
+            if let Some(gtf) = &gtf {
+                validate_readable_file(gtf, "GTF")?;
+                if assembly.is_none() {
+                    anyhow::bail!("--gtf requires --assembly so the remaining reference sources can be resolved");
+                }
+            }
             let assembly_name = assembly
                 .clone()
                 .or_else(|| {
@@ -693,7 +716,13 @@ fn main() -> Result<()> {
                     update,
                 )?,
                 (None, Some(assembly)) => {
-                    Ommverse::fetch_and_build_with_progress(&assembly, &cache, update)?
+                    let annotation = ommverse::sources::AnnotationOptions {
+                        gencode_release,
+                        explicit_gtf: gtf,
+                    };
+                    Ommverse::fetch_and_build_with_annotation_and_progress(
+                        &assembly, &cache, annotation, update,
+                    )?
                 }
                 (None, None) => anyhow::bail!("Build requires either --reference or --assembly"),
                 (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
@@ -882,11 +911,25 @@ fn main() -> Result<()> {
             }
         }
         Command::Query { index, query } => {
-            let omm = Ommverse::load(index)?;
             let query = ommverse::query::Query::parse(&query)?;
+            let schema = ommverse::schema::OmmverseSchema::load_for_index(&index)?;
+            schema.validate_query(&query)?;
+            let omm = Ommverse::load(index)?;
             for row in ommverse::query::execute(&omm, &query)? {
                 println!("{row}");
             }
+        }
+        Command::Schema { index, write } => {
+            let schema = if write {
+                let omm = Ommverse::load(&index)?;
+                let schema = ommverse::schema::OmmverseSchema::for_ommverse(&omm);
+                let path = schema.save_for_index(&index)?;
+                eprintln!("[ommverse] wrote schema: {}", path.display());
+                schema
+            } else {
+                ommverse::schema::OmmverseSchema::load_for_index(&index)?
+            };
+            print!("{}", serde_yaml::to_string(&schema)?);
         }
         Command::Inspect { index } => {
             let started = Instant::now();

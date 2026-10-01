@@ -5,6 +5,7 @@
 //! as genomic blocks (0-based, half-open).
 
 pub mod annotation;
+pub mod capabilities;
 pub mod index;
 pub mod model;
 pub mod types;
@@ -12,6 +13,7 @@ pub mod types;
 pub use index::{IdNameKeys, SPLICE_INDEX_FORMAT_VERSION, SpliceFeatureIndex, SpliceIndex, SpliceMatch, SpliceMatchMode};
 
 pub use annotation::AnnotationBuilder;
+pub use capabilities::{Axis, Connected, Connection, CoordinateMapper, Identifiable, Plottable};
 
 pub use types::{RefBlock, SplicedRead, Strand};
 
@@ -20,5 +22,5 @@ pub use model::transcript::Transcript;
 pub use model::types::{GeneId, TranscriptId};
 
 // Re-export shared model matching types at crate root.
-pub use model::{MatchClass, MatchOptions, OverhangClass};
+pub use model::{MatchClass, MatchOptions, OverhangClass, PlacementAudit};
 pub use model::types::QuantClass;
