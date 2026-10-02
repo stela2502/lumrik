@@ -505,6 +505,23 @@ struct OmmverseV3 {
     chromatin: Vec<ChromatinElement>,
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OmmverseV9 {
+    assembly: String,
+    source_root: PathBuf,
+    genome_twobit: PathBuf,
+    splice: SpliceIndex,
+    proteins: Vec<Protein>,
+    report: BuildReport,
+    interpro_entries: HashMap<String, InterProEntry>,
+    chromatin: Vec<ChromatinElement>,
+    protein_binding: ProteinBindingUnion,
+    ctcf: CtcfArchitecture,
+    experimental_loops: ExperimentalLoopArchitecture,
+    sources: Option<sources::SourceManifest>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OmmverseV7 {
     assembly: String,
@@ -716,6 +733,8 @@ pub struct Ommverse {
     pub genome_twobit: PathBuf,
     pub splice: SpliceIndex,
     pub proteins: Vec<Protein>,
+    /// Protein annotations normalized into spliced genomic coordinates.
+    pub protein_features: ProteinFeatureIndex,
     pub report: BuildReport,
     /// InterPro vocabulary and parent/child hierarchy retained once per index.
     pub interpro_entries: HashMap<String, InterProEntry>,

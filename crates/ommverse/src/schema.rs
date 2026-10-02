@@ -119,6 +119,13 @@ impl OmmverseSchema {
             },
         );
         searches.insert(
+            "feature".to_owned(),
+            SearchSchema {
+                fields: ["name", "id", "protein"].into_iter().map(str::to_owned).collect(),
+                required_any: vec![["name", "id", "protein"].into_iter().map(str::to_owned).collect()],
+            },
+        );
+        searches.insert(
             "variant".to_owned(),
             SearchSchema {
                 fields: ["chromosome", "chrom", "chr", "position", "pos", "clinical_effect"].into_iter().map(str::to_owned).collect(),
@@ -205,6 +212,7 @@ impl OmmverseSchema {
             Entity::Gene => "gene",
             Entity::Transcript => "transcript",
             Entity::Protein => "protein",
+            Entity::Feature => "feature",
             Entity::Variant => "variant",
         };
         let search = self.searches.get(entity)

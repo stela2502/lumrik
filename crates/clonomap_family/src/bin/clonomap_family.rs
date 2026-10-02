@@ -1328,11 +1328,28 @@ fn write_reference_candidate_report(path: &Path, models: &ReferenceModels) -> Re
     Ok(())
 }
 
+fn hc_c_counts(family: &Family) -> String {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for member in &family.members {
+        let c = if member.cell.hc.c.is_empty() {
+            "unknown"
+        } else {
+            member.cell.hc.c.as_str()
+        };
+        *counts.entry(c.to_string()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(c, n)| format!("{c}={n}"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 fn write_family_report(path: &Path, families: &[Family]) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
     writeln!(
         w,
-        "family\tcells\tmax_hc_mutations\tlc_clones\tlc_n\tmean_lc_mutations\tsd_lc_mutations\tlc_max_1\tlc_max_2\tlc_max_3\tpearson_abundance_hc_n\tpearson_abundance_hc_r\tpearson_abundance_hc_p\tpearson_abundance_lc_n\tpearson_abundance_lc_r\tpearson_abundance_lc_p\tpearson_abundance_paired_n\tpearson_abundance_paired_r\tpearson_abundance_paired_p\tpearson_hc_lc_n\tpearson_hc_lc_r\tpearson_hc_lc_p\tmst_rooted_isotype_svg_hex\tmst_rooted_light_chain_svg_hex\tmst_rooted_hc_depth_svg_hex\tmst_rooted_lc_depth_svg_hex\tmst_rooted_paired_depth_svg_hex"
+        "family\tcells\thc_c_counts\tmax_hc_mutations\tlc_clones\tlc_n\tmean_lc_mutations\tsd_lc_mutations\tlc_max_1\tlc_max_2\tlc_max_3\tpearson_abundance_hc_n\tpearson_abundance_hc_r\tpearson_abundance_hc_p\tpearson_abundance_lc_n\tpearson_abundance_lc_r\tpearson_abundance_lc_p\tpearson_abundance_paired_n\tpearson_abundance_paired_r\tpearson_abundance_paired_p\tpearson_hc_lc_n\tpearson_hc_lc_r\tpearson_hc_lc_p\tmst_rooted_isotype_svg_hex\tmst_rooted_light_chain_svg_hex\tmst_rooted_hc_depth_svg_hex\tmst_rooted_lc_depth_svg_hex\tmst_rooted_paired_depth_svg_hex"
     )?;
     let mut rows: Vec<_> = families.iter().collect();
     rows.sort_by_key(|f| std::cmp::Reverse(f.members.len()));
@@ -1342,9 +1359,10 @@ fn write_family_report(path: &Path, families: &[Family]) -> Result<()> {
         let mut max3 = r.lc_mutations.max3.iter().rev();
         writeln!(
             w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             r.family,
             r.cells,
+            hc_c_counts(f),
             r.max_hc_mutations.map_or("NA".into(), |x| x.to_string()),
             r.lc_clones,
             r.lc_mutations.n,
@@ -1395,7 +1413,7 @@ fn write_cell_report(
     let mut w = BufWriter::new(File::create(path)?);
     writeln!(
         w,
-        "source\tcell\tbd_cell_id\tfamily\tlc_clone\thc_mutation_count\tlc_mutation_count\ttotal_mutation_count\thc_distance\tlc_distance\ttotal_distance\tfamily_pearson_abundance_hc_n\tfamily_pearson_abundance_hc_r\tfamily_pearson_abundance_hc_p\tfamily_pearson_abundance_lc_n\tfamily_pearson_abundance_lc_r\tfamily_pearson_abundance_lc_p\tfamily_pearson_abundance_paired_n\tfamily_pearson_abundance_paired_r\tfamily_pearson_abundance_paired_p\tfamily_pearson_hc_lc_n\tfamily_pearson_hc_lc_r\tfamily_pearson_hc_lc_p\thclc_pearson_abundance_hc_n\thclc_pearson_abundance_hc_r\thclc_pearson_abundance_hc_p\thclc_pearson_abundance_lc_n\thclc_pearson_abundance_lc_r\thclc_pearson_abundance_lc_p\thclc_pearson_abundance_paired_n\thclc_pearson_abundance_paired_r\thclc_pearson_abundance_paired_p\thclc_pearson_hc_lc_n\thclc_pearson_hc_lc_r\thclc_pearson_hc_lc_p\tmst_rooted_isotype_svg_hex\tmst_rooted_light_chain_svg_hex\tmst_rooted_hc_depth_svg_hex\tmst_rooted_lc_depth_svg_hex\tmst_rooted_paired_depth_svg_hex"
+        "source\tcell\tbd_cell_id\tfamily\tlc_clone\thc_c_call\thc_mutation_count\tlc_mutation_count\ttotal_mutation_count\thc_distance\tlc_distance\ttotal_distance\tfamily_pearson_abundance_hc_n\tfamily_pearson_abundance_hc_r\tfamily_pearson_abundance_hc_p\tfamily_pearson_abundance_lc_n\tfamily_pearson_abundance_lc_r\tfamily_pearson_abundance_lc_p\tfamily_pearson_abundance_paired_n\tfamily_pearson_abundance_paired_r\tfamily_pearson_abundance_paired_p\tfamily_pearson_hc_lc_n\tfamily_pearson_hc_lc_r\tfamily_pearson_hc_lc_p\thclc_pearson_abundance_hc_n\thclc_pearson_abundance_hc_r\thclc_pearson_abundance_hc_p\thclc_pearson_abundance_lc_n\thclc_pearson_abundance_lc_r\thclc_pearson_abundance_lc_p\thclc_pearson_abundance_paired_n\thclc_pearson_abundance_paired_r\thclc_pearson_abundance_paired_p\thclc_pearson_hc_lc_n\thclc_pearson_hc_lc_r\thclc_pearson_hc_lc_p\tmst_rooted_isotype_svg_hex\tmst_rooted_light_chain_svg_hex\tmst_rooted_hc_depth_svg_hex\tmst_rooted_lc_depth_svg_hex\tmst_rooted_paired_depth_svg_hex"
     )?;
     for family in families {
         let a = family_plot_analysis(family);
@@ -1420,12 +1438,13 @@ fn write_cell_report(
                 let bd_cell_id = bd_cell_id_for_seq(cell, cell_id_detectors);
                 writeln!(
                     w,
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     source,
                     cell,
                     bd_cell_id,
                     family.name,
                     lc.name,
+                    hm.cell.hc.c,
                     hc_count,
                     lc_count,
                     hc_count + lc_count,
@@ -1474,11 +1493,12 @@ fn write_cell_report(
             let bd_cell_id = bd_cell_id_for_seq(cell, cell_id_detectors);
             writeln!(
                 w,
-                "{}\t{}\t{}\t{}\tunpaired\t{}\tNA\t{}\t{}\tNA\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\tunpaired\t{}\t{}\tNA\t{}\t{}\tNA\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t{}\t{}\t{}\t{}\t{}",
                 source,
                 cell,
                 bd_cell_id,
                 family.name,
+                hm.cell.hc.c,
                 hc_count,
                 hc_count,
                 hc_dist,

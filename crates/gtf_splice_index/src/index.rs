@@ -6,6 +6,7 @@ use crate::annotation::io::{AnnotationReader, AnnotationRecord, ParseError};
 use crate::model::gene::Gene;
 use crate::model::transcript::Transcript;
 use crate::model::types::{GeneId, MatchClass, MatchHit, MatchOptions, TranscriptId};
+use crate::placement::{ChrBuckets, partition_point};
 #[allow(unused_imports)]
 use crate::types::{RefBlock, SplicedRead, Strand};
 
@@ -67,75 +68,6 @@ impl Default for IdNameKeys {
 
             parent_keys: vec!["Parent".into()],
             exon_feature_types: vec!["exon".into()],
-        }
-    }
-}
-
-/// Per-chromosome bucket index: bin -> transcript ids.
-///
-/// This is a pre-filter only: it returns candidate transcript IDs that overlap bins.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChrBuckets {
-    pub bin_width: u32,
-    pub bins: Vec<Vec<TranscriptId>>,
-    pub max_end: u32,
-}
-
-impl ChrBuckets {
-    pub fn new(bin_width: u32) -> Self {
-        Self {
-            bin_width,
-            bins: Vec::new(),
-            max_end: 0,
-        }
-    }
-
-    fn ensure_len_for_end(&mut self, end0: u32) {
-        self.max_end = self.max_end.max(end0);
-
-        let need_bins =
-            ((self.max_end as u64 + self.bin_width as u64 - 1) / self.bin_width as u64) as usize;
-        if self.bins.len() < need_bins {
-            self.bins.resize_with(need_bins, Vec::new);
-        }
-    }
-
-    fn add_span(&mut self, tx_id: TranscriptId, start0: u32, end0: u32) {
-        if end0 <= start0 {
-            return;
-        }
-
-        self.ensure_len_for_end(end0);
-
-        let b0 = (start0 / self.bin_width) as usize;
-        let b1 = ((end0.saturating_sub(1)) / self.bin_width) as usize;
-
-        for b in b0..=b1 {
-            self.bins[b].push(tx_id);
-        }
-    }
-
-    pub fn finalize_by_tx_start(&mut self, tx_span_start: &[u32], tx_span_end: &[u32]) {
-        for bin in &mut self.bins {
-            // Sort by (start, end, id) to make it deterministic.
-            bin.sort_unstable_by(|a, b| {
-                let sa = tx_span_start[*a];
-                let sb = tx_span_start[*b];
-                match sa.cmp(&sb) {
-                    std::cmp::Ordering::Equal => {
-                        let ea = tx_span_end[*a];
-                        let eb = tx_span_end[*b];
-                        match ea.cmp(&eb) {
-                            std::cmp::Ordering::Equal => a.cmp(b),
-                            other => other,
-                        }
-                    }
-                    other => other,
-                }
-            });
-
-            // Now adjacent duplicates are guaranteed adjacent (because equal ids compare equal)
-            bin.dedup();
         }
     }
 }
@@ -350,7 +282,7 @@ impl SpliceIndex {
     /// sort the internal data structure by transcript start position.
     fn finalize(&mut self) {
         for cb in &mut self.chr_buckets {
-            cb.finalize_by_tx_start(&self.tx_span_start, &self.tx_span_end);
+            cb.finalize_by_start(&self.tx_span_start, &self.tx_span_end);
         }
     }
 
@@ -797,7 +729,7 @@ impl SpliceIndex {
 
             // Binary search:
             // find first transcript where start >= end0
-            let cutoff = Self::partition_point(transcripts_in_bin, |&tx_id| {
+            let cutoff = partition_point(transcripts_in_bin, |&tx_id| {
                 self.tx_span_start[tx_id] < end0
             });
 
@@ -846,7 +778,7 @@ impl SpliceIndex {
 
         for bin_idx in first_bin..=last_bin {
             let transcripts_in_bin = &chr_bins.bins[bin_idx];
-            let cutoff = Self::partition_point(transcripts_in_bin, |&tx_id| {
+            let cutoff = partition_point(transcripts_in_bin, |&tx_id| {
                 self.tx_span_start[tx_id] < end0
             });
 
@@ -860,27 +792,6 @@ impl SpliceIndex {
         let mut ret: Vec<_> = hits.into_iter().collect();
         ret.sort_unstable();
         ret
-    }
-
-    #[inline]
-    fn partition_point<T, F>(slice: &[T], mut pred: F) -> usize
-    where
-        F: FnMut(&T) -> bool,
-    {
-        let mut left = 0usize;
-        let mut right = slice.len();
-
-        while left < right {
-            let mid = left + (right - left) / 2;
-
-            if pred(&slice[mid]) {
-                left = mid + 1;
-            } else {
-                right = mid;
-            }
-        }
-
-        left
     }
 
     /// Convenience: candidates for a spliced read (based on its span).

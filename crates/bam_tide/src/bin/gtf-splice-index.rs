@@ -220,6 +220,7 @@ fn main() -> Result<()> {
                 gene_name_keys: args.gene_name_keys,
                 transcript_id_keys: args.transcript_id_keys,
                 transcript_name_keys: args.transcript_name_keys,
+                protein_id_keys: vec!["protein_id".to_string()],
                 parent_keys: args.parent_keys,
                 exon_feature_types: args.exon_feature_types,
             };

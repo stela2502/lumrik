@@ -17,3 +17,6 @@ clonomap_test
 :n
 crates/bam_tide/legacy/testData/cmp.tsv
 mex_compare
+MEIS2.*
+AUTS*
+ETV*

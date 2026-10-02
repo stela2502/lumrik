@@ -50,6 +50,7 @@ pub struct InterProImportReport {
     pub records_streamed: usize,
     pub matched_records: usize,
     pub features_added: usize,
+    pub projected_features_added: usize,
     pub duplicate_features: usize,
     pub malformed_records: usize,
     pub unknown_entries: usize,
@@ -190,6 +191,63 @@ where
             }
         }
     }
+    // STRING's alias table is used only as an import-time identity bridge.
+    // In particular, UniProt_AC rows connect protein2ipr accessions such as
+    // O14770 to the GENCODE/ENSP proteins already present in Ommverse.  The
+    // aliases are not inserted into the central identity registry: once the
+    // InterPro interval has been projected to the genome, genomic placement is
+    // the durable identity.
+    for (oi, omm) in ommverses.iter().enumerate() {
+        let interactions = omm.source_root.join("Interactions");
+        let aliases = std::fs::read_dir(&interactions).ok().and_then(|entries| {
+            let mut paths = entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.starts_with("protein.aliases") && (n.ends_with(".txt") || n.ends_with(".txt.gz"))
+                }))
+                .collect::<Vec<_>>();
+            paths.sort();
+            paths.pop()
+        });
+        let Some(path) = aliases else { continue; };
+        let file = File::open(&path).with_context(|| format!("opening STRING aliases {}", path.display()))?;
+        let gz = path.extension().is_some_and(|x| x == "gz");
+        let input: Box<dyn Read> = if gz {
+            Box::new(MultiGzDecoder::new(file))
+        } else {
+            Box::new(file)
+        };
+        let reader = BufReader::with_capacity(1024 * 1024, input);
+        for line in reader.lines() {
+            let line = line?;
+            let mut f = line.split('\t');
+            let Some(node) = f.next() else { continue; };
+            let Some(alias) = f.next() else { continue; };
+            let source = f.next().unwrap_or("");
+            if source != "UniProt_AC" {
+                continue;
+            }
+            let ensp = node.split_once('.').map(|(_, id)| id).unwrap_or(node);
+            let stable = strip_version(ensp);
+            let Some(targets) = locations.get(stable).cloned().or_else(|| locations.get(ensp).cloned()) else {
+                continue;
+            };
+            for target in targets.into_iter().filter(|(target_oi, _)| *target_oi == oi) {
+                let out = locations.entry(alias.to_owned()).or_default();
+                if !out.contains(&target) {
+                    out.push(target);
+                }
+            }
+        }
+    }
+
+    // Rebuild the projected index from this import.  Base Ommverse files have
+    // no InterPro projection; enriched files should contain exactly the
+    // geometry produced by the current source stream.
+    for omm in ommverses.iter_mut() {
+        omm.protein_features = ProteinFeatureIndex::new(omm.splice.bin_width, omm.splice.chr_names.len());
+    }
+
     let mut reports = vec![InterProImportReport::default(); ommverses.len()];
     for report in &mut reports {
         report.entries_loaded = entries.len();
@@ -277,6 +335,26 @@ where
             } else {
                 report.duplicate_features += 1;
             }
+
+            // Bring the annotation home: project the source protein interval
+            // through each GENCODE transcript linked to this protein and store
+            // the resulting spliced genomic model.
+            let transcript_ids = ommverses[oi].proteins[pi].transcript_ids.clone();
+            for tx_id in transcript_ids {
+                let Some(tx) = ommverses[oi].splice.transcripts.get(tx_id) else { continue; };
+                if ommverses[oi].protein_features.add_from_transcript(
+                    tx,
+                    accession,
+                    ipr,
+                    kind,
+                    description.clone(),
+                    signature,
+                    start_1 - 1,
+                    end_1,
+                ).is_some() {
+                    report.projected_features_added += 1;
+                }
+            }
         }
         if streamed % 1_000_000 == 0 {
             progress(streamed, &reports);
@@ -284,6 +362,7 @@ where
     }
     for (omm, report) in ommverses.iter_mut().zip(reports.iter_mut()) {
         report.records_streamed = streamed;
+        omm.protein_features.finalize();
         omm.report.feature_records += report.features_added;
     }
     progress(streamed, &reports);
@@ -1201,13 +1280,14 @@ impl Ommverse {
         };
         let sources_path = root.join("sources.yaml");
         let sources = sources::SourceManifest::load_optional(&sources_path)?;
-
+        let protein_features = ProteinFeatureIndex::new(splice.bin_width, splice.chr_names.len());
         let mut out = Self {
             assembly,
             source_root: root,
             genome_twobit: twobit,
             splice,
             proteins,
+            protein_features,
             report,
             interpro_entries: HashMap::new(),
             chromatin: Vec::new(),

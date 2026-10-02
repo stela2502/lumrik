@@ -10,6 +10,7 @@ pub enum Entity {
     Gene,
     Transcript,
     Protein,
+    Feature,
     Variant,
 }
 
@@ -57,8 +58,9 @@ impl Query {
             "gene" | "genes" => Entity::Gene,
             "transcript" | "transcripts" => Entity::Transcript,
             "protein" | "proteins" => Entity::Protein,
+            "feature" | "features" => Entity::Feature,
             "variant" | "variants" => Entity::Variant,
-            other => bail!("unsupported SELECT entity '{other}' (currently: gene, transcript, protein, variant)"),
+            other => bail!("unsupported SELECT entity '{other}' (currently: gene, transcript, protein, feature, variant)"),
         };
 
         let where_text = &input[where_at + 7..];
@@ -278,10 +280,40 @@ impl fmt::Display for ProteinRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureRow {
+    pub feature_id: usize,
+    pub label: String,
+    pub kind: String,
+    pub description: String,
+    pub signature: String,
+    pub chromosome: String,
+    pub strand: String,
+    pub blocks: Vec<(u32, u32)>,
+    pub source_protein: String,
+    pub source_transcript: usize,
+    pub aa_start: u32,
+    pub aa_end: u32,
+}
+
+impl fmt::Display for FeatureRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let blocks = self.blocks.iter()
+            .map(|(start, end)| format!("{}-{}", start + 1, end))
+            .collect::<Vec<_>>()
+            .join(",");
+        write!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}..{}",
+            self.feature_id, self.label, self.kind, self.description, self.signature,
+            self.chromosome, self.strand, blocks, self.source_protein,
+            self.source_transcript, self.aa_start + 1, self.aa_end)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryRow {
     Gene(GeneRow),
     Transcript(TranscriptRow),
     Protein(ProteinRow),
+    Feature(FeatureRow),
     Variant(VariantRow),
 }
 
@@ -291,6 +323,7 @@ impl fmt::Display for QueryRow {
             Self::Gene(row) => row.fmt(f),
             Self::Transcript(row) => row.fmt(f),
             Self::Protein(row) => row.fmt(f),
+            Self::Feature(row) => row.fmt(f),
             Self::Variant(row) => row.fmt(f),
         }
     }
@@ -304,6 +337,8 @@ pub fn execute(omm: &Ommverse, query: &Query) -> Result<Vec<QueryRow>> {
             .map(|rows| rows.into_iter().map(QueryRow::Transcript).collect()),
         Entity::Protein => execute_protein_query(omm, query)
             .map(|rows| rows.into_iter().map(QueryRow::Protein).collect()),
+        Entity::Feature => execute_feature_query(omm, query)
+            .map(|rows| rows.into_iter().map(QueryRow::Feature).collect()),
         Entity::Variant => execute_variant_query(omm, query)
             .map(|rows| rows.into_iter().map(QueryRow::Variant).collect()),
     }
@@ -453,6 +488,69 @@ fn execute_protein_query(omm: &Ommverse, query: &Query) -> Result<Vec<ProteinRow
     Ok(protein_ids.into_iter().map(|protein_id| {
         let p = &omm.proteins[protein_id];
         ProteinRow { protein_id, accession: p.accession.clone(), entry_name: p.entry_name.clone(), name: p.name.clone(), gene_symbol: p.gene_symbol.clone(), ensembl_protein: p.ensembl_protein.clone(), transcript_ids: p.transcript_ids.clone(), feature_count: p.features.len() }
+    }).collect())
+}
+
+fn execute_feature_query(omm: &Ommverse, query: &Query) -> Result<Vec<FeatureRow>> {
+    for predicate in &query.predicates {
+        match predicate.field() {
+            "id" | "name" | "protein" => {}
+            other => bail!("feature field '{other}' is not searchable yet"),
+        }
+    }
+
+    let labels = text_predicate_values(query, &["id", "name"])?;
+    let proteins = text_predicate_values(query, &["protein"])?;
+    if labels.is_empty() && proteins.is_empty() {
+        bail!("feature query requires id/name = \\\"...\\\" or protein = \\\"...\\\"");
+    }
+
+    let mut ids = Vec::<usize>::new();
+    for label in labels {
+        ids.extend_from_slice(omm.protein_features.ids_for_label(label));
+    }
+
+    let strict_protein_lookup = query.predicates.iter().any(|predicate| {
+        matches!(predicate, Predicate::Eq { field, .. } if field == "protein")
+    });
+    for identity in proteins {
+        let Some(protein_id) = omm.protein_id(identity) else {
+            if strict_protein_lookup {
+                bail!("protein '{identity}' not found");
+            }
+            continue;
+        };
+        let transcript_ids = &omm.proteins[protein_id].transcript_ids;
+        ids.extend(omm.protein_features.features.iter()
+            .filter(|feature| transcript_ids.contains(&feature.source_transcript))
+            .map(|feature| feature.id));
+    }
+
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids.into_iter().filter_map(|id| {
+        let feature = omm.protein_features.features.get(id)?;
+        let chromosome = omm.splice.chr_names.get(feature.chr_id)
+            .cloned().unwrap_or_else(|| feature.chr_id.to_string());
+        let strand = match feature.strand {
+            gtf_splice_index::Strand::Plus => "+",
+            gtf_splice_index::Strand::Minus => "-",
+            _ => ".",
+        }.to_owned();
+        Some(FeatureRow {
+            feature_id: feature.id,
+            label: feature.label.clone(),
+            kind: format!("{:?}", feature.kind),
+            description: feature.description.clone(),
+            signature: feature.signature.clone(),
+            chromosome,
+            strand,
+            blocks: feature.blocks.iter().map(|block| (block.start, block.end)).collect(),
+            source_protein: feature.source_protein.clone(),
+            source_transcript: feature.source_transcript,
+            aa_start: feature.source_protein_range.0,
+            aa_end: feature.source_protein_range.1,
+        })
     }).collect())
 }
 

@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use bam_tide::core::ref_block::record_to_blocks;
 use clap::Parser;
-use gtf_splice_index::{MatchClass, MatchOptions, SpliceIndex, SplicedRead, Strand};
+use gtf_splice_index::{MatchClass, MatchOptions, RefBlock, SpliceIndex, SplicedRead, Strand};
 use rayon::prelude::*;
 use ommverse::Ommverse;
 use rust_htslib::bam::{self, Read};
@@ -60,9 +60,8 @@ struct Cli {
     #[arg(long, default_value_t = 0.02)]
     plot_min_fraction: f64,
     /// Optional InterPro-enriched Ommverse index. When supplied in two-group
-    /// report mode, a genomic transcript-structure SVG is produced with
-    /// transcript-specific InterPro protein features projected through the CDS
-    /// back onto the coding exons.
+    /// report mode, the genomic transcript-structure SVG overlays the already
+    /// genome-projected InterPro feature models stored in Ommverse.
     #[arg(long)]
     ommverse: Option<PathBuf>,
 }
@@ -443,17 +442,33 @@ fn write_structure_svg(
     }
     if gstart >= gend { return Ok(()); }
 
+    // Ommverse and the BAM-side splice index are independent serialized models,
+    // so never assume that their chromosome numeric IDs are identical. Resolve
+    // the plotted chromosome by name and ask the genomic ProteinFeatureIndex
+    // for candidates once for the whole gene span.
+    let plotted_chr = idx.transcripts[plotted[0]].chr_id;
+    let chr_name = idx.chr_names.get(plotted_chr)
+        .context("plotted transcript chromosome is missing from splice index")?;
+    let omm_chr = omm.splice.chr_id(chr_name)
+        .with_context(|| format!("chromosome {chr_name} is absent from Ommverse"))?;
+    let feature_ids = omm.protein_features.candidates_for_region(omm_chr, gstart, gend);
+
+    // Every candidate feature must be evaluated independently for every transcript.
+    // The previous fixed-height renderer stopped after ~2 feature rows, which made
+    // later domains (for example the MEIS2 homeodomain) disappear whenever an
+    // earlier genomic feature was also retained. Size rows for the full candidate
+    // set instead; non-overlapping candidates are simply skipped while rendering.
     let w = 1500.0;
     let left = 250.0;
     let right = 360.0;
     let top = 95.0;
-    let row_h = 112.0;
+    let row_h = (70.0 + 14.0 * feature_ids.len() as f64).max(112.0);
     let bottom = 70.0;
     let h = top + row_h * plotted.len() as f64 + bottom;
     let plot_w = w - left - right;
     let gx = |p: u32| left + plot_w * ((p.saturating_sub(gstart)) as f64 / (gend - gstart) as f64);
     let mut s = svg_header(w, h);
-    s.push_str(&format!(r##"<text x="{left}" y="30" class="title">{} transcript structure and InterPro architecture</text><text x="{left}" y="51" class="label">InterPro amino-acid features are projected through each transcript CDS onto the same genomic coordinate axis; introns are never painted as protein.</text><text x="{left}" y="70" class="small">Genomic span: {}–{} (0-based half-open); exon geometry is drawn to genomic scale.</text>"##, xml_escape(&args.gene), gstart, gend));
+    s.push_str(&format!(r##"<text x="{left}" y="30" class="title">{} transcript structure and InterPro architecture</text><text x="{left}" y="51" class="label">InterPro features are read from Ommverse as spliced genomic models and intersected directly with each transcript CDS; no protein-coordinate reprojection is performed here.</text><text x="{left}" y="70" class="small">Genomic span: {}–{} (0-based half-open); exon geometry is drawn to genomic scale.</text>"##, xml_escape(&args.gene), gstart, gend));
 
     for (ri, &tx_id) in plotted.iter().enumerate() {
         let tx = &idx.transcripts[tx_id];
@@ -473,34 +488,62 @@ fn write_structure_svg(
             }
         }
 
-        let mut proteins = Vec::new();
-        let mut seen_proteins = HashSet::new();
-        for alias in &tx.names {
-            for protein in omm.proteins_for_transcript(alias) {
-                if seen_proteins.insert(protein.accession.clone()) { proteins.push(protein); }
-            }
-        }
+        // The feature models are already in genomic coordinates.  Transcript
+        // specificity is now a geometry question: retain only the feature bases
+        // that are coding in this transcript.  A complete feature has every
+        // projected genomic base represented by this transcript's CDS; partial
+        // compatibility is drawn but labelled explicitly.
+        let cds_blocks: Vec<RefBlock> = if let Some((cs, ce)) = tx.cds_span() {
+            tx.exons().iter().filter_map(|exon| {
+                let start = exon.start.max(cs);
+                let end = exon.end.min(ce);
+                (start < end).then(|| RefBlock::new(start, end))
+            }).collect()
+        } else {
+            Vec::new()
+        };
         let mut feature_y = y + 25.0;
         let mut seen_features = HashSet::new();
-        for protein in proteins {
-            for feature in protein.features.iter().filter(|f| f.source_db == "InterPro") {
-                let Some((aa0,aa1)) = feature.protein_range else { continue; };
-                let blocks=tx.protein_range_to_genomic_blocks(aa0,aa1);
-                if blocks.is_empty() { continue; }
-                let key=(protein.accession.clone(),feature.label.clone(),aa0,aa1);
-                if !seen_features.insert(key) { continue; }
-                let first_x=gx(blocks.first().unwrap().start); let last_x=gx(blocks.last().unwrap().end);
-                if blocks.len()>1 { s.push_str(&format!(r##"<line x1="{first_x:.1}" y1="{feature_y:.1}" x2="{last_x:.1}" y2="{feature_y:.1}" stroke="#777" stroke-width="1" stroke-dasharray="3,3"/>"##)); }
-                for b in &blocks { let x1=gx(b.start); let x2=gx(b.end); s.push_str(&format!(r##"<rect x="{x1:.1}" y="{:.1}" width="{:.1}" height="8" rx="2" fill="#2f6fbb"/>"##,feature_y-4.0,(x2-x1).max(1.5))); }
-                let label = if feature.description.is_empty() { feature.label.clone() } else { format!("{} · {}", feature.label, feature.description) };
-                s.push_str(&format!(r##"<text x="{:.1}" y="{:.1}" class="small">{}</text>"##, last_x+6.0, feature_y+4.0, xml_escape(&label)));
-                feature_y += 14.0;
-                if feature_y > y + 52.0 { break; }
+        for &feature_id in &feature_ids {
+            let Some(feature) = omm.protein_features.features.get(feature_id) else { continue; };
+            if feature.chr_id != omm_chr { continue; }
+
+            let mut blocks = Vec::new();
+            let mut feature_bases = 0u32;
+            let mut retained_bases = 0u32;
+            for fb in &feature.blocks {
+                feature_bases += fb.end.saturating_sub(fb.start);
+                for cb in &cds_blocks {
+                    let start = fb.start.max(cb.start);
+                    let end = fb.end.min(cb.end);
+                    if start < end {
+                        retained_bases += end - start;
+                        blocks.push(RefBlock::new(start, end));
+                    }
+                }
             }
-            if feature_y > y + 52.0 { break; }
+            if blocks.is_empty() { continue; }
+
+            let key = (feature.label.clone(), feature.signature.clone(), blocks.clone());
+            if !seen_features.insert(key) { continue; }
+            let complete = retained_bases == feature_bases;
+            let first_x = gx(blocks.first().unwrap().start);
+            let last_x = gx(blocks.last().unwrap().end);
+            if blocks.len() > 1 {
+                s.push_str(&format!(r##"<line x1="{first_x:.1}" y1="{feature_y:.1}" x2="{last_x:.1}" y2="{feature_y:.1}" stroke="#777" stroke-width="1" stroke-dasharray="3,3"/>"##));
+            }
+            for b in &blocks {
+                let x1 = gx(b.start); let x2 = gx(b.end);
+                s.push_str(&format!(r##"<rect x="{x1:.1}" y="{:.1}" width="{:.1}" height="8" rx="2" fill="#2f6fbb"{} />"##,
+                    feature_y-4.0, (x2-x1).max(1.5), if complete { "" } else { r#" opacity="0.45""# }));
+            }
+            let base_label = if feature.description.is_empty() { feature.label.clone() } else { format!("{} · {}", feature.label, feature.description) };
+            let label = if complete { base_label } else { format!("{base_label} · partial {retained_bases}/{feature_bases} bp") };
+            s.push_str(&format!(r##"<text x="{:.1}" y="{:.1}" class="small">{}</text>"##, last_x+6.0, feature_y+4.0, xml_escape(&label)));
+            feature_y += 14.0;
         }
         if seen_features.is_empty() {
-            s.push_str(&format!(r##"<text x="{left}" y="{:.1}" class="small">No transcript-linked InterPro feature with protein coordinates</text>"##,y+31.0));
+            s.push_str(&format!(r##"<text x="{left}" y="{:.1}" class="small">No genomic InterPro feature overlaps this transcript CDS</text>"##,y+31.0));
         }
 
         let mut means=[0.0;2];
@@ -511,7 +554,7 @@ fn write_structure_svg(
         let rx=w-right+25.0;
         s.push_str(&format!(r##"<text x="{rx}" y="{:.1}" class="small"><tspan font-weight="bold">{}</tspan> {:.1}%</text><text x="{rx}" y="{:.1}" class="small"><tspan font-weight="bold">{}</tspan> {:.1}%</text>"##,y-3.0,xml_escape(&groups[0].label),means[0]*100.0,y+14.0,xml_escape(&groups[1].label),means[1]*100.0));
     }
-    s.push_str(&format!(r##"<text x="{left}" y="{:.1}" class="small">Grey exon = transcribed exon · dark inset = CDS · blue blocks = InterPro protein feature projected onto the coding genomic bases · dashed connector = one protein feature spanning splice junction(s)</text>"##,h-28.0));
+    s.push_str(&format!(r##"<text x="{left}" y="{:.1}" class="small">Grey exon = transcribed exon · dark inset = CDS · blue blocks = genomic InterPro feature retained by this transcript · faded blue = partial feature · dashed connector = one genomic feature spanning splice junction(s)</text>"##,h-28.0));
     s.push_str("</svg>");
     std::fs::write(path,s)?;
     Ok(())
@@ -525,7 +568,7 @@ fn write_report(path:&Path,args:&Cli,idx:&SpliceIndex,rows:&[SampleEstimate],ass
     writeln!(w,"The figures show only transcripts whose mean inferred fraction is at least {:.1}% in either group. The complete numeric results remain in `{}`.\n",args.plot_min_fraction*100.0,args.out.display())?;
     writeln!(w,"## Outputs\n\n- `{}` — group-level table supporting the figures.\n- `{}` — biological-sample dot plot with within-sample 95% bootstrap intervals.\n- `{}` — compact transcript-usage shift plot; blue points/lines are group means and coloured points are biological samples.",table.display(),boot.display(),shift.display())?;
     if let Some(structure) = structure {
-        writeln!(w,"- `{}` — genomic transcript structures with transcript-specific InterPro protein features projected through each CDS back onto the coding exons. Protein feature blocks therefore mirror exon geometry and never fill introns.",structure.display())?;
+        writeln!(w,"- `{}` — genomic transcript structures overlaid with the genome-projected InterPro feature models stored in Ommverse. Features are intersected with each transcript CDS; faded blocks mark partial retention.",structure.display())?;
     }
     writeln!(w)?;
     writeln!(w,"## Samples\n")?; for g in 0..2 { writeln!(w,"- **{}:** {}",groups[g].label,group_samples[g].iter().map(|x|sample_name(x)).collect::<Vec<_>>().join(", "))?; }

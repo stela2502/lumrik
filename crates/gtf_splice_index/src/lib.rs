@@ -8,6 +8,7 @@ pub mod annotation;
 pub mod capabilities;
 pub mod index;
 pub mod model;
+pub mod placement;
 pub mod types;
 
 pub use index::{IdNameKeys, SPLICE_INDEX_FORMAT_VERSION, SpliceFeatureIndex, SpliceIndex, SpliceMatch, SpliceMatchMode};

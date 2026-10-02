@@ -901,6 +901,7 @@ fn main() -> Result<()> {
                 println!("    records streamed:       {}", report.records_streamed);
                 println!("    matching records:       {}", report.matched_records);
                 println!("    features added:         {}", report.features_added);
+                println!("    genomic projections:    {}", report.projected_features_added);
                 println!("    duplicate features:     {}", report.duplicate_features);
                 println!("    malformed records:      {}", report.malformed_records);
                 println!("    unknown entries:        {}", report.unknown_entries);

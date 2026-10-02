@@ -21,11 +21,21 @@ impl Ommverse {
         let version = u32::from_le_bytes(version);
         let mut out = match version {
             OMMVERSE_FORMAT_VERSION => bincode::deserialize_from(file)?,
+            9 => {
+                let old: OmmverseV9 = bincode::deserialize_from(file)?;
+                Self {
+                    assembly: old.assembly, source_root: old.source_root, genome_twobit: old.genome_twobit,
+                    splice: old.splice, proteins: old.proteins, protein_features: ProteinFeatureIndex::default(), report: old.report,
+                    interpro_entries: old.interpro_entries, chromatin: old.chromatin,
+                    protein_binding: old.protein_binding, ctcf: old.ctcf, experimental_loops: old.experimental_loops,
+                    sources: old.sources, protein_by_accession: HashMap::new(), proteins_by_gene: HashMap::new(), proteins_by_transcript: HashMap::new(), gene_by_name: HashMap::new(),
+                }
+            }
             7 => {
                 let old: OmmverseV7 = bincode::deserialize_from(file)?;
                 Self {
                     assembly: old.assembly, source_root: old.source_root, genome_twobit: old.genome_twobit,
-                    splice: old.splice, proteins: old.proteins, report: old.report,
+                    splice: old.splice, proteins: old.proteins, protein_features: ProteinFeatureIndex::default(), report: old.report,
                     interpro_entries: old.interpro_entries, chromatin: old.chromatin,
                     protein_binding: old.protein_binding, ctcf: old.ctcf, experimental_loops: old.experimental_loops,
                     sources: None, protein_by_accession: HashMap::new(), proteins_by_gene: HashMap::new(), proteins_by_transcript: HashMap::new(), gene_by_name: HashMap::new(),
@@ -39,6 +49,7 @@ impl Ommverse {
                     genome_twobit: old.genome_twobit,
                     splice: old.splice,
                     proteins: old.proteins,
+                    protein_features: ProteinFeatureIndex::default(),
                     report: old.report,
                     interpro_entries: old.interpro_entries,
                     chromatin: old.chromatin,
@@ -60,6 +71,7 @@ impl Ommverse {
                     genome_twobit: old.genome_twobit,
                     splice: old.splice,
                     proteins: old.proteins,
+                    protein_features: ProteinFeatureIndex::default(),
                     report: old.report,
                     interpro_entries: old.interpro_entries,
                     chromatin: old.chromatin,
@@ -83,6 +95,7 @@ impl Ommverse {
                     genome_twobit: old.genome_twobit,
                     splice: old.splice,
                     proteins: old.proteins,
+                    protein_features: ProteinFeatureIndex::default(),
                     report: old.report,
                     interpro_entries: old.interpro_entries,
                     chromatin: old.chromatin,
@@ -104,6 +117,7 @@ impl Ommverse {
                     genome_twobit: old.genome_twobit,
                     splice: old.splice,
                     proteins: old.proteins,
+                    protein_features: ProteinFeatureIndex::default(),
                     report: old.report,
                     interpro_entries: old.interpro_entries,
                     chromatin: old.chromatin,
@@ -125,6 +139,7 @@ impl Ommverse {
                     genome_twobit: old.genome_twobit,
                     splice: old.splice,
                     proteins: old.proteins,
+                    protein_features: ProteinFeatureIndex::default(),
                     report: old.report,
                     interpro_entries: old.interpro_entries,
                     chromatin: Vec::new(),
@@ -146,6 +161,7 @@ impl Ommverse {
                     genome_twobit: old.genome_twobit,
                     splice: old.splice,
                     proteins: old.proteins,
+                    protein_features: ProteinFeatureIndex::default(),
                     report: old.report,
                     interpro_entries: HashMap::new(),
                     chromatin: Vec::new(),
