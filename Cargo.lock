@@ -217,7 +217,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bam_tide"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -412,9 +412,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.5.1"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f360145194ee8e21db5ee7f3fcd4fe52210864c75c985dae33218202c8bbe040"
+checksum = "f74872d07caf508b30a21f6836e7d7016a2eaf7d9ff4f48deaa58cd8a0407630"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -756,7 +756,7 @@ checksum = "ef8ae57c4978a2acd8b869ce6b9ca1dfe817bff704c220209fdef2c0b75a01b9"
 
 [[package]]
 name = "data_table"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "fast_tag_mapper"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1327,7 +1327,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "gtf_splice_index"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1388,7 +1388,7 @@ checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hmm"
-version = "0.8.1"
+version = "0.8.2"
 
 [[package]]
 name = "hts-sys"
@@ -1592,7 +1592,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-dna"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "clap",
  "int-to-prot",
@@ -1601,7 +1601,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-prot"
-version = "0.8.1"
+version = "0.8.2"
 
 [[package]]
 name = "interpol"
@@ -1688,15 +1688,15 @@ dependencies = [
 
 [[package]]
 name = "lazy_static"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libdeflate-sys"
@@ -1863,7 +1863,7 @@ dependencies = [
 
 [[package]]
 name = "lumrik-status"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
 ]
@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "mapping_info"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "atty",
  "chrono",
@@ -2099,7 +2099,7 @@ dependencies = [
 
 [[package]]
 name = "nelrune"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -2270,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "ommverse"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -2760,7 +2760,7 @@ dependencies = [
 
 [[package]]
 name = "read-tag-table"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2780,7 +2780,7 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "reference_curator"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2969,7 +2969,7 @@ dependencies = [
 
 [[package]]
 name = "sc-analysis"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2986,7 +2986,7 @@ dependencies = [
 
 [[package]]
 name = "sc-beacon"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3001,7 +3001,7 @@ dependencies = [
 
 [[package]]
 name = "sc-mapper"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "sc-te"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -3033,7 +3033,7 @@ dependencies = [
 
 [[package]]
 name = "sc-vdj"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3053,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "sc_primer"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3070,7 +3070,7 @@ dependencies = [
 
 [[package]]
 name = "scdata"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3269,7 +3269,7 @@ checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
 name = "snp-index"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3518,9 +3518,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
 dependencies = [
  "pin-project-lite",
 ]
@@ -3576,7 +3576,7 @@ dependencies = [
 
 [[package]]
 name = "traconmech"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -4095,9 +4095,9 @@ dependencies = [
 
 [[package]]
 name = "yoke-derive"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33811428bee40dbceb6d545e95754741d17a6aef9a4849f0fd62e2ba4f412a78"
+checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",
