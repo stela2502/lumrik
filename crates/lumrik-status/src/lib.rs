@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::Command;
 use std::sync::{Arc, RwLock};
@@ -70,8 +71,7 @@ pub fn spawn_status_server<C>(state: Arc<RwLock<C>>, addr: SocketAddr) -> Result
 where
     C: ServerContent + Send + Sync + 'static,
 {
-    let listener = TcpListener::bind(addr)
-        .with_context(|| format!("binding Lumrik status server to {addr}"))?;
+    let listener = bind_first_available(addr, 1_000)?;
     let addr = listener
         .local_addr()
         .context("reading Lumrik status server address")?;
@@ -92,6 +92,34 @@ where
     });
 
     Ok(StatusServer { handle, addr })
+}
+
+fn bind_first_available(start: SocketAddr, max_port_offset: u16) -> Result<TcpListener> {
+    // Port 0 deliberately retains the OS-assigned ephemeral-port behavior.
+    if start.port() == 0 {
+        return TcpListener::bind(start)
+            .with_context(|| format!("binding Lumrik status server to {start}"));
+    }
+
+    let last_port = start.port().saturating_add(max_port_offset);
+    for port in start.port()..=last_port {
+        let candidate = SocketAddr::new(start.ip(), port);
+        match TcpListener::bind(candidate) {
+            Ok(listener) => return Ok(listener),
+            Err(error) if error.kind() == ErrorKind::AddrInUse => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("binding Lumrik status server to {candidate}"));
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "no free Lumrik status-server port in {}..={} on {}",
+        start.port(),
+        last_port,
+        start.ip()
+    )
 }
 
 fn handle_connection<C>(mut stream: TcpStream, state: &Arc<RwLock<C>>) -> Result<()>
@@ -488,6 +516,17 @@ setInterval(updateElapsed,1000);setInterval(updateStatus,2000);updateStatus();
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_server_binding_advances_past_an_occupied_start_port() {
+        let occupied = TcpListener::bind(("127.0.0.1", 0)).expect("reserve test port");
+        let start = occupied.local_addr().expect("occupied address");
+        if start.port() == u16::MAX {
+            return;
+        }
+        let listener = bind_first_available(start, 100).expect("find a later free port");
+        assert!(listener.local_addr().unwrap().port() > start.port());
+    }
 
     #[test]
     fn metric_display_groups_large_numbers_with_spaces() {

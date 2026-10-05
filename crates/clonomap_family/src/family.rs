@@ -836,6 +836,44 @@ pub(crate) fn fragment_path(
     Some(path)
 }
 
+
+/// Reconstruct a length-matched mature receptor by applying only confidently
+/// aligned substitutions from the observed fragment to the inferred naive
+/// receptor. Unobserved sequence remains naive; indels are deliberately not
+/// projected in this first model-space representation.
+/// Project the mutually observed receptor bases onto reference coordinates.
+///
+/// This uses the exact same semi-global placement as mutation measurement.
+/// Insertions have no reference coordinate and are therefore omitted; callers
+/// that validate clone states must inspect `MutationMeasurement::indels` as
+/// separate evidence rather than silently treating this projection as complete.
+pub fn project_observed_bases(reference: &str, observed: &str) -> Option<Vec<(usize, u8)>> {
+    let path = fragment_path(reference.as_bytes(), observed.as_bytes())?;
+    let mut projected = Vec::new();
+    for (ai, bj) in path {
+        let (Some(ai), Some(bj)) = (ai, bj) else { continue; };
+        let base = observed.as_bytes()[bj].to_ascii_uppercase();
+        if base != b'N' {
+            projected.push((ai, base));
+        }
+    }
+    Some(projected)
+}
+
+pub fn reconstruct_substitutions(reference: &str, observed: &str) -> Option<String> {
+    let path = fragment_path(reference.as_bytes(), observed.as_bytes())?;
+    let mut mature = reference.as_bytes().to_vec();
+    for (ai, bj) in path {
+        let (Some(ai), Some(bj)) = (ai, bj) else { continue; };
+        let alt = observed.as_bytes()[bj].to_ascii_uppercase();
+        let reference_base = reference.as_bytes()[ai].to_ascii_uppercase();
+        if reference_base != b'N' && alt != b'N' && reference_base != alt {
+            mature[ai] = alt;
+        }
+    }
+    String::from_utf8(mature).ok()
+}
+
 /// Render the exact semi-global placement used by mutation measurement.
 /// The first line is the expected/naive sequence. The second line intentionally
 /// suppresses matching bases: only substitutions, insertions, and deletions are

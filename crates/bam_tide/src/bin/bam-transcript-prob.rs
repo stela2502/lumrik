@@ -3,7 +3,7 @@ use bam_tide::core::ref_block::record_to_blocks;
 use clap::Parser;
 use gtf_splice_index::{MatchClass, MatchOptions, RefBlock, SpliceIndex, SplicedRead, Strand};
 use rayon::prelude::*;
-use ommverse::Ommverse;
+use ommverse::{Ommverse, plot::{GeneTranscriptPlotOptions, plot_gene_transcripts_with_options}};
 use rust_htslib::bam::{self, Read};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -431,133 +431,42 @@ fn write_structure_svg(
     plotted: &[usize],
     omm: &Ommverse,
 ) -> Result<()> {
-    if plotted.is_empty() { return Ok(()); }
-    let mut gstart = u32::MAX;
-    let mut gend = 0u32;
+    if plotted.is_empty() {
+        return Ok(());
+    }
+
+    let mut options = GeneTranscriptPlotOptions::default();
     for &tx_id in plotted {
-        for b in idx.transcripts[tx_id].exons() {
-            gstart = gstart.min(b.start);
-            gend = gend.max(b.end);
-        }
-    }
-    if gstart >= gend { return Ok(()); }
-
-    // Ommverse and the BAM-side splice index are independent serialized models,
-    // so never assume that their chromosome numeric IDs are identical. Resolve
-    // the plotted chromosome by name and ask the genomic ProteinFeatureIndex
-    // for candidates once for the whole gene span.
-    let plotted_chr = idx.transcripts[plotted[0]].chr_id;
-    let chr_name = idx.chr_names.get(plotted_chr)
-        .context("plotted transcript chromosome is missing from splice index")?;
-    let omm_chr = omm.splice.chr_id(chr_name)
-        .with_context(|| format!("chromosome {chr_name} is absent from Ommverse"))?;
-    let feature_ids = omm.protein_features.candidates_for_region(omm_chr, gstart, gend);
-
-    // Every candidate feature must be evaluated independently for every transcript.
-    // The previous fixed-height renderer stopped after ~2 feature rows, which made
-    // later domains (for example the MEIS2 homeodomain) disappear whenever an
-    // earlier genomic feature was also retained. Size rows for the full candidate
-    // set instead; non-overlapping candidates are simply skipped while rendering.
-    let w = 1500.0;
-    let left = 250.0;
-    let right = 360.0;
-    let top = 95.0;
-    let row_h = (70.0 + 14.0 * feature_ids.len() as f64).max(112.0);
-    let bottom = 70.0;
-    let h = top + row_h * plotted.len() as f64 + bottom;
-    let plot_w = w - left - right;
-    let gx = |p: u32| left + plot_w * ((p.saturating_sub(gstart)) as f64 / (gend - gstart) as f64);
-    let mut s = svg_header(w, h);
-    s.push_str(&format!(r##"<text x="{left}" y="30" class="title">{} transcript structure and InterPro architecture</text><text x="{left}" y="51" class="label">InterPro features are read from Ommverse as spliced genomic models and intersected directly with each transcript CDS; no protein-coordinate reprojection is performed here.</text><text x="{left}" y="70" class="small">Genomic span: {}–{} (0-based half-open); exon geometry is drawn to genomic scale.</text>"##, xml_escape(&args.gene), gstart, gend));
-
-    for (ri, &tx_id) in plotted.iter().enumerate() {
         let tx = &idx.transcripts[tx_id];
-        let y = top + ri as f64 * row_h + 24.0;
-        let name = idx.transcript_name(tx_id).unwrap_or("NA");
-        let enst = tx.names.iter().find(|x| x.starts_with("ENST")).map(String::as_str).unwrap_or("");
-        s.push_str(&format!(r##"<text x="{:.1}" y="{:.1}" text-anchor="end" class="label" font-weight="bold">{}</text><text x="{:.1}" y="{:.1}" text-anchor="end" class="small">{}</text>"##, left-12.0, y+4.0, xml_escape(name), left-12.0, y+19.0, xml_escape(enst)));
-        s.push_str(&format!(r##"<line x1="{:.1}" y1="{y:.1}" x2="{:.1}" y2="{y:.1}" stroke="#777" stroke-width="1"/>"##, gx(tx.exons().first().map(|b|b.start).unwrap_or(gstart)), gx(tx.exons().last().map(|b|b.end).unwrap_or(gend))));
-        for b in tx.exons() {
-            let x1=gx(b.start); let x2=gx(b.end);
-            s.push_str(&format!(r##"<rect x="{x1:.1}" y="{:.1}" width="{:.1}" height="12" fill="#c7c7c7" stroke="#666" stroke-width="0.7"/>"##, y-6.0, (x2-x1).max(1.0)));
-        }
-        if let Some((cs,ce))=tx.cds_span() {
-            for exon in tx.exons() {
-                let a=exon.start.max(cs); let b=exon.end.min(ce);
-                if a<b { let x1=gx(a); let x2=gx(b); s.push_str(&format!(r##"<rect x="{x1:.1}" y="{:.1}" width="{:.1}" height="8" fill="#444"/>"##, y-4.0,(x2-x1).max(1.0))); }
-            }
-        }
+        let key = tx
+            .names
+            .iter()
+            .find(|name| name.starts_with("ENST"))
+            .cloned()
+            .unwrap_or_else(|| idx.transcript_name(tx_id).unwrap_or("NA").to_string());
+        options.transcripts.push(key.clone());
 
-        // The feature models are already in genomic coordinates.  Transcript
-        // specificity is now a geometry question: retain only the feature bases
-        // that are coding in this transcript.  A complete feature has every
-        // projected genomic base represented by this transcript's CDS; partial
-        // compatibility is drawn but labelled explicitly.
-        let cds_blocks: Vec<RefBlock> = if let Some((cs, ce)) = tx.cds_span() {
-            tx.exons().iter().filter_map(|exon| {
-                let start = exon.start.max(cs);
-                let end = exon.end.min(ce);
-                (start < end).then(|| RefBlock::new(start, end))
-            }).collect()
-        } else {
-            Vec::new()
-        };
-        let mut feature_y = y + 25.0;
-        let mut seen_features = HashSet::new();
-        for &feature_id in &feature_ids {
-            let Some(feature) = omm.protein_features.features.get(feature_id) else { continue; };
-            if feature.chr_id != omm_chr { continue; }
-
-            let mut blocks = Vec::new();
-            let mut feature_bases = 0u32;
-            let mut retained_bases = 0u32;
-            for fb in &feature.blocks {
-                feature_bases += fb.end.saturating_sub(fb.start);
-                for cb in &cds_blocks {
-                    let start = fb.start.max(cb.start);
-                    let end = fb.end.min(cb.end);
-                    if start < end {
-                        retained_bases += end - start;
-                        blocks.push(RefBlock::new(start, end));
-                    }
-                }
-            }
-            if blocks.is_empty() { continue; }
-
-            let key = (feature.label.clone(), feature.signature.clone(), blocks.clone());
-            if !seen_features.insert(key) { continue; }
-            let complete = retained_bases == feature_bases;
-            let first_x = gx(blocks.first().unwrap().start);
-            let last_x = gx(blocks.last().unwrap().end);
-            if blocks.len() > 1 {
-                s.push_str(&format!(r##"<line x1="{first_x:.1}" y1="{feature_y:.1}" x2="{last_x:.1}" y2="{feature_y:.1}" stroke="#777" stroke-width="1" stroke-dasharray="3,3"/>"##));
-            }
-            for b in &blocks {
-                let x1 = gx(b.start); let x2 = gx(b.end);
-                s.push_str(&format!(r##"<rect x="{x1:.1}" y="{:.1}" width="{:.1}" height="8" rx="2" fill="#2f6fbb"{} />"##,
-                    feature_y-4.0, (x2-x1).max(1.5), if complete { "" } else { r#" opacity="0.45""# }));
-            }
-            let base_label = if feature.description.is_empty() { feature.label.clone() } else { format!("{} · {}", feature.label, feature.description) };
-            let label = if complete { base_label } else { format!("{base_label} · partial {retained_bases}/{feature_bases} bp") };
-            s.push_str(&format!(r##"<text x="{:.1}" y="{:.1}" class="small">{}</text>"##, last_x+6.0, feature_y+4.0, xml_escape(&label)));
-            feature_y += 14.0;
-        }
-        if seen_features.is_empty() {
-            s.push_str(&format!(r##"<text x="{left}" y="{:.1}" class="small">No genomic InterPro feature overlaps this transcript CDS</text>"##,y+31.0));
-        }
-
-        let mut means=[0.0;2];
+        let mut means = [0.0; 2];
         for g in 0..2 {
-            let vals:Vec<f64>=rows.iter().filter(|r|r.tx_id==tx_id&&assigned.get(&r.sample)==Some(&g)).map(|r|r.fraction).collect();
-            if !vals.is_empty() { means[g]=vals.iter().sum::<f64>()/vals.len() as f64; }
+            let vals: Vec<f64> = rows
+                .iter()
+                .filter(|r| r.tx_id == tx_id && assigned.get(&r.sample) == Some(&g))
+                .map(|r| r.fraction)
+                .collect();
+            if !vals.is_empty() {
+                means[g] = vals.iter().sum::<f64>() / vals.len() as f64;
+            }
         }
-        let rx=w-right+25.0;
-        s.push_str(&format!(r##"<text x="{rx}" y="{:.1}" class="small"><tspan font-weight="bold">{}</tspan> {:.1}%</text><text x="{rx}" y="{:.1}" class="small"><tspan font-weight="bold">{}</tspan> {:.1}%</text>"##,y-3.0,xml_escape(&groups[0].label),means[0]*100.0,y+14.0,xml_escape(&groups[1].label),means[1]*100.0));
+        options.row_notes.insert(
+            key,
+            vec![
+                format!("{} {:.1}%", groups[0].label, means[0] * 100.0),
+                format!("{} {:.1}%", groups[1].label, means[1] * 100.0),
+            ],
+        );
     }
-    s.push_str(&format!(r##"<text x="{left}" y="{:.1}" class="small">Grey exon = transcribed exon · dark inset = CDS · blue blocks = genomic InterPro feature retained by this transcript · faded blue = partial feature · dashed connector = one genomic feature spanning splice junction(s)</text>"##,h-28.0));
-    s.push_str("</svg>");
-    std::fs::write(path,s)?;
-    Ok(())
+
+    plot_gene_transcripts_with_options(omm, &args.gene, path, &options)
 }
 
 fn write_report(path:&Path,args:&Cli,idx:&SpliceIndex,rows:&[SampleEstimate],assigned:&HashMap<String,usize>,groups:&[GroupSpec;2],group_samples:&[Vec<String>;2],plotted:&[usize],table:&Path,boot:&Path,shift:&Path,structure:Option<&Path>)->Result<()> {

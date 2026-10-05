@@ -104,6 +104,142 @@ impl Ommverse {
         })
     }
 
+    /// Build a deterministic 50:50 corpus for one canonical InterPro feature.
+    /// Only InterPro annotations carrying exactly this canonical label are used.
+    pub fn interpro_training_corpus(
+        &self,
+        feature: &str,
+        flank_width: usize,
+        max_feature_len: usize,
+    ) -> Result<ProteinTrainingCorpus> {
+        let candidates: Vec<&Protein> = self
+            .proteins
+            .iter()
+            .filter(|protein| {
+                protein.features.iter().any(|f| {
+                    f.source_db.eq_ignore_ascii_case("InterPro")
+                        && f.label == feature
+                        && f.protein_range
+                            .is_some_and(|(start, end)| end > start && (end - start) as usize <= max_feature_len)
+                })
+            })
+            .collect();
+        let mut report = TrainingCorpusReport {
+            candidate_proteins: candidates.len(),
+            diagnostic_flank_width: flank_width,
+            ..Default::default()
+        };
+        let mut feature_lengths = Vec::new();
+        let mut inter_feature_gaps = Vec::new();
+        let mut genome = TwoBitReader::open(&self.genome_twobit)?;
+        let mut examples = Vec::with_capacity(candidates.len());
+        for protein in candidates {
+            let sequence = match self.protein_sequence_with_reader(protein, &mut genome) {
+                Ok(sequence) => sequence,
+                Err(_) => {
+                    report.rejected_sequence += 1;
+                    continue;
+                }
+            };
+            let mut ranges: Vec<(u32, u32)> = protein
+                .features
+                .iter()
+                .filter(|f| f.source_db.eq_ignore_ascii_case("InterPro") && f.label == feature)
+                .filter_map(|f| f.protein_range)
+                .filter(|(start, end)| end > start && (*end - *start) as usize <= max_feature_len)
+                .collect();
+            ranges.sort_unstable();
+            ranges.dedup();
+            if ranges.is_empty() {
+                continue;
+            }
+            if ranges.iter().any(|&(_, end)| end as usize > sequence.len()) {
+                report.rejected_out_of_bounds += 1;
+                continue;
+            }
+            let mut truth = vec![false; sequence.len()];
+            for &(start, end) in &ranges {
+                truth[start as usize..end as usize].fill(true);
+                feature_lengths.push((end - start) as usize);
+            }
+            for pair in ranges.windows(2) {
+                let gap = pair[1].0.saturating_sub(pair[0].1) as usize;
+                inter_feature_gaps.push(gap);
+                if gap < flank_width.saturating_mul(2) {
+                    report.overlapping_flank_pairs += 1;
+                }
+            }
+            report.reconstructed_proteins += 1;
+            report.total_residues += sequence.len();
+            report.feature_residues += truth.iter().filter(|&&x| x).count();
+            report.feature_segments += ranges.len();
+            examples.push(ProteinTrainingExample {
+                accession: protein.accession.clone(),
+                gene_symbol: protein.gene_symbol.clone(),
+                sequence,
+                truth,
+                feature_segments: ranges.len(),
+            });
+        }
+        report.feature_lengths = distribution_summary(&feature_lengths);
+        report.inter_feature_gaps = distribution_summary(&inter_feature_gaps);
+        examples.sort_by(|a, b| a.accession.cmp(&b.accession));
+        let (mut train, mut test) = (Vec::new(), Vec::new());
+        for (index, example) in examples.into_iter().enumerate() {
+            if index % 2 == 0 { train.push(example) } else { test.push(example) }
+        }
+        Ok(ProteinTrainingCorpus {
+            feature: ProteinFeatureKind::Domain,
+            train,
+            test,
+            report,
+        })
+    }
+
+    pub fn train_interpro_exact_aa_feature_model(
+        &self,
+        feature: &str,
+        description: &str,
+        corpus: &ProteinTrainingCorpus,
+        flank_width: usize,
+    ) -> Result<InterProExactAaFeatureModel> {
+        let fitted = self.train_exact_aa_feature_model(corpus, flank_width)?;
+        Ok(InterProExactAaFeatureModel {
+            feature: feature.to_owned(),
+            description: description.to_owned(),
+            flank_width: fitted.flank_width,
+            initial: fitted.initial,
+            transition: fitted.transition,
+            emission: fitted.emission,
+        })
+    }
+
+    pub fn evaluate_interpro_exact_aa_feature_model(
+        &self,
+        model: &InterProExactAaFeatureModel,
+        examples: &[ProteinTrainingExample],
+    ) -> Result<FeatureEvaluation> {
+        let hmm = model.hmm()?;
+        let partials: Result<Vec<FeatureEvaluation>> = examples
+            .par_iter()
+            .map(|example| {
+                let observations = aa_observations(&example.sequence)?;
+                let predicted: Vec<bool> = hmm
+                    .infer(&observations)?
+                    .viterbi()
+                    .iter()
+                    .map(|s| s.0 == 2)
+                    .collect();
+                let mut report = FeatureEvaluation::default();
+                accumulate_evaluation(&mut report, &predicted, example);
+                Ok(report)
+            })
+            .collect();
+        Ok(partials?
+            .into_iter()
+            .fold(FeatureEvaluation::default(), merge_feature_evaluation))
+    }
+
     /// Train a supervised four-state exact-amino-acid feature HMM.
     ///
     /// States are BACKGROUND, PRE_FEATURE, FEATURE and POST_FEATURE. PRE/POST
@@ -599,8 +735,10 @@ impl Ommverse {
     pub fn train_aa_model_vault(
         &self,
         flank_width: usize,
+        interpro_max_len: usize,
     ) -> Result<(AaModelVault, ModelVaultTrainingReport)> {
         let mut models = Vec::new();
+        let mut interpro_models = Vec::new();
         let mut report = ModelVaultTrainingReport::default();
         for feature in ProteinFeatureKind::ALL {
             // Chain is effectively whole-protein coverage and Conflict is a
@@ -652,6 +790,46 @@ impl Ommverse {
             report.feature_classes_trained += 1;
             report.models_trained += 2;
         }
+        let mut interpro_features: Vec<(String, String)> = self
+            .proteins
+            .iter()
+            .flat_map(|protein| protein.features.iter())
+            .filter(|feature| feature.source_db.eq_ignore_ascii_case("InterPro"))
+            .filter_map(|feature| {
+                feature.protein_range.and_then(|(start, end)| {
+                    (end > start && (end - start) as usize <= interpro_max_len)
+                        .then(|| (feature.label.clone(), feature.description.clone()))
+                })
+            })
+            .collect();
+        interpro_features.sort();
+        interpro_features.dedup_by(|a, b| a.0 == b.0);
+        for (feature, description) in interpro_features {
+            report.interpro_features_considered += 1;
+            let corpus = self.interpro_training_corpus(&feature, flank_width, interpro_max_len)?;
+            if corpus.train.is_empty() || corpus.test.is_empty() || corpus.report.feature_residues == 0 {
+                report.interpro_skipped.push((feature, format!(
+                    "insufficient corpus: train {}, test {}, feature residues {}",
+                    corpus.train.len(), corpus.test.len(), corpus.report.feature_residues
+                )));
+                continue;
+            }
+            let model = self.train_interpro_exact_aa_feature_model(
+                &feature, &description, &corpus, flank_width
+            )?;
+            let evaluation = self.evaluate_interpro_exact_aa_feature_model(&model, &corpus.test)?;
+            if evaluation.segment_recall() < 0.5 || evaluation.precision() < 0.5 {
+                report.interpro_skipped.push((feature, format!(
+                    "held-out validation failed: precision {:.4}, segment recall {:.4}",
+                    evaluation.precision(), evaluation.segment_recall()
+                )));
+                continue;
+            }
+            interpro_models.push(InterProFeatureModel { model, evaluation });
+            report.interpro_features_trained += 1;
+            report.models_trained += 1;
+        }
+
         // Membrane architecture is deliberately joint. TM competes with multiple
         // latent cytoplasmic/extracellular contexts (short loop, medium loop, long
         // region). Terminality and signal peptide are external/positional evidence,
@@ -686,6 +864,7 @@ impl Ommverse {
                 flank_width,
             },
             models,
+            interpro_models,
         };
         Ok((vault, report))
     }

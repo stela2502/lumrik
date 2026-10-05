@@ -52,9 +52,360 @@ pub struct InterProImportReport {
     pub features_added: usize,
     pub projected_features_added: usize,
     pub duplicate_features: usize,
+    /// Raw InterPro annotations absorbed into an already represented protein feature.
+    pub annotations_collapsed: usize,
+    /// InterPro annotations assigned to a sanitized canonical feature name.
+    pub annotations_sanitized: usize,
     pub malformed_records: usize,
     pub unknown_entries: usize,
 }
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SanitizedInterProFeature {
+    tag: &'static str,
+    description: &'static str,
+}
+
+fn sanitized_interpro_feature_name(description: &str) -> Option<SanitizedInterProFeature> {
+    let name = description.to_ascii_lowercase();
+    if name.contains("basic helix-loop-helix")
+        || name.contains("helix-loop-helix")
+        || name.contains("bhlh")
+    {
+        return Some(SanitizedInterProFeature { tag: "bHLH", description: "Basic helix-loop-helix DNA-binding domain" });
+    }
+    if name.contains("pas domain")
+        || name.contains("pas fold")
+        || name.contains("pas-fold")
+    {
+        return Some(SanitizedInterProFeature { tag: "PAS", description: "PAS domain" });
+    }
+    None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InterProFeatureSource {
+    canonical: String,
+    ipr: String,
+    kind: ProteinFeatureKind,
+    original_name: String,
+}
+
+fn interpro_architecture_kind(kind: ProteinFeatureKind) -> bool {
+    matches!(
+        kind,
+        ProteinFeatureKind::Domain
+            | ProteinFeatureKind::HomologousSuperfamily
+            | ProteinFeatureKind::Repeat
+            | ProteinFeatureKind::Other
+    )
+}
+
+fn interpro_kind_priority(kind: ProteinFeatureKind) -> u8 {
+    match kind {
+        ProteinFeatureKind::Domain => 5,
+        ProteinFeatureKind::Repeat => 4,
+        ProteinFeatureKind::HomologousSuperfamily => 2,
+        ProteinFeatureKind::Other => 1,
+        _ => 0,
+    }
+}
+
+fn interpro_related(left: &str, right: &str, entries: &HashMap<String, InterProEntry>) -> bool {
+    if left == right {
+        return true;
+    }
+    fn reaches(start: &str, target: &str, entries: &HashMap<String, InterProEntry>) -> bool {
+        let mut stack = vec![start];
+        let mut seen = HashSet::new();
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            let Some(entry) = entries.get(current) else {
+                continue;
+            };
+            for parent in &entry.parents {
+                if parent == target {
+                    return true;
+                }
+                stack.push(parent);
+            }
+        }
+        false
+    }
+    reaches(left, right, entries) || reaches(right, left, entries)
+}
+
+fn block_bases(blocks: &[RefBlock]) -> u64 {
+    blocks.iter().map(|block| (block.end - block.start) as u64).sum()
+}
+
+fn genomic_overlap_bases(a: &[RefBlock], b: &[RefBlock]) -> u64 {
+    let mut overlap = 0u64;
+    for left in a {
+        for right in b {
+            overlap += left
+                .end
+                .min(right.end)
+                .saturating_sub(left.start.max(right.start)) as u64;
+        }
+    }
+    overlap
+}
+
+fn genomic_reciprocal_overlap(a: &[RefBlock], b: &[RefBlock]) -> f64 {
+    let a_len = block_bases(a);
+    let b_len = block_bases(b);
+    if a_len == 0 || b_len == 0 {
+        return 0.0;
+    }
+    let mut overlap = 0u64;
+    for left in a {
+        for right in b {
+            overlap += left
+                .end
+                .min(right.end)
+                .saturating_sub(left.start.max(right.start)) as u64;
+        }
+    }
+    (overlap as f64 / a_len as f64).min(overlap as f64 / b_len as f64)
+}
+
+#[derive(Clone)]
+struct GeneInterProObservation {
+    protein_id: usize,
+    feature_index: usize,
+    gene_id: GeneId,
+    blocks: Vec<RefBlock>,
+}
+
+/// Collapse InterPro in the coordinate system that matters to Ommverse: one
+/// gene and all of its transcript/protein products.  InterPro protein-family
+/// entries are classification evidence, not physical architecture, and remain
+/// available in the external source rather than entering a transcript feature
+/// vector.  Architecture entries are compared after projection through CDS;
+/// related entries describing the same gene-local coding region become one
+/// canonical feature vocabulary shared by every protein product of that gene.
+fn collapse_interpro_by_gene(omm: &mut Ommverse) -> (usize, usize, Vec<InterProFeatureSource>) {
+    let mut observations = Vec::<GeneInterProObservation>::new();
+
+    for (protein_id, protein) in omm.proteins.iter().enumerate() {
+        for (feature_index, feature) in protein.features.iter().enumerate() {
+            if !feature.source_db.eq_ignore_ascii_case("InterPro")
+                || feature.kind == ProteinFeatureKind::ProteinFamily
+            {
+                continue;
+            }
+            let Some((aa_start, aa_end)) = feature.protein_range else {
+                continue;
+            };
+            for &tx_id in &protein.transcript_ids {
+                let Some(tx) = omm.splice.transcripts.get(tx_id) else {
+                    continue;
+                };
+                let blocks = tx.protein_range_to_genomic_blocks(aa_start, aa_end);
+                if blocks.is_empty() {
+                    continue;
+                }
+                observations.push(GeneInterProObservation {
+                    protein_id,
+                    feature_index,
+                    gene_id: tx.gene_id,
+                    blocks,
+                });
+            }
+        }
+    }
+
+    let n = observations.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    fn union(parent: &mut [usize], a: usize, b: usize) {
+        let ra = root(parent, a);
+        let rb = root(parent, b);
+        if ra != rb {
+            parent[rb] = ra;
+        }
+    }
+
+    let mut by_gene = HashMap::<GeneId, Vec<usize>>::new();
+    for (i, observation) in observations.iter().enumerate() {
+        by_gene.entry(observation.gene_id).or_default().push(i);
+    }
+
+    for indices in by_gene.values() {
+        for (offset, &i) in indices.iter().enumerate() {
+            let a = &omm.proteins[observations[i].protein_id].features[observations[i].feature_index];
+            if !interpro_architecture_kind(a.kind) {
+                continue;
+            }
+            for &j in &indices[offset + 1..] {
+                let b = &omm.proteins[observations[j].protein_id].features[observations[j].feature_index];
+                if !interpro_architecture_kind(b.kind) {
+                    continue;
+                }
+                let a_name = omm
+                    .interpro_entries
+                    .get(&a.label)
+                    .map(|entry| entry.name.as_str())
+                    .unwrap_or(&a.description);
+                let b_name = omm
+                    .interpro_entries
+                    .get(&b.label)
+                    .map(|entry| entry.name.as_str())
+                    .unwrap_or(&b.description);
+                let same_sanitized_feature = match (
+                    sanitized_interpro_feature_name(a_name),
+                    sanitized_interpro_feature_name(b_name),
+                ) {
+                    (Some(left), Some(right)) => left.tag == right.tag,
+                    _ => false,
+                };
+                if !same_sanitized_feature
+                    && !interpro_related(&a.label, &b.label, &omm.interpro_entries)
+                {
+                    continue;
+                }
+                let same_canonical_locus = same_sanitized_feature
+                    && genomic_overlap_bases(&observations[i].blocks, &observations[j].blocks) > 0;
+                let related_same_locus = !same_sanitized_feature
+                    && genomic_reciprocal_overlap(&observations[i].blocks, &observations[j].blocks)
+                        >= 0.80;
+                if same_canonical_locus || related_same_locus {
+                    union(&mut parent, i, j);
+                }
+            }
+        }
+    }
+
+    let mut groups = HashMap::<usize, Vec<usize>>::new();
+    for i in 0..n {
+        let r = root(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+
+    // Canonicalize labels/descriptions gene-wide, but preserve each protein's
+    // own amino-acid interval.  Thus equal gene-local features compare equal
+    // across isoforms without pretending that fuzzy InterPro boundaries are
+    // identical protein coordinates.
+    let mut canonical = HashMap::<(usize, usize), (String, ProteinFeatureKind, String)>::new();
+    let mut collapsed = 0usize;
+    let mut sanitized = 0usize;
+    let mut source_register = Vec::<InterProFeatureSource>::new();
+    for members in groups.into_values() {
+        let mut unique_members = HashSet::<(usize, usize)>::new();
+        for &idx in &members {
+            unique_members.insert((observations[idx].protein_id, observations[idx].feature_index));
+        }
+        let mut best = members[0];
+        for &candidate in &members[1..] {
+            let a = &omm.proteins[observations[best].protein_id].features[observations[best].feature_index];
+            let b = &omm.proteins[observations[candidate].protein_id].features[observations[candidate].feature_index];
+            let a_score = interpro_kind_priority(a.kind);
+            let b_score = interpro_kind_priority(b.kind);
+            if b_score > a_score || (b_score == a_score && b.label < a.label) {
+                best = candidate;
+            }
+        }
+        let best_feature = &omm.proteins[observations[best].protein_id].features[observations[best].feature_index];
+        let sanitized_names = members
+            .iter()
+            .filter_map(|&idx| {
+                let feature = &omm.proteins[observations[idx].protein_id].features[observations[idx].feature_index];
+                let name = omm
+                    .interpro_entries
+                    .get(&feature.label)
+                    .map(|entry| entry.name.as_str())
+                    .unwrap_or(&feature.description);
+                sanitized_interpro_feature_name(name)
+            })
+            .collect::<Vec<_>>();
+        let sanitized_name = sanitized_names.first().copied().filter(|first| {
+            sanitized_names.iter().all(|candidate| candidate.tag == first.tag)
+        });
+        let sanitized_name = if sanitized_name.is_some() {
+            sanitized_name
+        } else {
+            None
+        };
+        let canonical_label = sanitized_name
+            .map(|feature| feature.tag.to_owned())
+            .unwrap_or_else(|| best_feature.label.clone());
+        let canonical_kind = if sanitized_name.is_some() {
+            ProteinFeatureKind::Domain
+        } else {
+            best_feature.kind
+        };
+        let description = if let Some(feature) = sanitized_name {
+            feature.description.to_owned()
+        } else if unique_members.len() > 1 {
+            format!("{} [gene-local InterPro consensus from {} annotations]", best_feature.description, unique_members.len())
+        } else {
+            best_feature.description.clone()
+        };
+        for key in unique_members.iter().copied() {
+            let feature = &omm.proteins[key.0].features[key.1];
+            if sanitized_name.is_some() {
+                sanitized += 1;
+            }
+            let original_name = omm
+                .interpro_entries
+                .get(&feature.label)
+                .map(|entry| entry.name.clone())
+                .unwrap_or_else(|| feature.description.clone());
+            source_register.push(InterProFeatureSource {
+                canonical: canonical_label.clone(),
+                ipr: feature.label.clone(),
+                kind: feature.kind,
+                original_name,
+            });
+            canonical.insert(key, (canonical_label.clone(), canonical_kind, description.clone()));
+        }
+        collapsed += unique_members.len().saturating_sub(1);
+    }
+
+    for (protein_id, protein) in omm.proteins.iter_mut().enumerate() {
+        let mut next = Vec::new();
+        for (feature_index, mut feature) in std::mem::take(&mut protein.features).into_iter().enumerate() {
+            if feature.source_db.eq_ignore_ascii_case("InterPro") {
+                if feature.kind == ProteinFeatureKind::ProteinFamily {
+                    continue;
+                }
+                if let Some((label, kind, description)) = canonical.get(&(protein_id, feature_index)) {
+                    feature.label = label.clone();
+                    feature.kind = *kind;
+                    feature.description = description.clone();
+                }
+            }
+            if !next.contains(&feature) {
+                next.push(feature);
+            } else if feature.source_db.eq_ignore_ascii_case("InterPro") {
+                collapsed += 1;
+            }
+        }
+        next.sort_by_key(|feature| (feature.protein_range.unwrap_or((u32::MAX, u32::MAX)), feature.label.clone()));
+        protein.features = next;
+    }
+
+    source_register.sort_by(|a, b| {
+        a.canonical
+            .cmp(&b.canonical)
+            .then_with(|| a.ipr.cmp(&b.ipr))
+            .then_with(|| interpro_kind_priority(a.kind).cmp(&interpro_kind_priority(b.kind)))
+            .then_with(|| a.original_name.cmp(&b.original_name))
+    });
+    source_register.dedup();
+    (collapsed, sanitized, source_register)
+}
+
 
 fn interpro_feature_kind(value: &str) -> ProteinFeatureKind {
     match value
@@ -79,6 +430,8 @@ pub fn ingest_interpro_many<F>(
     protein2ipr: &Path,
     entry_list: &Path,
     parent_child_tree: Option<&Path>,
+    reference_cache: Option<&Path>,
+    feature_source_register: Option<&Path>,
     mut progress: F,
 ) -> Result<Vec<InterProImportReport>>
 where
@@ -253,15 +606,27 @@ where
         report.entries_loaded = entries.len();
     }
 
-    let file =
-        File::open(protein2ipr).with_context(|| format!("opening {}", protein2ipr.display()))?;
-    let gz = protein2ipr.extension().is_some_and(|x| x == "gz");
+    let cache_hit = reference_cache.is_some_and(Path::is_file);
+    let source_path = reference_cache.filter(|path| path.is_file()).unwrap_or(protein2ipr);
+    let file = File::open(source_path).with_context(|| format!("opening {}", source_path.display()))?;
+    let gz = source_path.extension().is_some_and(|x| x == "gz");
     let input: Box<dyn Read> = if gz {
         Box::new(MultiGzDecoder::new(file))
     } else {
         Box::new(file)
     };
     let reader = BufReader::with_capacity(1024 * 1024, input);
+    let mut cache_writer = if cache_hit {
+        None
+    } else if let Some(path) = reference_cache {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
+        Some(flate2::write::GzEncoder::new(file, flate2::Compression::default()))
+    } else {
+        None
+    };
     let mut streamed = 0usize;
     for line in reader.lines() {
         let line = line?;
@@ -280,6 +645,9 @@ where
             }
             continue;
         };
+        if let Some(writer) = cache_writer.as_mut() {
+            writeln!(writer, "{line}")?;
+        }
         let ipr = f[1].trim();
         let signature = f[3].trim();
         let start_1: u32 = match f[4].trim().parse() {
@@ -331,39 +699,91 @@ where
             };
             if !ommverses[oi].proteins[pi].features.contains(&feature) {
                 ommverses[oi].proteins[pi].features.push(feature);
-                report.features_added += 1;
             } else {
                 report.duplicate_features += 1;
-            }
-
-            // Bring the annotation home: project the source protein interval
-            // through each GENCODE transcript linked to this protein and store
-            // the resulting spliced genomic model.
-            let transcript_ids = ommverses[oi].proteins[pi].transcript_ids.clone();
-            for tx_id in transcript_ids {
-                let Some(tx) = ommverses[oi].splice.transcripts.get(tx_id) else { continue; };
-                if ommverses[oi].protein_features.add_from_transcript(
-                    tx,
-                    accession,
-                    ipr,
-                    kind,
-                    description.clone(),
-                    signature,
-                    start_1 - 1,
-                    end_1,
-                ).is_some() {
-                    report.projected_features_added += 1;
-                }
             }
         }
         if streamed % 1_000_000 == 0 {
             progress(streamed, &reports);
         }
     }
+    if let Some(writer) = cache_writer {
+        writer.finish()?;
+    }
+    let mut all_feature_sources = Vec::<InterProFeatureSource>::new();
     for (omm, report) in ommverses.iter_mut().zip(reports.iter_mut()) {
         report.records_streamed = streamed;
+        let (collapsed, sanitized, feature_sources) = collapse_interpro_by_gene(omm);
+        report.annotations_collapsed += collapsed;
+        report.annotations_sanitized += sanitized;
+        all_feature_sources.extend(feature_sources.iter().cloned());
+        report.features_added = omm
+            .proteins
+            .iter()
+            .flat_map(|protein| &protein.features)
+            .filter(|feature| feature.source_db.eq_ignore_ascii_case("InterPro"))
+            .count();
+
+        for protein in &omm.proteins {
+            for feature in protein
+                .features
+                .iter()
+                .filter(|feature| feature.source_db.eq_ignore_ascii_case("InterPro"))
+            {
+                let Some((aa_start, aa_end)) = feature.protein_range else { continue; };
+                for &tx_id in &protein.transcript_ids {
+                    let Some(tx) = omm.splice.transcripts.get(tx_id) else { continue; };
+                    if omm
+                        .protein_features
+                        .add_from_transcript(
+                            tx,
+                            &protein.accession,
+                            &feature.label,
+                            feature.kind,
+                            feature.description.clone(),
+                            "",
+                            aa_start,
+                            aa_end,
+                        )
+                        .is_some()
+                    {
+                        report.projected_features_added += 1;
+                    }
+                }
+            }
+        }
+        let canonical_labels = feature_sources
+            .iter()
+            .map(|source| source.canonical.clone())
+            .collect::<HashSet<_>>();
+        omm.protein_features.collapse_same_label_loci(&canonical_labels);
         omm.protein_features.finalize();
+        report.projected_features_added = omm.protein_features.features.len();
         omm.report.feature_records += report.features_added;
+    }
+    if let Some(path) = feature_source_register {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        all_feature_sources.sort_by(|a, b| {
+            a.canonical
+                .cmp(&b.canonical)
+                .then_with(|| a.ipr.cmp(&b.ipr))
+                .then_with(|| interpro_kind_priority(a.kind).cmp(&interpro_kind_priority(b.kind)))
+                .then_with(|| a.original_name.cmp(&b.original_name))
+        });
+        all_feature_sources.dedup();
+        let mut writer = std::io::BufWriter::new(
+            File::create(path).with_context(|| format!("creating {}", path.display()))?,
+        );
+        writeln!(writer, "canonical_feature\tinterpro_id\tentry_type\toriginal_name")?;
+        for source in all_feature_sources {
+            writeln!(
+                writer,
+                "{}\t{}\t{:?}\t{}",
+                source.canonical, source.ipr, source.kind, source.original_name
+            )?;
+        }
     }
     progress(streamed, &reports);
     Ok(reports)

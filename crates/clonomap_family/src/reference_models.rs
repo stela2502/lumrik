@@ -3,6 +3,7 @@
 //! only decides which reconstructed V-side fragments are credible candidates.
 
 use crate::{Receptor, align_fragment};
+use crate::family::fragment_path;
 use reference_curator::{Observation, ReferenceCurator};
 use sc_primer::{Chemistry, Grammar, PrimerDetector};
 use std::path::Path;
@@ -337,12 +338,43 @@ fn longest_stop_free_suffix_start(seq: &[u8]) -> Option<usize> {
 }
 
 fn splice_v_prefix(old_naive: &str, novel_fragment: &str, cdr3_nt: &str) -> Option<String> {
-    if cdr3_nt.is_empty() {
+    if cdr3_nt.is_empty() || novel_fragment.is_empty() {
         return None;
     }
     let naive_boundary = old_naive.find(cdr3_nt)?;
-    let mut out = String::with_capacity(novel_fragment.len() + old_naive.len() - naive_boundary);
-    out.push_str(novel_fragment);
+    let old_v = &old_naive[..naive_boundary];
+
+    // `novel_fragment` is an *observed fragment* of the V side, not necessarily
+    // a full-length V sequence.  The old implementation simply prepended it to
+    // the J/CDR3 suffix.  A partial observation therefore shortened the effective
+    // germline and turned missing coverage into a giant apparent indel/SHM load.
+    //
+    // Place the candidate semi-globally on the supplied V prefix and replace only
+    // the coordinates actually covered by the candidate.  Unobserved sequence is
+    // retained from the supplied germline.  Candidate insertions/deletions inside
+    // the covered interval remain part of the hypothetical germline model.
+    let path = fragment_path(old_v.as_bytes(), novel_fragment.as_bytes())?;
+    let first_old = path.iter().find_map(|(ai, _)| *ai)?;
+    let last_old = path.iter().rev().find_map(|(ai, _)| *ai)?;
+
+    let mut out = String::with_capacity(old_naive.len() + novel_fragment.len());
+    out.push_str(&old_v[..first_old]);
+
+    for (ai, bj) in path {
+        match (ai, bj) {
+            (Some(ai), Some(bj)) if ai >= first_old && ai <= last_old => {
+                out.push(novel_fragment.as_bytes()[bj] as char);
+            }
+            (None, Some(bj)) => out.push(novel_fragment.as_bytes()[bj] as char),
+            (Some(_), None) => {
+                // Deletion relative to the supplied germline is part of the
+                // candidate reference and is therefore deliberately omitted.
+            }
+            _ => {}
+        }
+    }
+
+    out.push_str(&old_v[last_old + 1..]);
     out.push_str(&old_naive[naive_boundary..]);
     Some(out)
 }
@@ -350,6 +382,22 @@ fn splice_v_prefix(old_naive: &str, novel_fragment: &str, cdr3_nt: &str) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_hypothetical_v_keeps_unobserved_germline_prefix() {
+        let old = "AAAACCCCGGGGTTTTCDR3";
+        let novel = "GGGGAATT";
+        let effective = splice_v_prefix(old, novel, "CDR3").unwrap();
+        assert_eq!(effective, "AAAACCCCGGGGAATTCDR3");
+    }
+
+    #[test]
+    fn full_hypothetical_v_still_replaces_full_v_prefix() {
+        let old = "AAAACCCCGGGGTTTTCDR3";
+        let novel = "AAAATCCCGGAGTTTT";
+        let effective = splice_v_prefix(old, novel, "CDR3").unwrap();
+        assert_eq!(effective, "AAAATCCCGGAGTTTTCDR3");
+    }
 
     #[test]
     fn unresolved_candidate_is_owned_by_reference_curator() {

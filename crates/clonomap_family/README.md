@@ -1,6 +1,6 @@
 # ClonoMap
 
-ClonoMap is Lumrik's receptor-family and mutation analysis crate. `clonomap_family`
+ClonoMap is Lumrik's receptor-family and mutation analysis crate. `clonomap analyze`
 reads reconstructed receptors from one or more `nelrune-vdj` output directories,
 builds HC families using the same HC/CDR3 rules across the complete input pool,
 validates mutation alignments, assigns light-chain clones, and writes cell-level
@@ -8,10 +8,10 @@ and family-level outputs.
 
 ## Joint multi-sample analysis
 
-`clonomap_family` accepts one or more paths after `--vdj-out`:
+`clonomap analyze` accepts one or more paths after `--vdj-out`:
 
 ```bash
-clonomap_family \
+clonomap analyze \
   --vdj-out mouse1_bm/vdj_out mouse1_spleen/vdj_out \
   --out mouse1_clonomap \
   --reference-curator reference_curator.bin \
@@ -48,7 +48,7 @@ into later Seurat or Scanpy analysis.
 A single input remains valid and behaves as before:
 
 ```bash
-clonomap_family --vdj-out sample/vdj_out --out clonomap_out
+clonomap analyze --vdj-out sample/vdj_out --out clonomap_out
 ```
 
 ## Reference curation
@@ -59,7 +59,7 @@ owns stable candidate identity, persistence, accumulated mapping evidence and
 resolution state.
 
 ```bash
-clonomap_family \
+clonomap analyze \
   --vdj-out sample/vdj_out \
   --out clonomap_out \
   --reference-curator reference_curator.bin

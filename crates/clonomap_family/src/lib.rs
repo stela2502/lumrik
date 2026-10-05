@@ -18,7 +18,9 @@ pub use encoder::OneHotEncoder;
 pub use family::{
     AlignedCell, CellReceptor, Family, FamilyConfig, FamilyMutationReport, IndelEvent, LightClone,
     LightMember, MutationMeasurement, Receptor, SharedHcMutationReport, align_fragment,
+    project_observed_bases, reconstruct_substitutions,
 };
+pub use clone_data::translate_imgt_alignment;
 pub use pca::PcaModel;
 pub use reference_models::{ReferenceModelEntry, ReferenceModels};
 pub use tree::{MstTree, rooted_categorical_hex, rooted_continuous_hex};

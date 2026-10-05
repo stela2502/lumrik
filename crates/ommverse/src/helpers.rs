@@ -201,6 +201,21 @@ impl ChemistryFeatureModel {
     }
 }
 
+impl InterProExactAaFeatureModel {
+    fn hmm(&self) -> Result<Hmm<CategoricalEmission>> {
+        let emissions = self
+            .emission
+            .iter()
+            .map(|row| CategoricalEmission::new(row.to_vec()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(Hmm::new(
+            self.initial.to_vec(),
+            self.transition.to_vec(),
+            emissions,
+        )?)
+    }
+}
+
 impl ExactAaFeatureModel {
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let file = File::create(path)?;
@@ -551,3 +566,122 @@ fn normalize_array<const N: usize>(values: &mut [f64; N]) {
     }
 }
 
+
+impl AaModelVault {
+    /// Apply every frozen model to an arbitrary amino-acid sequence.
+    ///
+    /// This is generic protein inference: no antibody/VDJ semantics are present here.
+    /// Raw scores are HMM sequence log-likelihoods and are not significance values.
+    pub fn predict_sequence(
+        &self,
+        sequence: &[u8],
+    ) -> Result<(Vec<ModelVaultResponse>, Vec<ModelVaultInterval>)> {
+        if sequence.is_empty() {
+            bail!("cannot predict an empty amino-acid sequence");
+        }
+        let sequence = IntToProt::new(sequence);
+        let aa = aa_observations(&sequence)?;
+        let mut responses = Vec::with_capacity(self.models.len() + self.interpro_models.len());
+        let mut intervals = Vec::new();
+
+        for entry in &self.models {
+            match entry {
+                ProteinFeatureModel::ExactAa { model, evaluation } => {
+                    let result = model.hmm()?.infer(&aa)?;
+                    let name = format!("{:?}", model.feature);
+                    push_feature_prediction(
+                        &mut responses, &mut intervals, name.clone(), name, "exact-AA",
+                        result.log_likelihood(), result.viterbi().iter().map(|s| s.0 == 2), evaluation,
+                    );
+                }
+                ProteinFeatureModel::Chemistry { model, evaluation } => {
+                    let obs = chemistry_observations(&sequence, &model.categories)?;
+                    let result = model.hmm()?.infer(&obs)?;
+                    let name = format!("{:?}", model.feature);
+                    push_feature_prediction(
+                        &mut responses, &mut intervals, name.clone(), name, "chemistry",
+                        result.log_likelihood(), result.viterbi().iter().map(|s| s.0 == 2), evaluation,
+                    );
+                }
+                ProteinFeatureModel::TopologyExactAa { model, evaluation } => {
+                    let result = model.hmm()?.infer(&aa)?;
+                    push_topology_prediction(&mut responses, &mut intervals, "topology", "topology", "topology-exact-AA", result, evaluation);
+                }
+                ProteinFeatureModel::TopologyChemistry { model, evaluation } => {
+                    let obs = chemistry_observations(&sequence, &model.categories)?;
+                    let result = model.hmm()?.infer(&obs)?;
+                    push_topology_prediction(&mut responses, &mut intervals, "topology", "topology", "topology-chemistry", result, evaluation);
+                }
+            }
+        }
+        for entry in &self.interpro_models {
+            let result = entry.model.hmm()?.infer(&aa)?;
+            push_feature_prediction(
+                &mut responses, &mut intervals,
+                entry.model.feature.clone(), entry.model.description.clone(), "interpro-exact-AA",
+                result.log_likelihood(), result.viterbi().iter().map(|s| s.0 == 2), &entry.evaluation,
+            );
+        }
+        Ok((responses, intervals))
+    }
+}
+
+fn push_feature_prediction(
+    responses: &mut Vec<ModelVaultResponse>,
+    intervals: &mut Vec<ModelVaultInterval>,
+    model_id: String,
+    model_name: String,
+    model_kind: &'static str,
+    raw_score: f64,
+    predicted: impl Iterator<Item = bool>,
+    evaluation: &FeatureEvaluation,
+) {
+    let predicted: Vec<bool> = predicted.collect();
+    let precision = Some(evaluation.precision());
+    let recall = Some(evaluation.recall());
+    let f1 = Some(evaluation.f1());
+    responses.push(ModelVaultResponse {
+        model_id: model_id.clone(), model_name: model_name.clone(), model_kind, raw_score,
+        precision, recall, f1,
+    });
+    for (start, end) in bool_segments(&predicted) {
+        intervals.push(ModelVaultInterval {
+            start, end, model_id: model_id.clone(), model_name: model_name.clone(), model_kind,
+            raw_score, calibrated_p_value: None, precision, recall, f1,
+        });
+    }
+}
+
+fn push_topology_prediction(
+    responses: &mut Vec<ModelVaultResponse>,
+    intervals: &mut Vec<ModelVaultInterval>,
+    model_id: &str,
+    model_name: &str,
+    model_kind: &'static str,
+    result: hmm::HmmResult,
+    evaluation: &TopologyEvaluation,
+) {
+    responses.push(ModelVaultResponse {
+        model_id: model_id.to_owned(), model_name: model_name.to_owned(), model_kind,
+        raw_score: result.log_likelihood(), precision: None, recall: None, f1: None,
+    });
+    let states: Vec<Option<ProteinFeatureKind>> = result.viterbi().iter()
+        .map(|s| topology_state_from_index(s.0).and_then(TopologyState::feature))
+        .collect();
+    for feature in TopologyState::BIOLOGICAL {
+        let mask: Vec<bool> = states.iter().map(|x| *x == Some(feature)).collect();
+        let metrics = evaluation.states.get(TopologyState::BIOLOGICAL.iter().position(|x| *x == feature).unwrap());
+        let precision = metrics.map(FeatureEvaluation::precision);
+        let recall = metrics.map(FeatureEvaluation::recall);
+        let f1 = metrics.map(FeatureEvaluation::f1);
+        let feature_name = format!("{:?}", feature);
+        for (start, end) in bool_segments(&mask) {
+            let model_id = format!("{}:{}", model_id, feature_name ); 
+            intervals.push(ModelVaultInterval {
+                start, end, model_id, model_name: feature_name.clone(),
+                model_kind, raw_score: result.log_likelihood(), calibrated_p_value: None,
+                precision, recall, f1,
+            });
+        }
+    }
+}

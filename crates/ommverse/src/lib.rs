@@ -5,6 +5,8 @@
 //! genes, transcripts, proteins and protein features.
 
 pub mod protein_index;
+pub mod plot;
+pub mod string_probe;
 pub use protein_index::{ProteinFeatureId, ProteinFeatureIndex, ProjectedProteinFeature};
 
 use anyhow::{Context, Result, bail};

@@ -13,3 +13,5 @@ None. This crate is library-only.
 ## Library use
 
 Implement `ServerContent` for your run state and start a `StatusServer` with `spawn_status_server`.
+
+The requested port is a starting port: if it is already in use, the server binds the first available port at or above it (up to 1000 ports higher). `StatusServer::addr()` reports the actual bound port. Port `0` retains the operating system's ephemeral-port behavior.

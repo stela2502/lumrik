@@ -181,6 +181,23 @@ pub struct ProteinTrainingCorpus {
     pub report: TrainingCorpusReport,
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterProExactAaFeatureModel {
+    pub feature: String,
+    pub description: String,
+    pub flank_width: usize,
+    pub initial: [f64; 4],
+    pub transition: [f64; 16],
+    pub emission: [[f64; 32]; 4],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterProFeatureModel {
+    pub model: InterProExactAaFeatureModel,
+    pub evaluation: FeatureEvaluation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExactAaFeatureModel {
     pub feature: ProteinFeatureKind,
@@ -375,8 +392,8 @@ pub struct ChemistryFeatureModel {
     pub emission: Vec<Vec<f64>>,
 }
 
-pub const AA_MODEL_VAULT_FORMAT_VERSION: u32 = 5;
-const AA_MODEL_VAULT_MAGIC: &[u8; 4] = b"AAV5";
+pub const AA_MODEL_VAULT_FORMAT_VERSION: u32 = 6;
+const AA_MODEL_VAULT_MAGIC: &[u8; 4] = b"AAV6";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelVaultMetadata {
@@ -413,6 +430,7 @@ pub enum ProteinFeatureModel {
 pub struct AaModelVault {
     pub metadata: ModelVaultMetadata,
     pub models: Vec<ProteinFeatureModel>,
+    pub interpro_models: Vec<InterProFeatureModel>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -420,10 +438,13 @@ pub struct ModelVaultTrainingReport {
     pub feature_classes_considered: usize,
     pub feature_classes_trained: usize,
     pub models_trained: usize,
+    pub interpro_features_considered: usize,
+    pub interpro_features_trained: usize,
     pub topology_train_proteins: usize,
     pub topology_test_proteins: usize,
     pub topology_conflicting_residues: usize,
     pub skipped: Vec<(ProteinFeatureKind, String)>,
+    pub interpro_skipped: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -760,3 +781,32 @@ pub struct Ommverse {
     gene_by_name: HashMap<String, GeneId>,
 }
 
+
+/// Raw response of one frozen model to one arbitrary amino-acid sequence.
+/// `raw_score` is the HMM sequence log-likelihood. It is deliberately not a p-value.
+#[derive(Debug, Clone)]
+pub struct ModelVaultResponse {
+    pub model_id: String,
+    pub model_name: String,
+    pub model_kind: &'static str,
+    pub raw_score: f64,
+    pub precision: Option<f64>,
+    pub recall: Option<f64>,
+    pub f1: Option<f64>,
+}
+
+/// One predicted protein interval. Coordinates are 0-based, half-open [start, end).
+#[derive(Debug, Clone)]
+pub struct ModelVaultInterval {
+    pub start: usize,
+    pub end: usize,
+    pub model_id: String,
+    pub model_name: String,
+    pub model_kind: &'static str,
+    pub raw_score: f64,
+    /// Reserved for a future calibrated null model. Never populated from arbitrary HMM scores.
+    pub calibrated_p_value: Option<f64>,
+    pub precision: Option<f64>,
+    pub recall: Option<f64>,
+    pub f1: Option<f64>,
+}

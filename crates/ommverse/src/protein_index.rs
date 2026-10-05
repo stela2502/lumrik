@@ -123,6 +123,79 @@ impl ProteinFeatureIndex {
         Some(id)
     }
 
+    /// Collapse repeated observations of selected canonical feature labels at the
+    /// same genomic locus.  A very large annotation is not allowed to absorb a
+    /// much smaller one: candidates must overlap most of the shorter feature and
+    /// have comparable genomic sizes.  Equal labels at distinct loci remain
+    /// separate features.
+    pub fn collapse_same_label_loci(&mut self, labels: &std::collections::HashSet<String>) {
+        fn bases(blocks: &[RefBlock]) -> u64 {
+            blocks.iter().map(|block| (block.end - block.start) as u64).sum()
+        }
+        fn overlap(a: &[RefBlock], b: &[RefBlock]) -> u64 {
+            a.iter()
+                .flat_map(|left| b.iter().map(move |right| (left, right)))
+                .map(|(left, right)| {
+                    left.end
+                        .min(right.end)
+                        .saturating_sub(left.start.max(right.start)) as u64
+                })
+                .sum()
+        }
+        fn same_locus(a: &ProjectedProteinFeature, b: &ProjectedProteinFeature) -> bool {
+            if a.chr_id != b.chr_id || a.strand != b.strand || a.label != b.label {
+                return false;
+            }
+            let a_len = bases(&a.blocks);
+            let b_len = bases(&b.blocks);
+            if a_len == 0 || b_len == 0 {
+                return false;
+            }
+            let shared = overlap(&a.blocks, &b.blocks);
+            let shorter = a_len.min(b_len);
+            let longer = a_len.max(b_len);
+            shared * 100 >= shorter * 80 && shorter * 2 >= longer
+        }
+
+        let mut order: Vec<usize> = (0..self.features.len()).collect();
+        order.sort_by_key(|&id| {
+            let feature = &self.features[id];
+            (
+                feature.chr_id,
+                feature.label.clone(),
+                bases(&feature.blocks),
+                feature.span().map(|span| span.0).unwrap_or(u32::MAX),
+            )
+        });
+
+        let mut kept = Vec::<ProjectedProteinFeature>::new();
+        for id in order {
+            let feature = &self.features[id];
+            if labels.contains(&feature.label)
+                && kept.iter().any(|existing| same_locus(existing, feature))
+            {
+                continue;
+            }
+            kept.push(feature.clone());
+        }
+
+        self.features = kept;
+        self.chr_buckets = (0..self.chr_buckets.len())
+            .map(|_| ChrBuckets::new(self.bin_width))
+            .collect();
+        self.span_start.clear();
+        self.span_end.clear();
+        self.by_label.clear();
+        for (id, feature) in self.features.iter_mut().enumerate() {
+            feature.id = id;
+            let Some((start, end)) = feature.span() else { continue; };
+            self.chr_buckets[feature.chr_id].add_span(id, start, end);
+            self.span_start.push(start);
+            self.span_end.push(end);
+            self.by_label.entry(feature.label.clone()).or_default().push(id);
+        }
+    }
+
     /// Sort/deduplicate placement buckets after bulk construction.
     pub fn finalize(&mut self) {
         for chr in &mut self.chr_buckets {

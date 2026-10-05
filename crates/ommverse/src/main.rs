@@ -25,6 +25,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Render Ommverse reference-model visualizations. Additional plot families can be added here.
+    Plot {
+        #[command(subcommand)]
+        plot: PlotCommand,
+    },
     Build {
         /// Existing downloaded reference root. Mutually exclusive with --assembly.
         #[arg(long, conflicts_with = "assembly")]
@@ -97,6 +102,17 @@ enum Command {
         #[arg(long)]
         index: PathBuf,
     },
+    /// Probe whether STRING contains interaction profiles that differ across InterPro feature architectures.
+    StringProbe {
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long)]
+        info: PathBuf,
+        #[arg(long)]
+        links: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
     Protein {
         #[arg(long)]
         index: PathBuf,
@@ -153,25 +169,10 @@ enum Command {
         scan_unannotated: bool,
     },
 
-    /// Train a portable collection of all currently supported amino-acid feature HMMs.
-    ///
-    /// Every curated feature class with a usable deterministic train/test split is
-    /// trained independently. At present the vault contains both exact-AA and
-    /// intrinsic-chemistry HMMs. Empty/unsupported feature classes are reported and
-    /// skipped rather than aborting the run.
-    TrainModelVault {
-        #[arg(long)]
-        index: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long, default_value_t = 10)]
-        flank_width: usize,
-    },
-
-    /// Show provenance and held-out metrics stored with a model vault.
-    ModelVaultInfo {
-        #[arg(long)]
-        vault: PathBuf,
+    /// Train, inspect, and apply portable amino-acid feature model vaults.
+    ModelVault {
+        #[command(subcommand)]
+        command: ModelVaultCommand,
     },
 
     /// Apply every frozen model in a vault to the matching curated feature in another Ommverse index.
@@ -193,6 +194,108 @@ enum Command {
         #[arg(long)]
         model: PathBuf,
     },
+ }
+
+#[derive(Subcommand)]
+enum ModelVaultCommand {
+    /// Train all supported amino-acid feature HMMs and write <vault>.info beside the vault.
+    Train {
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        flank_width: usize,
+        /// Maximum canonical InterPro feature length included in vault training.
+        #[arg(long, default_value_t = 50)]
+        interpro_max_len: usize,
+    },
+    /// Show provenance and held-out metrics stored with a model vault.
+    Info {
+        #[arg(long)]
+        vault: PathBuf,
+    },
+    /// Apply every frozen model to arbitrary amino-acid FASTA sequences.
+    ///
+    /// Writes <out>.responses.tsv (every sequence x every model, no significance filtering)
+    /// and <out>.features.tsv (0-based half-open predicted intervals). HMM raw scores are
+    /// never labelled as p-values; calibrated_p_value remains empty until null calibration exists.
+    Predict {
+        #[arg(long)]
+        vault: PathBuf,
+        #[arg(long)]
+        fasta: PathBuf,
+        /// Output prefix for .responses.tsv and .features.tsv.
+        #[arg(long)]
+        out: PathBuf,
+    },
+}
+
+fn optional_float(value: Option<f64>) -> String {
+    value.map(|x| format!("{x:.6}")).unwrap_or_default()
+}
+
+fn read_aa_fasta(path: &Path) -> Result<Vec<(String, String)>> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading amino-acid FASTA {}", path.display()))?;
+    let mut records = Vec::new();
+    let mut id: Option<String> = None;
+    let mut sequence = String::new();
+    for (line_no, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() { continue; }
+        if let Some(header) = line.strip_prefix('>') {
+            if let Some(previous) = id.take() {
+                if sequence.is_empty() { anyhow::bail!("FASTA record {previous} has no sequence"); }
+                records.push((previous, std::mem::take(&mut sequence)));
+            }
+            let next = header.split_whitespace().next().unwrap_or("");
+            if next.is_empty() { anyhow::bail!("empty FASTA identifier at line {}", line_no + 1); }
+            id = Some(next.to_owned());
+        } else {
+            if id.is_none() { anyhow::bail!("FASTA sequence before first header at line {}", line_no + 1); }
+            sequence.push_str(line);
+        }
+    }
+    if let Some(previous) = id {
+        if sequence.is_empty() { anyhow::bail!("FASTA record {previous} has no sequence"); }
+        records.push((previous, sequence));
+    }
+    if records.is_empty() { anyhow::bail!("FASTA contains no sequences: {}", path.display()); }
+    Ok(records)
+}
+
+fn format_model_vault_info(vault: &AaModelVault) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    writeln!(&mut out, "Ommverse AA model vault").unwrap();
+    writeln!(&mut out, "  assembly:                  {}", vault.metadata.assembly).unwrap();
+    writeln!(&mut out, "  source:                    {}", vault.metadata.source).unwrap();
+    writeln!(&mut out, "  Ommverse format version:   {}", vault.metadata.ommverse_format_version).unwrap();
+    writeln!(&mut out, "  vault format version:      {}", vault.metadata.vault_format_version).unwrap();
+    writeln!(&mut out, "  flank width:               {} aa", vault.metadata.flank_width).unwrap();
+    writeln!(&mut out, "  models:                    {}", vault.models.len() + vault.interpro_models.len()).unwrap();
+    for entry in &vault.models {
+        match entry {
+            ProteinFeatureModel::ExactAa { model, evaluation } => writeln!(&mut out,
+                "    {:?} / exact-AA: precision {:.4}, recall {:.4}, F1 {:.4}", model.feature,
+                evaluation.precision(), evaluation.recall(), evaluation.f1()).unwrap(),
+            ProteinFeatureModel::Chemistry { model, evaluation } => writeln!(&mut out,
+                "    {:?} / chemistry: precision {:.4}, recall {:.4}, F1 {:.4}", model.feature,
+                evaluation.precision(), evaluation.recall(), evaluation.f1()).unwrap(),
+            ProteinFeatureModel::TopologyExactAa { evaluation, .. } => {
+                writeln!(&mut out, "    topology / exact-AA: {} biological held-out state metrics", evaluation.states.len()).unwrap();
+            }
+            ProteinFeatureModel::TopologyChemistry { evaluation, .. } => {
+                writeln!(&mut out, "    topology / chemistry: {} biological held-out state metrics", evaluation.states.len()).unwrap();
+            }
+        }
+    }
+    for entry in &vault.interpro_models {
+        writeln!(&mut out, "    {} / exact-AA: precision {:.4}, recall {:.4}, F1 {:.4}",
+            entry.model.feature, entry.evaluation.precision(), entry.evaluation.recall(), entry.evaluation.f1()).unwrap();
+    }
+    out
 }
 
 fn human_bytes(bytes: u64) -> String {
@@ -574,6 +677,7 @@ impl ServerContent for InterProStatus {
                     StatusMetric::new("Matching records", report.matched_records.to_string()),
                     StatusMetric::new("Features added", report.features_added.to_string()),
                     StatusMetric::new("Duplicates", report.duplicate_features.to_string()),
+                    StatusMetric::new("Annotations collapsed", report.annotations_collapsed.to_string()),
                     StatusMetric::new("Unknown entries", report.unknown_entries.to_string()),
                 ],
             ));
@@ -643,6 +747,21 @@ fn validate_readable_file(path: &std::path::Path, label: &str) -> Result<()> {
     std::fs::File::open(path)
         .with_context(|| format!("{label} is not readable: {}", path.display()))?;
     Ok(())
+}
+
+#[derive(Subcommand)]
+enum PlotCommand {
+    /// Plot genomic transcript structures, CDSs and InterPro architecture for one or more genes.
+    Genome {
+        #[arg(long)]
+        index: PathBuf,
+        /// Output directory or filename prefix.
+        #[arg(long)]
+        out: PathBuf,
+        /// Gene symbols to plot. The Ommverse reference is loaded only once.
+        #[arg(required = true, num_args = 1..)]
+        genes: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -880,11 +999,44 @@ fn main() -> Result<()> {
             }
             eprintln!("[ommverse] stage: streaming InterPro");
             let started = Instant::now();
+            let reference_cache = if inputs.len() == 1 {
+                let parent = outputs[0].parent().unwrap_or_else(|| std::path::Path::new("."));
+                let cache = parent.join("interpro.reference.tsv.gz");
+                let manifest = parent.join("interpro.sources.txt");
+                if !manifest.is_file() {
+                    let mut text = format!(
+                        "protein2ipr={}\nentry_list={}\nreference_cache={}\n",
+                        protein2ipr.display(),
+                        entry_list.display(),
+                        cache.display()
+                    );
+                    if let Some(tree) = &parent_child_tree {
+                        text.push_str(&format!("parent_child_tree={}\n", tree.display()));
+                    }
+                    std::fs::write(&manifest, text)?;
+                }
+                if cache.is_file() {
+                    eprintln!("[ommverse] using reference InterPro cache: {}", cache.display());
+                } else {
+                    eprintln!("[ommverse] reference InterPro cache will be written: {}", cache.display());
+                }
+                Some(cache)
+            } else {
+                None
+            };
+            let feature_source_register = if inputs.len() == 1 {
+                let parent = outputs[0].parent().unwrap_or_else(|| std::path::Path::new("."));
+                Some(parent.join("interpro.feature_sources.tsv"))
+            } else {
+                None
+            };
             let reports = ingest_interpro_many(
                 &mut ommverses,
                 &protein2ipr,
                 &entry_list,
                 parent_child_tree.as_deref(),
+                reference_cache.as_deref(),
+                feature_source_register.as_deref(),
                 |streamed, reports| {
                     if let Ok(mut s) = state.write() {
                         s.update(streamed, reports, started.elapsed().as_secs_f64());
@@ -903,6 +1055,8 @@ fn main() -> Result<()> {
                 println!("    features added:         {}", report.features_added);
                 println!("    genomic projections:    {}", report.projected_features_added);
                 println!("    duplicate features:     {}", report.duplicate_features);
+                println!("    annotations collapsed:  {}", report.annotations_collapsed);
+                println!("    annotations sanitized:  {}", report.annotations_sanitized);
                 println!("    malformed records:      {}", report.malformed_records);
                 println!("    unknown entries:        {}", report.unknown_entries);
                 println!("    saved:                  {}", output.display());
@@ -911,6 +1065,30 @@ fn main() -> Result<()> {
                 s.finish();
             }
         }
+        Command::Plot { plot } => match plot {
+            PlotCommand::Genome { index, out, genes } => {
+                eprintln!("[ommverse] loading reference for genome plots...");
+                let omm = Ommverse::load(&index)?;
+                eprintln!("[ommverse] reference ready; plotting {} gene(s)...", genes.len());
+                for (i, gene) in genes.iter().enumerate() {
+                    let plot_out = ommverse::plot::gene_plot_output_path(&out, gene);
+                    if let Some(parent) = plot_out.parent() {
+                        if !parent.as_os_str().is_empty() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                    }
+                    eprintln!(
+                        "[ommverse] [{}/{}] {} -> {}",
+                        i + 1,
+                        genes.len(),
+                        gene,
+                        plot_out.display()
+                    );
+                    ommverse::plot::plot_gene_transcripts(&omm, gene, &plot_out)?;
+                }
+                eprintln!("[ommverse] wrote {} genome plot(s)", genes.len());
+            }
+        },
         Command::Query { index, query } => {
             let query = ommverse::query::Query::parse(&query)?;
             let schema = ommverse::schema::OmmverseSchema::load_for_index(&index)?;
@@ -937,6 +1115,9 @@ fn main() -> Result<()> {
             let omm = Ommverse::load(&index)?;
             let load_seconds = started.elapsed().as_secs_f64();
             print_inspection(&index, &omm, load_seconds)?;
+        }
+        Command::StringProbe { index, info, links, out } => {
+            ommverse::string_probe::probe_string(&index, &info, &links, &out)?;
         }
         Command::Protein {
             index,
@@ -1115,11 +1296,12 @@ fn main() -> Result<()> {
                 print_unannotated(&omm.scan_unannotated_exact_aa(&model)?);
             }
         }
-        Command::TrainModelVault {
+        Command::ModelVault { command: ModelVaultCommand::Train {
             index,
             out,
             flank_width,
-        } => {
+            interpro_max_len,
+        } } => {
             let omm = Ommverse::load(&index)?;
             println!("Ommverse AA model-vault training");
             println!("  assembly:          {}", omm.assembly);
@@ -1130,8 +1312,9 @@ fn main() -> Result<()> {
             println!("  split:             deterministic protein-level 50:50 per feature");
             println!("  flank width:       {} aa", flank_width);
             println!("  held-out labels:   never used for fitting");
+            println!("  InterPro max len:  {} aa", interpro_max_len);
             println!();
-            let (vault, report) = omm.train_aa_model_vault(flank_width)?;
+            let (vault, report) = omm.train_aa_model_vault(flank_width, interpro_max_len)?;
             vault.save(&out)?;
             println!("Model vault complete");
             println!(
@@ -1143,7 +1326,9 @@ fn main() -> Result<()> {
                 report.feature_classes_trained
             );
             println!("  models trained:             {}", report.models_trained);
-            println!("  models stored:              {}", vault.models.len());
+            println!("  models stored:              {}", vault.models.len() + vault.interpro_models.len());
+            println!("  InterPro considered:        {}", report.interpro_features_considered);
+            println!("  InterPro passed validation: {}", report.interpro_features_trained);
             println!(
                 "  topology train proteins:    {}",
                 report.topology_train_proteins
@@ -1159,50 +1344,48 @@ fn main() -> Result<()> {
             for (feature, reason) in &report.skipped {
                 println!("  skipped {:?}: {}", feature, reason);
             }
+            for (feature, reason) in &report.interpro_skipped {
+                println!("  skipped InterPro {}: {}", feature, reason);
+            }
             println!("  saved: {}", out.display());
+            let info_path = PathBuf::from(format!("{}.info", out.display()));
+            std::fs::write(&info_path, format_model_vault_info(&vault))?;
+            println!("  info:  {}", info_path.display());
         }
-        Command::ModelVaultInfo { vault } => {
+        Command::ModelVault { command: ModelVaultCommand::Info { vault } } => {
             let vault = AaModelVault::load(vault)?;
-            println!("Ommverse AA model vault");
-            println!("  assembly:                  {}", vault.metadata.assembly);
-            println!("  source:                    {}", vault.metadata.source);
-            println!(
-                "  Ommverse format version:   {}",
-                vault.metadata.ommverse_format_version
-            );
-            println!(
-                "  vault format version:      {}",
-                vault.metadata.vault_format_version
-            );
-            println!(
-                "  flank width:               {} aa",
-                vault.metadata.flank_width
-            );
-            println!("  models:                    {}", vault.models.len());
-            for entry in &vault.models {
-                match entry {
-                    ProteinFeatureModel::ExactAa { model, evaluation } => println!(
-                        "    {:?} / exact-AA: precision {:.4}, recall {:.4}, F1 {:.4}",
-                        model.feature,
-                        evaluation.precision(),
-                        evaluation.recall(),
-                        evaluation.f1()
-                    ),
-                    ProteinFeatureModel::Chemistry { model, evaluation } => println!(
-                        "    {:?} / chemistry: precision {:.4}, recall {:.4}, F1 {:.4}",
-                        model.feature,
-                        evaluation.precision(),
-                        evaluation.recall(),
-                        evaluation.f1()
-                    ),
-                    ProteinFeatureModel::TopologyExactAa { evaluation, .. } => {
-                        print_topology_info("topology exact-AA", evaluation)
-                    }
-                    ProteinFeatureModel::TopologyChemistry { evaluation, .. } => {
-                        print_topology_info("topology chemistry", evaluation)
-                    }
+            print!("{}", format_model_vault_info(&vault));
+        }
+        Command::ModelVault { command: ModelVaultCommand::Predict { vault, fasta, out } } => {
+            let vault = AaModelVault::load(&vault)?;
+            let sequences = read_aa_fasta(&fasta)?;
+            let responses_path = PathBuf::from(format!("{}.responses.tsv", out.display()));
+            let features_path = PathBuf::from(format!("{}.features.tsv", out.display()));
+            let mut responses = String::from("sequence_id\tmodel_id\tmodel_name\tmodel_kind\traw_log_likelihood\theldout_precision\theldout_recall\theldout_f1\n");
+            let mut features = String::from("sequence_id\taa_start_0based\taa_end_0based_exclusive\tmodel_id\tmodel_name\tmodel_kind\traw_log_likelihood\tcalibrated_p_value\theldout_precision\theldout_recall\theldout_f1\n");
+            for (sequence_id, sequence) in sequences {
+                let (raw, intervals) = vault.predict_sequence(sequence.as_bytes())?;
+                for row in raw {
+                    responses.push_str(&format!("{}\t{}\t{}\t{}\t{:.12}\t{}\t{}\t{}\n",
+                        sequence_id, row.model_id, row.model_name, row.model_kind, row.raw_score,
+                        optional_float(row.precision), optional_float(row.recall), optional_float(row.f1)));
+                }
+                for row in intervals {
+                    features.push_str(&format!("{}\t{}\t{}\t{}\t{}\t{}\t{:.12}\t{}\t{}\t{}\t{}\n",
+                        sequence_id, row.start, row.end, row.model_id, row.model_name, row.model_kind,
+                        row.raw_score, optional_float(row.calibrated_p_value), optional_float(row.precision),
+                        optional_float(row.recall), optional_float(row.f1)));
                 }
             }
+            std::fs::write(&responses_path, responses)?;
+            std::fs::write(&features_path, features)?;
+            println!("Ommverse model-vault prediction");
+            println!("  FASTA:     {}", fasta.display());
+            println!("  vault:     {}", vault.metadata.source);
+            println!("  raw:       {}", responses_path.display());
+            println!("  features:  {}", features_path.display());
+            println!("  coordinates: 0-based half-open [start, end)");
+            println!("  significance: not calibrated; calibrated_p_value is intentionally empty");
         }
         Command::EvaluateModelVault { index, vault } => {
             let omm = Ommverse::load(&index)?;
@@ -1210,7 +1393,7 @@ fn main() -> Result<()> {
             println!("Ommverse model-vault transfer evaluation");
             println!("  trained assembly:          {}", vault.metadata.assembly);
             println!("  target assembly:           {}", omm.assembly);
-            println!("  models:                    {}", vault.models.len());
+            println!("  models:                    {}", vault.models.len() + vault.interpro_models.len());
             println!("  fitting on target:         none");
             println!("  target labels:             evaluation only");
             println!();

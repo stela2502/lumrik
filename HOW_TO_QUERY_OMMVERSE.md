@@ -185,7 +185,7 @@ Useful options include `--flank-width` and `--scan-unannotated`.
 ### Train a model vault
 
 ```bash
-target/release/ommverse train-model-vault \
+target/release/ommverse model-vault train \
     --index <reference.ommverse> \
     --out <vault>
 ```
@@ -193,7 +193,7 @@ target/release/ommverse train-model-vault \
 ### Inspect a model vault
 
 ```bash
-target/release/ommverse model-vault-info --vault <vault>
+target/release/ommverse model-vault info --vault <vault>
 ```
 
 ### Evaluate a model vault on another Ommverse reference
