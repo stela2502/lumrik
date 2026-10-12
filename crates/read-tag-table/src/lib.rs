@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use csv::WriterBuilder;
 use flate2::read::MultiGzDecoder;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use serde::{Deserialize, Serialize};
 
 use std::{
@@ -137,7 +137,7 @@ impl ReadTagTable {
     }
 
     pub fn from_config(config: &ReadTagTableConfig) -> Result<Self> {
-        let mut mapping_info = MappingInfo::new(None, 0.0, 0);
+        let mut run_stats = RunStats::new(None, 0.0, 0);
         let reader = open_maybe_gz(&config.path)?;
 
         let mut rdr = csv::ReaderBuilder::new()
@@ -188,9 +188,9 @@ impl ReadTagTable {
             records.insert(read_id.to_string(), record);
         }
 
-        mapping_info.stop_file_io_time();
+        run_stats.stop_file_io_time();
 
-        let (h, m, s, ms) = MappingInfo::split_duration(mapping_info.file_io_time);
+        let (h, m, s, ms) = RunStats::split_duration(run_stats.file_io_time);
         println!(
             "Read-tag table loaded from TSV: {} entries in {}:{:02}:{:02}.{:03}",
             records.len(),

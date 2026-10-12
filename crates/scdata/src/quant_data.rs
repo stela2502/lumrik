@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::{FeatureIndex, MatrixValueType, Scdata};
 
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 
 pub struct QuantData {
@@ -281,7 +281,7 @@ impl QuantData {
             .unwrap_or_else(|| panic!("QuantData has no dataset named '{name}'"))
     }
 
-    pub fn merge_named(&mut self, target: &str, source: &str) -> MappingInfo {
+    pub fn merge_named(&mut self, target: &str, source: &str) -> RunStats {
         if target == source {
             panic!("cannot merge QuantData dataset '{source}' into itself");
         }
@@ -300,7 +300,7 @@ impl QuantData {
         cell: &u64,
         value: crate::GeneUmiHash,
         weight: f32,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
     ) -> crate::ScdataInsertState {
         let state = self.data_mut(name).try_insert(cell, value, weight);
         report.report(format!("{name}_{}", state.as_str()));
@@ -347,8 +347,8 @@ impl QuantData {
         Ok(Self { data })
     }
 
-    pub fn merge(&mut self, other: &Self) -> MappingInfo {
-        let mut report = MappingInfo::new(None, 0.0, usize::MAX);
+    pub fn merge(&mut self, other: &Self) -> RunStats {
+        let mut report = RunStats::new(None, 0.0, usize::MAX);
         for (name, incoming) in &other.data {
             let local = self.data.get_mut(name).unwrap_or_else(|| {
                 panic!("cannot merge QuantData: incoming dataset '{name}' does not exist locally")

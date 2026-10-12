@@ -47,7 +47,7 @@
                          .map_err(|e| format!("writing SNP alt truth failed: {e}"))?;
                  }
 @@ -381,8 +381,14 @@
-     pub fn merge_report(&mut self, report: &MappingInfo) { self.report.merge(report); }
+     pub fn merge_report(&mut self, report: &RunStats) { self.report.merge(report); }
  
      pub fn merge_named(&mut self, target: &str, source: &str) {
 -        let source = self.data(source).clone();

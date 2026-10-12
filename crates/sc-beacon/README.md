@@ -378,7 +378,7 @@ cells_2_guides              5
 called_guides_total      3,909
 ```
 
-These statistics are generated using [`mapping_info`](https://github.com/stela2502/lumrik/tree/main/crates/mapping_info).
+These statistics are generated using [`run_stats`](https://github.com/stela2502/lumrik/tree/main/crates/run_stats).
 
 ## Why use the raw matrix?
 
@@ -440,7 +440,7 @@ Results should therefore be validated carefully before using the software as the
 Related projects:
 
 - [`scdata`](https://github.com/stela2502/lumrik/tree/main/crates/scdata) — sparse single-cell data structures
-- [`mapping_info`](https://github.com/stela2502/lumrik/tree/main/crates/mapping_info) — analysis and processing statistics
+- [`run_stats`](https://github.com/stela2502/lumrik/tree/main/crates/run_stats) — analysis and processing statistics
 
 ## License
 

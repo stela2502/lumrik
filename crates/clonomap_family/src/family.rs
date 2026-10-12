@@ -25,6 +25,8 @@ pub struct Receptor {
     /// Read-level support for this receptor reconstruction. Used only to guard
     /// provisional V registration against single-read accidents.
     pub evidence_reads: usize,
+    /// UMI support reported by sc-vdj for this receptor reconstruction.
+    pub support_umis: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1010,6 +1012,7 @@ mod tests {
             observed: obs.into(),
             alternative_reconstructions: 0,
             evidence_reads: 2,
+            support_umis: 1,
         }
     }
     fn cell(name: &str, cdr3: &str, obs: &str) -> CellReceptor {

@@ -333,7 +333,7 @@ dependencies = [
  "clap",
  "flate2",
  "int-to-str",
- "mapping_info",
+ "run_stats",
  "scdata",
 ]
 
@@ -615,7 +615,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
-name = "mapping_info"
+name = "run_stats"
 version = "0.4.2"
 dependencies = [
  "atty",
@@ -1002,7 +1002,7 @@ dependencies = [
  "fast_tag_mapper",
  "flate2",
  "int-to-str",
- "mapping_info",
+ "run_stats",
  "onehot_dna",
  "predicates",
  "serde",
@@ -1015,7 +1015,7 @@ dependencies = [
  "anyhow",
  "flate2",
  "int-to-str",
- "mapping_info",
+ "run_stats",
  "rayon",
  "regex",
 ]

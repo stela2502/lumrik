@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use fast_tag_mapper::{FastMapperCli, MapStatus};
 use flate2::read::MultiGzDecoder;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Benchmark FastTagMapper on FASTQ reads")]
@@ -62,9 +62,9 @@ fn main() -> Result<()> {
     let mut expected_calls = None;
 
     for iteration in 0..cli.iterations {
-        // MappingInfo is intentionally one object per pass, matching normal use.
+        // RunStats is intentionally one object per pass, matching normal use.
         // Its ticker/reporting cost is therefore included in map_feature_id().
-        let mut info = MappingInfo::new(None, 0.0, 0);
+        let mut info = RunStats::new(None, 0.0, 0);
         let started = Instant::now();
         let mut calls = 0usize;
         let mut checksum = 0u64;
@@ -119,7 +119,7 @@ struct BenchRead {
 fn report_mapped_reads(mapper: &fast_tag_mapper::FastTagMapper, reads: &[BenchRead], limit: usize) {
     eprintln!("diagnostic: first {limit} mapped reads (untimed)");
 
-    let mut info = MappingInfo::new(None, 0.0, 0);
+    let mut info = RunStats::new(None, 0.0, 0);
     let mut shown = 0usize;
 
     for (read_index, read) in reads.iter().enumerate() {

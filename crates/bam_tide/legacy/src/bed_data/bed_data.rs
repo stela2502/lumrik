@@ -24,7 +24,7 @@ use crate::read_data::ReadData;
 use crate::bed_data::ChrArea;
 
 use cigar::Cigar;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use scdata::{Scdata, IndexedGenes, cell_data::GeneUmiHash};
 
 
@@ -101,7 +101,7 @@ impl FeatureMatcher for BedData{
 		&self,
 		read_result: &Option<Vec<ReadResult>>,
 		_data: &ReadData,
-		_mapping_info: &mut MappingInfo,
+		_run_stats: &mut RunStats,
 		) -> Vec<String> {
 		if let Some(results) = read_result {
 			results
@@ -134,7 +134,7 @@ impl FeatureMatcher for BedData{
 		exp_idx: &mut IndexedGenes,
 		mut_gex: &mut Scdata,
 		mut_idx: &mut IndexedGenes,
-		mapping_info: &mut MappingInfo,
+		run_stats: &mut RunStats,
 		_match_type: &MatchType,
 		){
     	let primary_read = &data.0; // Always present
@@ -155,16 +155,16 @@ impl FeatureMatcher for BedData{
 
         	self.collect_ghus( &mate, &mut guhs, exp_idx );
         	if let Some(processor) = mutations {
-	             processor.handle_mutations( primary_read, "unknown", mut_idx, mut_gex, mapping_info, &cell_id, mate.sequence.len(), self.collect_gene_areas(primary_read) );
+	             processor.handle_mutations( primary_read, "unknown", mut_idx, mut_gex, run_stats, &cell_id, mate.sequence.len(), self.collect_gene_areas(primary_read) );
 	        }
         }
         self.collect_ghus( &primary_read, &mut guhs, exp_idx);
         for guh in guhs.iter(){
         	//println!("Inserting GHU {}",guh);
-        	exp_gex.try_insert( &cell_id, *guh, 1_f32, mapping_info );
+        	exp_gex.try_insert( &cell_id, *guh, 1_f32, run_stats );
         }
         if let Some(processor) = mutations {
-             processor.handle_mutations( primary_read, "unknown", mut_idx, mut_gex, mapping_info, &cell_id, primary_read.sequence.len(), self.collect_gene_areas(primary_read) );
+             processor.handle_mutations( primary_read, "unknown", mut_idx, mut_gex, run_stats, &cell_id, primary_read.sequence.len(), self.collect_gene_areas(primary_read) );
         }
     }
 
@@ -373,7 +373,7 @@ impl BedData {
 	                None
 	            }
 	            Err(_err) => {
-	                //mapping_info.report(err);
+	                //run_stats.report(err);
 	                None
 	            }
 	        };

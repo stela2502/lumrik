@@ -2,7 +2,7 @@ use crate::fastq::FastqRecord; // FastqPairReader, SimpleFastqReader, FastqRead}
 use read_tag_table::{ReadTagRecord, ReadTagTable};
 
 use anyhow::{Context, Result};
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use sc_primer::Orientation;
 //use scdata::cell_data::GeneUmiHash;
 use scdata::{MatrixValueType, Scdata};
@@ -43,7 +43,7 @@ pub struct NormalizerPartial {
     pub fastq_records: Vec<FastqRecord>,
     pub read_tags: ReadTagTable,
     pub feature_tag_table: Scdata,
-    pub stats: MappingInfo,
+    pub stats: RunStats,
 }
 
 impl NormalizerPartial {
@@ -52,7 +52,7 @@ impl NormalizerPartial {
             fastq_records: Vec::new(),
             read_tags: ReadTagTable::new(),
             feature_tag_table: Scdata::new(1, MatrixValueType::Real),
-            stats: MappingInfo::new(None, 0.0, 0),
+            stats: RunStats::new(None, 0.0, 0),
         }
     }
 
@@ -67,7 +67,7 @@ impl NormalizerPartial {
 
     pub fn merge_into(
         self,
-        stats: &mut MappingInfo,
+        stats: &mut RunStats,
         read_tags: &mut ReadTagTable,
         feature_tag_table: &mut Scdata,
     ) -> Vec<FastqRecord> {
@@ -88,8 +88,8 @@ impl Default for NormalizerPartial {
 pub struct NgsNormalizerSupport;
 
 impl NgsNormalizerSupport {
-    pub fn new_stats() -> MappingInfo {
-        let mut info = MappingInfo::new(None, 0.0, 0);
+    pub fn new_stats() -> RunStats {
+        let mut info = RunStats::new(None, 0.0, 0);
         info.start_counter();
         info
     }
@@ -106,7 +106,7 @@ impl NgsNormalizerSupport {
         }
     }
 
-    pub fn report_orientation(stats: &mut MappingInfo, orientation: Orientation) {
+    pub fn report_orientation(stats: &mut RunStats, orientation: Orientation) {
         match orientation {
             Orientation::Forward => stats.report("forward_molecules"),
             Orientation::ReverseComplement => stats.report("reverse_molecules"),

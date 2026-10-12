@@ -1,0 +1,7 @@
+--- crates/traconmech/Cargo.toml
++++ crates/traconmech/Cargo.toml
+@@ -13,4 +13,3 @@
+ sc-analysis = { path = "../sc-analysis" }
+ hmm = { path = "../hmm" }
+ rayon = "1"
+-hdf5 = "0.8"

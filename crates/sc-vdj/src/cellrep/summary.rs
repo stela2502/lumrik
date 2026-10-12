@@ -2,6 +2,8 @@ use super::{BamFeatureEvidence, SequencePart};
 use crate::index::{Chain, SegmentId, VdjIndex};
 use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
+use run_stats::RunStats;
+use std::collections::HashMap;
 
 /// Compact germline-aware sequence summary for one connected receptor fragment.
 ///
@@ -38,11 +40,13 @@ pub struct GermlineAnchor {
     pub summary_start: isize,
 }
 
+
 const PACKED_BOOTSTRAP_READS: usize = 50;
 const PACKED_REFINEMENT_READS: usize = 20;
 const MODEL_MIN_EXTENSION: isize = 4;
 const PACKED_STAR_WINDOW_BASES: u32 = 16;
 const PACKED_STAR_WINDOW_MIN_READS: usize = 3;
+
 
 #[derive(Debug, Clone, PartialEq)]
 struct PendingPackedRead {
@@ -150,32 +154,6 @@ impl ReceptorSequenceEvidence {
             .unwrap_or(0)
     }
 
-    /// True once this receptor component has V + J evidence and every
-    /// assembled base is supported by at least `min_depth` observations.
-    pub fn first_pass_finished(&self, index: &VdjIndex, min_depth: u16) -> bool {
-        if self.is_empty() || min_depth == 0 {
-            return false;
-        }
-        let mut has_v = false;
-        let mut has_j = false;
-        for id in self.segment_ids() {
-            match index.segment(id).map(|segment| segment.kind) {
-                Some(crate::index::SegmentKind::V) => has_v = true,
-                Some(crate::index::SegmentKind::J) => has_j = true,
-                _ => {}
-            }
-        }
-        has_v
-            && has_j
-            && (0..self.len()).all(|pos| {
-                self.base_counts
-                    .iter()
-                    .map(|counts| counts.get(pos).copied().unwrap_or(0))
-                    .fold(0u16, u16::saturating_add)
-                    >= min_depth
-            })
-    }
-
     /// True when this BAM record identifies the same V/J combination as this
     /// receptor component.  Saturation is tested separately so all matching
     /// components can be considered together.
@@ -196,6 +174,7 @@ impl ReceptorSequenceEvidence {
         });
         record_has_matching_v && record_has_matching_j
     }
+
 
     /// Packed mapping view of all observed nucleotide states.
     ///
@@ -385,8 +364,11 @@ impl ReceptorSequenceEvidence {
         false
     }
 
-    fn try_consume(&mut self, other: &mut Self, index: &VdjIndex, min_overlap: usize) -> bool {
+    fn try_consume(&mut self, other: &mut Self, index: &VdjIndex, min_overlap: usize, stats: &mut RunStats) -> bool {
+        stats.report("vdj.model_route.try_consume_calls");
         if self.has_hard_segment_conflict(other, index) {
+            stats.report("vdj.model_route.hard_segment_conflicts");
+            stats.report("vdj.model_route.try_consume_rejections");
             return false;
         }
 
@@ -397,13 +379,15 @@ impl ReceptorSequenceEvidence {
         let a = self.mapping_sequence();
         let b = other.mapping_sequence();
         if a.is_empty() || b.is_empty() {
+            stats.report("vdj.model_route.empty_mappings");
+            stats.report("vdj.model_route.try_consume_rejections");
             return false;
         }
 
-        // Shared germline anchors narrow the expected offset first.  If no
-        // placed shared anchor is available (e.g. short D), fall back to an
-        // observed-sequence overlap.  This fallback only runs between compact
-        // summaries, never against the original read collection.
+        // Shared germline anchors narrow the expected offset. For this path,
+        // trust that biological placement: if none of the anchor-derived
+        // offsets is compatible, fall through directly to the existing
+        // indel-aware rescue rather than exhaustively sliding the summaries.
         let mut candidates = Vec::<isize>::new();
         for aa in &self.germline_anchors {
             for bb in &other.germline_anchors {
@@ -414,6 +398,7 @@ impl ReceptorSequenceEvidence {
         }
         candidates.sort_unstable();
         candidates.dedup();
+        stats.report_n("vdj.model_route.anchor_offsets_tested", candidates.len());
 
         // Mapper/germline geometry has already proposed these offsets. Do not
         // search the alignment space for the common case: verify the known
@@ -422,9 +407,9 @@ impl ReceptorSequenceEvidence {
         // overlaps fall through to the existing indel-aware rescue.
         let offset = candidates
             .into_iter()
-            .find(|off| known_offset_is_compatible_packed(&a, &b, *off, min_overlap, 5))
-            .or_else(|| best_offset_packed(&a, &b, min_overlap).map(|x| x.0));
+            .find(|off| known_offset_is_compatible_packed(&a, &b, *off, min_overlap, 5));
         if let Some(offset) = offset {
+            stats.report("vdj.model_route.anchor_merges");
             trace_overlap_placement("packed", self, other, index, offset);
             self.merge_at(other, offset);
             self.pending_refinement.append(&mut other.pending_refinement);
@@ -448,14 +433,22 @@ impl ReceptorSequenceEvidence {
         if self.shares_segment(other) {
             let ac = self.consensus(index);
             let bc = other.consensus(index);
+            stats.report("vdj.model_route.nw_attempts");
+            stats.report_n(
+                "vdj.model_route.nw_dp_cells",
+                ac.len().saturating_add(1).saturating_mul(bc.len().saturating_add(1)),
+            );
             if let Some(aln) = needleman_wunsch_overlap(&ac, &bc, min_overlap) {
+                stats.report("vdj.model_route.nw_merges");
                 self.merge_aligned(other, &aln.columns);
                 self.pending_refinement.append(&mut other.pending_refinement);
                 self.refresh_packed_consensus(index);
                 return true;
             }
+            stats.report("vdj.model_route.nw_rejections");
         }
 
+        stats.report("vdj.model_route.try_consume_rejections");
         false
     }
 
@@ -550,8 +543,9 @@ impl ReceptorSequenceEvidence {
             .collect::<Vec<_>>()
             .join(",");
         eprintln!(
-            "[sc-vdj split-trace] {label}: support={} len={} segments=[{}] consensus={}",
+            "[sc-vdj split-trace] {label}: support={} umis={} len={} segments=[{}] consensus={}",
             self.support_features,
+            self.supporting_umis.len(),
             self.len(),
             segments,
             String::from_utf8_lossy(&seq),
@@ -696,7 +690,7 @@ impl ReceptorSequenceEvidence {
 /// work items in a Vec and feed them to Rayon without changing the assembly
 /// implementation.
 #[derive(Clone, Copy)]
-pub struct ChainSummaryWork<'a> {
+pub(crate) struct ChainSummaryWork<'a> {
     pub features: &'a [&'a BamFeatureEvidence],
     pub index: &'a VdjIndex,
     pub chain: Chain,
@@ -707,16 +701,45 @@ pub struct ChainSummaryWork<'a> {
 /// set of germline-aware summaries.  Reads disappear as soon as they fit an
 /// existing summary.  Compatible but unlinked summaries remain separate until
 /// actual sequence/germline evidence bridges them.
-pub fn summarize_chain_work(work: ChainSummaryWork<'_>) -> Vec<ReceptorSequenceEvidence> {
-    let mut summaries = Vec::<ReceptorSequenceEvidence>::new();
-    consume_chain_features(
-        &mut summaries,
-        work.features,
-        work.index,
-        work.chain,
-        work.min_overlap,
-    );
-    summaries
+impl ChainSummaryWork<'_> {
+    pub(crate) fn summarize(self, stats: &mut RunStats) -> Vec<ReceptorSequenceEvidence> {
+        let mut summaries = Vec::<ReceptorSequenceEvidence>::new();
+        consume_chain_features(
+            &mut summaries,
+            self.features,
+            self.index,
+            self.chain,
+            self.min_overlap,
+            stats,
+        );
+
+        // A ChainSummaryWork is the Rayon-local modeling boundary. Nothing
+        // that still requires read-level interpretation may escape from here
+        // into persistent state. Fold even partial refinement buffers now so
+        // the later persistent merge is strictly model-to-model accumulation.
+        flush_refinement_buffers(
+            &mut summaries,
+            self.index,
+            self.min_overlap,
+            true,
+            stats,
+        );
+
+        // Finish the cell locally: if two completed models can be joined by
+        // the cheap completed-model compatibility rule, do it here while this
+        // cell is still owned by one Rayon bucket. Persistent state should see
+        // only models that exhausted all within-batch merges.
+        let batch_summaries = std::mem::take(&mut summaries);
+        merge_completed_models(
+            &mut summaries,
+            batch_summaries,
+            self.index,
+            self.min_overlap,
+            stats,
+            false,
+        );
+        summaries
+    }
 }
 
 /// Fold another bounded feature batch into an already-persistent chain summary.
@@ -745,14 +768,111 @@ fn trace_new_summary_split(
     eprintln!("[sc-vdj split-trace] END NEW SUMMARY\n");
 }
 
+/// Merge fully interpreted batch-local models into persistent models.
+///
+/// This is deliberately *not* the read/model discovery path.  Every incoming
+/// summary has already consumed all of its raw/refinement evidence inside the
+/// Rayon modeling loop.  Persistent merge therefore only locates an expected
+/// overlap using germline placement plus packed sequence comparisons and adds
+/// the evidence arrays.  It never runs dynamic-programming alignment and never
+/// queues refinement work for a later batch.
+pub(crate) fn merge_completed_models(
+    summaries: &mut Vec<ReceptorSequenceEvidence>,
+    batch_summaries: Vec<ReceptorSequenceEvidence>,
+    index: &VdjIndex,
+    min_overlap: usize,
+    stats: &mut RunStats,
+    count_persistent_merge: bool,
+) {
+    for incoming in batch_summaries {
+        let incoming_packed = incoming.mapping_sequence();
+        let mut target = None;
+        let mut target_offset = 0isize;
+
+        // A cell normally has very few receptor models.  Probe only compatible
+        // completed models, using already-computed germline anchors to propose
+        // placement and packed OneHot evidence to verify it.  No reconstruction
+        // or alignment is allowed on this side of the Rayon boundary.
+        for (i, existing) in summaries.iter().enumerate() {
+            if existing.has_hard_segment_conflict(&incoming, index) {
+                continue;
+            }
+
+            let existing_packed = existing.mapping_sequence();
+            if existing_packed.is_empty() || incoming_packed.is_empty() {
+                continue;
+            }
+
+            let mut offsets = Vec::<isize>::new();
+            for aa in &existing.germline_anchors {
+                for bb in &incoming.germline_anchors {
+                    if aa.segment_id == bb.segment_id {
+                        offsets.push(aa.summary_start - bb.summary_start);
+                    }
+                }
+            }
+            offsets.sort_unstable();
+            offsets.dedup();
+
+            let anchored_offset = offsets.into_iter().find(|off| {
+                known_offset_is_compatible_packed(
+                    &existing_packed,
+                    &incoming_packed,
+                    *off,
+                    min_overlap,
+                    5,
+                )
+            });
+            let offset = if let Some(offset) = anchored_offset {
+                Some(offset)
+            } else {
+                // Some completed models have no usable germline anchor (short
+                // D/junction-heavy evidence).  The fallback is still packed
+                // bit arithmetic only: no Needleman-Wunsch and no read-level
+                // interpretation.
+                let fallback = existing
+                    .shares_segment(&incoming)
+                    .then(|| {
+                        best_offset_packed(&existing_packed, &incoming_packed, min_overlap)
+                            .map(|(off, _)| off)
+                    })
+                    .flatten();
+                fallback
+            };
+
+            if let Some(offset) = offset {
+                target = Some(i);
+                target_offset = offset;
+                break;
+            }
+        }
+
+        if let Some(i) = target {
+            if count_persistent_merge {
+                stats.report("vdj.model_merge.merged");
+            }
+            summaries[i].merge_at(&incoming, target_offset);
+            summaries[i].refresh_packed_consensus(index);
+        } else {
+            if count_persistent_merge {
+                stats.report("vdj.model_merge.inserted");
+            }
+            summaries.push(incoming);
+        }
+    }
+
+    summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
+}
+
 pub(crate) fn merge_summary_batch(
     summaries: &mut Vec<ReceptorSequenceEvidence>,
     batch_summaries: Vec<ReceptorSequenceEvidence>,
     index: &VdjIndex,
     min_overlap: usize,
+    stats: &mut RunStats,
 ) {
-    merge_summary_batch_core(summaries, batch_summaries, index, min_overlap);
-    flush_refinement_buffers(summaries, index, min_overlap, false);
+    merge_summary_batch_core(summaries, batch_summaries, index, min_overlap, stats);
+    flush_refinement_buffers(summaries, index, min_overlap, false, stats);
     summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
 }
 
@@ -761,6 +881,7 @@ fn merge_summary_batch_core(
     batch_summaries: Vec<ReceptorSequenceEvidence>,
     index: &VdjIndex,
     min_overlap: usize,
+    stats: &mut RunStats,
 ) {
     for mut incoming in batch_summaries {
         let mut target = None;
@@ -771,7 +892,7 @@ fn merge_summary_batch_core(
             if !summaries[i].shares_segment(&incoming) {
                 continue;
             }
-            if summaries[i].try_consume(&mut incoming, index, min_overlap) {
+            if summaries[i].try_consume(&mut incoming, index, min_overlap, stats) {
                 target = Some(i);
                 break;
             }
@@ -786,7 +907,7 @@ fn merge_summary_batch_core(
                 if summaries[i].shares_segment(&incoming) {
                     continue;
                 }
-                if summaries[i].try_consume(&mut incoming, index, min_overlap) {
+                if summaries[i].try_consume(&mut incoming, index, min_overlap, stats) {
                     target = Some(i);
                     break;
                 }
@@ -796,6 +917,7 @@ fn merge_summary_batch_core(
         let target = match target {
             Some(i) => i,
             None => {
+                stats.report("vdj.model_route.new_summaries");
                 trace_new_summary_split("merge_summary_batch", &incoming, summaries, index);
                 summaries.push(incoming);
                 summaries.len() - 1
@@ -804,7 +926,7 @@ fn merge_summary_batch_core(
 
         // One incoming compact component may bridge two persistent components.
         // Reconcile only around the component that changed.
-        collapse_from(summaries, target, index, min_overlap);
+        collapse_from(summaries, target, index, min_overlap, stats);
     }
 }
 
@@ -813,6 +935,7 @@ pub(crate) fn flush_refinement_buffers(
     index: &VdjIndex,
     min_overlap: usize,
     flush_all: bool,
+    stats: &mut RunStats,
 ) {
     loop {
         let mut incoming = Vec::new();
@@ -825,7 +948,7 @@ pub(crate) fn flush_refinement_buffers(
             incoming.extend(summary.pending_refinement.drain(..).map(|read| read.into_summary(index)));
         }
         if incoming.is_empty() { break; }
-        merge_summary_batch_core(summaries, incoming, index, min_overlap);
+        merge_summary_batch_core(summaries, incoming, index, min_overlap, stats);
     }
     summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
 }
@@ -842,18 +965,20 @@ fn merge_umis(dst: &mut Vec<Vec<u8>>, src: &[Vec<u8>]) {
     }
 }
 
-pub(crate) fn consume_chain_features(
+fn consume_chain_features(
     summaries: &mut Vec<ReceptorSequenceEvidence>,
     features: &[&BamFeatureEvidence],
     index: &VdjIndex,
     chain: Chain,
     min_overlap: usize,
+    stats: &mut RunStats,
 ) {
     let mut pending = Vec::<PendingPackedRead>::with_capacity(PACKED_BOOTSTRAP_READS);
     let mut pending_star_window: Option<(i32, u32)> = None;
 
     let flush_pending = |pending: &mut Vec<PendingPackedRead>,
-                         summaries: &mut Vec<ReceptorSequenceEvidence>| {
+                         summaries: &mut Vec<ReceptorSequenceEvidence>,
+                         stats: &mut RunStats| {
         if pending.is_empty() {
             return;
         }
@@ -895,7 +1020,7 @@ pub(crate) fn consume_chain_features(
         let mut incoming = Vec::with_capacity(1 + unresolved.len());
         incoming.push(collector);
         incoming.extend(unresolved.into_iter().map(|read| read.into_summary(index)));
-        merge_summary_batch(summaries, incoming, index, min_overlap);
+        merge_summary_batch(summaries, incoming, index, min_overlap, stats);
     };
 
     // STAR has already done the expensive genomic placement.  Feed nearby
@@ -934,7 +1059,7 @@ pub(crate) fn consume_chain_features(
             let outside_window = tid != window_tid
                 || start.saturating_sub(window_start) >= PACKED_STAR_WINDOW_BASES;
             if outside_window && pending.len() >= PACKED_STAR_WINDOW_MIN_READS {
-                flush_pending(&mut pending, summaries);
+                flush_pending(&mut pending, summaries, stats);
                 pending_star_window = None;
             }
         }
@@ -989,10 +1114,12 @@ pub(crate) fn consume_chain_features(
                 });
 
                 if let Some(target) = target {
-                    if summaries[target].first_pass_finished(index, 3) {
-                        continue;
-                    }
-
+                    stats.report("vdj.model_route.known_model_reads");
+                    // Completion is deliberately not queried here. This loop is
+                    // the per-read hot path for one bounded evidence batch: all
+                    // useful reads in the batch are allowed to fill/refine their
+                    // model. Cell/locus completion is evaluated only after the
+                    // compact batch delta has been merged into persistent state.
                     let new_umi = read.umi.as_deref().is_some_and(|umi| {
                         !summaries[target]
                             .supporting_umis
@@ -1029,25 +1156,32 @@ pub(crate) fn consume_chain_features(
                         }
                     }
 
+                    // A repeated observation from the same molecule that adds no
+                    // reach carries no independent reconstruction information.
                     if !new_umi && !useful_extension {
+                        stats.report("vdj.model_route.same_umi_nonextending_skips");
                         continue;
                     }
 
+                    // Keep refinement evidence cheap while this outer evidence batch is
+                    // being filled. Full buffers are folded once, after the batch has
+                    // been consumed, instead of repeatedly flushing from the per-read
+                    // routing hot path.
+                    stats.report("vdj.model_route.refinement_admissions");
                     summaries[target].pending_refinement.push(read);
-                    if summaries[target].pending_refinement.len() >= PACKED_REFINEMENT_READS {
-                        flush_refinement_buffers(summaries, index, min_overlap, false);
-                    }
                 } else {
+                    stats.report("vdj.model_route.bootstrap_admissions");
                     pending.push(read);
                     if pending.len() == PACKED_BOOTSTRAP_READS {
-                        flush_pending(&mut pending, summaries);
+                        flush_pending(&mut pending, summaries, stats);
                         pending_star_window = None;
                     }
                 }
             } else {
+                stats.report("vdj.model_route.unpackable_fallbacks");
                 // IUPAC/ambiguous input cannot be represented losslessly in
                 // the 2-bit staging buffer. Preserve the old path for it.
-                flush_pending(&mut pending, summaries);
+                flush_pending(&mut pending, summaries, stats);
                 pending_star_window = None;
                 let incoming = ReceptorSequenceEvidence::from_part(
                     part,
@@ -1057,16 +1191,16 @@ pub(crate) fn consume_chain_features(
                     min_overlap,
                     feature.umi.as_deref(),
                 );
-                merge_summary_batch(summaries, vec![incoming], index, min_overlap);
+                merge_summary_batch(summaries, vec![incoming], index, min_overlap, stats);
             }
         }
     }
 
-    flush_pending(&mut pending, summaries);
-    // Refinement buffers deliberately survive this bounded BAM/Rayon batch.
-    // Only full 20-read buffers are folded during collection; the runner
-    // performs one explicit final flush after the complete BAM is consumed.
-    flush_refinement_buffers(summaries, index, min_overlap, false);
+    flush_pending(&mut pending, summaries, stats);
+    // Fold full refinement buffers once per bounded BAM/Rayon batch. Partial
+    // buffers deliberately survive into the next batch; the runner performs one
+    // explicit final flush after the complete BAM is consumed.
+    flush_refinement_buffers(summaries, index, min_overlap, false, stats);
 }
 
 fn collapse_from(
@@ -1074,6 +1208,7 @@ fn collapse_from(
     mut target: usize,
     index: &VdjIndex,
     min_overlap: usize,
+    stats: &mut RunStats,
 ) {
     loop {
         let mut merged = false;
@@ -1086,7 +1221,7 @@ fn collapse_from(
             }
 
             let mut candidate = summaries[other].clone();
-            if !summaries[target].try_consume(&mut candidate, index, min_overlap) {
+            if !summaries[target].try_consume(&mut candidate, index, min_overlap, stats) {
                 continue;
             }
 

@@ -19,6 +19,14 @@ impl CellAnnotations {
     pub fn column(&self, name: &str) -> Option<&[String]> {
         self.columns.get(name).map(Vec::as_slice)
     }
+    pub(crate) fn subset(&self, keep: &[usize]) -> Result<Self> {
+        let mut columns = Vec::with_capacity(self.headers.len());
+        for name in &self.headers {
+            let values = self.columns.get(name).expect("annotation header has values");
+            columns.push((name.as_str(), keep.iter().map(|&i| values[i].clone()).collect()));
+        }
+        Self::from_columns(columns, keep.len())
+    }
     pub fn groups(&self, name: &str) -> Result<BTreeMap<String, Vec<usize>>> {
         let values = self
             .column(name)
@@ -92,6 +100,52 @@ impl SingleCellData {
         let (cells, annotations) = Self::read_cells(&path.join("cells.tsv.gz"))?;
         let matrix = Self::read_matrix_market(&path.join("expression.mtx.gz"))?;
         Self::new(matrix, features, cells, annotations)
+    }
+
+    /// Load an AnnData H5AD expression matrix and its cell annotations.
+    ///
+    /// AnnData stores observations x variables; SingleCellData stores features
+    /// x cells. Preserve sparsity when converting the matrix orientation.
+    pub fn from_h5ad(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let read = sc_anndata::AnnData::read_h5ad(path)
+            .with_context(|| format!("reading H5AD {}", path.display()))?;
+        for warning in &read.warnings {
+            eprintln!("H5AD warning: {}: {}", warning.path, warning.reason);
+        }
+        Self::from_anndata(read.data)
+    }
+
+    /// Convert already-decoded AnnData expression data without a second HDF5 reader.
+    pub fn from_anndata(data: sc_anndata::AnnData) -> Result<Self> {
+        use sc_anndata::{Column, Matrix};
+        data.validate()?;
+        let matrix = match data.x {
+            Matrix::CsrF32(matrix) => matrix.transpose_view().to_csr(),
+            Matrix::DenseF32(matrix) => {
+                let (cells, genes) = matrix.dim();
+                let mut sparse = TriMat::<f32>::new((genes, cells));
+                for ((cell, gene), &value) in matrix.indexed_iter() {
+                    if value != 0.0 {
+                        sparse.add_triplet(gene, cell, value);
+                    }
+                }
+                sparse.to_csr()
+            }
+        };
+        let n_cells = data.obs.index.len();
+        let mut columns = Vec::with_capacity(data.obs.columns.len());
+        for (name, column) in &data.obs.columns {
+            let values = match column {
+                Column::String(values) => values.clone(),
+                Column::F64(values) => values.iter().map(ToString::to_string).collect(),
+                Column::I64(values) => values.iter().map(ToString::to_string).collect(),
+                Column::Bool(values) => values.iter().map(ToString::to_string).collect(),
+            };
+            columns.push((name.as_str(), values));
+        }
+        let annotations = CellAnnotations::from_columns(columns, n_cells)?;
+        Self::new(matrix, data.var.index, data.obs.index, annotations)
     }
 
     fn open_reader(path: &Path) -> Result<Box<dyn BufRead>> {
@@ -212,3 +266,49 @@ impl SingleCellData {
     }
 }
 
+
+
+#[cfg(test)]
+mod h5ad_input_tests {
+    use super::*;
+    use sc_anndata::{AnnData, Column, Matrix, Table};
+    use ndarray::array;
+
+    fn fixture(x: Matrix) -> AnnData {
+        let mut obs = Table::new("cell_id", vec!["c1".into(), "c2".into()]);
+        obs.add_column("louvain", Column::String(vec!["0".into(), "1".into()])).unwrap();
+        obs.add_column("sname", Column::String(vec!["DBA".into(), "Con".into()])).unwrap();
+        obs.add_column("n_genes", Column::I64(vec![2, 1])).unwrap();
+        let var = Table::new("gene_id", vec!["MEIS2".into(), "GATA1".into(), "KLF1".into()]);
+        AnnData { x, obs, var, obsm: Default::default(), layers: Default::default() }
+    }
+
+    fn assert_converted(data: SingleCellData) {
+        assert_eq!(data.matrix.shape(), (3, 2));
+        assert!(data.matrix.is_csr());
+        assert_eq!(data.features, ["MEIS2", "GATA1", "KLF1"]);
+        assert_eq!(data.cells, ["c1", "c2"]);
+        assert_eq!(data.annotations.column("louvain").unwrap(), ["0", "1"]);
+        assert_eq!(data.annotations.column("sname").unwrap(), ["DBA", "Con"]);
+        assert_eq!(data.annotations.column("n_genes").unwrap(), ["2", "1"]);
+        assert_eq!(data.matrix.get(0, 0).copied().unwrap_or(0.0), 5.0);
+        assert_eq!(data.matrix.get(0, 1).copied().unwrap_or(0.0), 0.0);
+        assert_eq!(data.matrix.get(1, 1).copied().unwrap_or(0.0), 7.0);
+        assert_eq!(data.matrix.get(2, 0).copied().unwrap_or(0.0), 2.0);
+    }
+
+    #[test]
+    fn converts_dense_anndata_with_correct_orientation() {
+        let x = array![[5.0, 0.0, 2.0], [0.0, 7.0, 0.0]];
+        assert_converted(SingleCellData::from_anndata(fixture(Matrix::DenseF32(x))).unwrap());
+    }
+
+    #[test]
+    fn converts_sparse_anndata_with_correct_orientation() {
+        let mut tri = TriMat::<f32>::new((2, 3));
+        tri.add_triplet(0, 0, 5.0);
+        tri.add_triplet(0, 2, 2.0);
+        tri.add_triplet(1, 1, 7.0);
+        assert_converted(SingleCellData::from_anndata(fixture(Matrix::CsrF32(tri.to_csr()))).unwrap());
+    }
+}

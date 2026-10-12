@@ -19,7 +19,7 @@ use crate::mutation_processor::MutationProcessor;
 use crate::gtf_logics::MatchType;
 use crate::feature_matcher::FeatureMatcher;
 
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use scdata::Scdata;
 use scdata::IndexedGenes;
 use scdata::cell_data::GeneUmiHash;
@@ -51,7 +51,7 @@ impl FeatureMatcher for GTF{
         &self,
         read_result: &Option<Vec<ReadResult>>,
         data: &ReadData,
-        mapping_info: &mut MappingInfo,
+        run_stats: &mut RunStats,
     ) -> Vec<String> {
         if let Some(results) = read_result {
             let good:Vec<String> = results
@@ -62,7 +62,7 @@ impl FeatureMatcher for GTF{
                     RegionStatus::SpanningBoundary | RegionStatus::InsideIntron => Some(format!("{}_unspliced", result.gene)),
                     RegionStatus::ExtTag => Some(format!("{}_ext", result.gene.clone())),
                     _ => {
-                        mapping_info.report("missing_Gene_Info");
+                        run_stats.report("missing_Gene_Info");
                         None
                     },
                 })
@@ -73,7 +73,7 @@ impl FeatureMatcher for GTF{
             } else if good.len() == 1 {
                 good
             } else {
-                self.extract_antisense_ids(results, data, mapping_info)
+                self.extract_antisense_ids(results, data, run_stats)
             }
         }else {
             vec![]
@@ -118,7 +118,7 @@ impl FeatureMatcher for GTF{
         exp_idx: &mut IndexedGenes,
         mut_gex: &mut Scdata,
         mut_idx: &mut IndexedGenes,
-        mapping_info: &mut MappingInfo,
+        run_stats: &mut RunStats,
         match_type: &MatchType,
     ) {
         let primary_read = &data.0; // Always present
@@ -162,8 +162,8 @@ impl FeatureMatcher for GTF{
                 ),
             };
             let mut count_map = HashMap::<&str, usize>::new();
-            let gene_ids_a = self.extract_gene_ids(&first_result, primary_read, mapping_info);
-            let gene_ids_b = self.extract_gene_ids(&other_result, mate, mapping_info);
+            let gene_ids_a = self.extract_gene_ids(&first_result, primary_read, run_stats);
+            let gene_ids_b = self.extract_gene_ids(&other_result, mate, run_stats);
             // Count occurrences of gene IDs
             for gene_id in gene_ids_a.iter().chain(gene_ids_b.iter()) {
                 *count_map.entry(gene_id).or_insert(0) += 1;
@@ -178,11 +178,11 @@ impl FeatureMatcher for GTF{
             result
 
         }else {
-            self.extract_gene_ids(&first_result, primary_read, mapping_info)
+            self.extract_gene_ids(&first_result, primary_read, run_stats)
         };
 
         if gene_ids.len() > 1 {
-            mapping_info.report( "Multimapper");
+            run_stats.report( "Multimapper");
         }
 
         #[cfg(debug_assertions)]
@@ -202,20 +202,20 @@ impl FeatureMatcher for GTF{
             #[cfg(debug_assertions)]
             println!("\t And I got a gene: {guh}");
 
-            if exp_gex.try_insert(&cell_id, guh, 1_f32,  mapping_info) {
+            if exp_gex.try_insert(&cell_id, guh, 1_f32,  run_stats) {
                 // Handle mutations if any
                 if let Some(processor) = mutations {
-                    processor.handle_mutations( primary_read, gene_id, mut_idx, mut_gex, mapping_info, &cell_id, primary_read.sequence.len(), None);
+                    processor.handle_mutations( primary_read, gene_id, mut_idx, mut_gex, run_stats, &cell_id, primary_read.sequence.len(), None);
                 }
                 // If the read is paired, process the mate as well
                 if let Some(mate) = mate_read {
                     if let Some(processor) = mutations {
-                        processor.handle_mutations(mate, gene_id, mut_idx, mut_gex, mapping_info, &cell_id, mate.sequence.len(), None);
+                        processor.handle_mutations(mate, gene_id, mut_idx, mut_gex, run_stats, &cell_id, mate.sequence.len(), None);
                     }
                 }
 
             } else {
-                mapping_info.report("UMI_duplicate");
+                run_stats.report("UMI_duplicate");
             } 
             break;
         }
@@ -234,7 +234,7 @@ impl GTF {
         &self,
         results: &[ReadResult],
         data: &ReadData,
-        mapping_info: &mut MappingInfo,
+        run_stats: &mut RunStats,
     ) -> Vec<String> {
         let anti: Vec<String> = results
             .iter()
@@ -244,7 +244,7 @@ impl GTF {
                 RegionStatus::SpanningBoundary | RegionStatus::InsideIntron => Some(format!("{}_unspliced_antisense", result.gene)),
                 RegionStatus::ExtTag => Some(format!("{}_ext_antisense", result.gene)),
                 _ => {
-                    mapping_info.report("missing_Gene");
+                    run_stats.report("missing_Gene");
                     None
                 },
             })

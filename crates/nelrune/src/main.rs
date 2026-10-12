@@ -267,7 +267,7 @@ fn run(args: Cli) -> Result<()> {
     }
 
     // Preserve Nelrune's broad orchestration timings in the final report too.
-    report.merge(progress.mapping_info());
+    report.merge(progress.run_stats());
 
     progress.report_timings();
     progress.report_block("Quantification report", &report);
@@ -354,7 +354,7 @@ fn run_illumina_input(
                     first_progress_seen = true;
                     progress.stage(format!("normalizing {}", display_name(r1_path)));
                 }
-                progress.update_from_mapping_info(stats);
+                progress.update_from_run_stats(stats);
             },
         )?;
 
@@ -417,7 +417,7 @@ fn run_ont_input(
                 first_progress_seen = true;
                 progress.stage(format!("normalizing {}", display_name(bam_input)));
             }
-            progress.update_from_mapping_info(stats);
+            progress.update_from_run_stats(stats);
         },
     )?;
 

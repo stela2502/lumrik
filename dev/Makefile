@@ -98,7 +98,9 @@ MUSL_TARGET := $(LUMRIK_DIR)/target/$(MUSL_TRIPLE)/release
 install-musl-bins:
 	@mkdir -p "$(DEST1)" "$(DEST2)" "$(HOME)/bin"
 	@echo "Building lumrik musl release binaries"
-	@cd "$(LUMRIK_DIR)" && cargo build -r --target $(MUSL_TRIPLE)
+	@cd "$(LUMRIK_DIR)" && \
+		CMAKE_CROSSCOMPILING_EMULATOR=/usr/bin/env \
+		cargo build -r --target $(MUSL_TRIPLE)
 	@echo "Scanning $(LUMRIK_DIR)/$(MUSL_TARGET)"
 	@find "$(LUMRIK_DIR)/$(MUSL_TARGET)" \
 		-maxdepth 1 \

@@ -1,8 +1,8 @@
-# mapping_info AI Contract
+# run_stats AI Contract
 
 ## Role
 
-`mapping_info` is shared run/accounting state used to carry mapping/analysis measurements across Lumrik stages.
+`run_stats` is shared run/accounting state used to carry mapping/analysis measurements across Lumrik stages.
 
 ## Metric semantics
 

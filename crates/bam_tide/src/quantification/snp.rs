@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use scdata::QuantData;
 use scdata::cell_data::GeneUmiHash;
 use snp_index::{AlignedRead, SnpIndex, VcfReadOptions};
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 pub struct SnpSideChannel {
     pub index: SnpIndex,
@@ -34,7 +34,7 @@ impl SnpSideChannel {
         cell: u64,
         umi: u64,
         data: &mut QuantData,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
     ) {
         let Some(read) = aligned else {
             report.report("snp requested but no aligned read");

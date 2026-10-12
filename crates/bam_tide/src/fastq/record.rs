@@ -1,6 +1,6 @@
 // bam_tide/src/fastq/record.rs
 //use crate::primer::{PrimerDetector, PrimerHit, Orientation};
-//use mapping_info::MappingInfo;
+//use run_stats::RunStats;
 
 const DNA_COMPLEMENT: [u8; 256] = {
     let mut table = [0u8; 256];

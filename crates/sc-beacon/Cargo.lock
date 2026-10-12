@@ -456,7 +456,7 @@ dependencies = [
  "anyhow",
  "clap",
  "flate2",
- "mapping_info",
+ "run_stats",
  "rayon",
  "scdata",
  "statrs",
@@ -465,7 +465,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mapping_info"
+name = "run_stats"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27075f46874b6f948e70bea35f58ff3e1d6584c1b9e05852db66f001d6579869"
@@ -771,7 +771,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c7e337b7d82610d0bf7fff7c0ede56da7f878c1f90ee928ef38d8497f542945"
 dependencies = [
  "flate2",
- "mapping_info",
+ "run_stats",
  "rayon",
  "regex",
  "int-to-str 0.1.0",

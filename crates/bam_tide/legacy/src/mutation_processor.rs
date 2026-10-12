@@ -14,7 +14,7 @@ use scdata::IndexedGenes;
 use scdata::scdata::MatrixValueType;
 use scdata::Scdata;
 #[allow(unused_variables)]
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use scdata::cell_data::GeneUmiHash;
 
 use std::collections::HashSet;
@@ -43,7 +43,7 @@ pub struct MutationProcessor {
     /// 1.0 - clip in percent
     rev_mut_clip: f32,
     /// a vec of mutation positions
-    pub hist: Vec<usize>, // this is a stub - will be replaced by whatever Rustody::mapping_info provides!
+    pub hist: Vec<usize>, // this is a stub - will be replaced by whatever Rustody::run_stats provides!
 } 
 
 
@@ -200,7 +200,7 @@ impl MutationProcessor {
         gene_id: &str,
         mut_idx: &mut IndexedGenes,
         mut_gex: &mut Scdata,
-        mapping_info: &mut MappingInfo,
+        run_stats: &mut RunStats,
         cell_id: &u64,
         read_len:usize,
         guhs: Option<HashSet::<ChrArea>>
@@ -212,7 +212,7 @@ impl MutationProcessor {
             &data.cigar,
             read_len,
             guhs,
-            mapping_info
+            run_stats
         ) {
 
             let snip = format!("{gene_id}/{}", mutation_name);
@@ -220,13 +220,13 @@ impl MutationProcessor {
             //println!("I have added the mutation {snip} as id {mut_id}");
             let ghum = GeneUmiHash(mut_id, data.umi);
 
-            let _ = mut_gex.try_insert(cell_id, ghum, 1_f32, mapping_info);
+            let _ = mut_gex.try_insert(cell_id, ghum, 1_f32, run_stats);
         }
 
     }
 
 
-    pub fn get_all_mutations(&self, chr_name: &str, start: usize, md_tag: &str, read_len:usize, guhs: Option<HashSet::<ChrArea>>, mapping_info: &mut MappingInfo, ) -> Vec<String> {
+    pub fn get_all_mutations(&self, chr_name: &str, start: usize, md_tag: &str, read_len:usize, guhs: Option<HashSet::<ChrArea>>, run_stats: &mut RunStats, ) -> Vec<String> {
         let mut mutations = Vec::new();
         
         // Retrieve chromosome name
@@ -257,10 +257,10 @@ impl MutationProcessor {
             rel < self.mut_clip || rel > self.rev_mut_clip
         };
 
-        let add_to_hist = |pos: usize, rl: f32, mapping_info: &mut MappingInfo |{
+        let add_to_hist = |pos: usize, rl: f32, run_stats: &mut RunStats |{
             let rel = pos as f32 / rl;
-            let bin = (rel * mapping_info.hist.len() as f32 ).floor() as usize;
-            mapping_info.iterate_hist( bin );
+            let bin = (rel * run_stats.hist.len() as f32 ).floor() as usize;
+            run_stats.iterate_hist( bin );
         };
 
         for c in md_tag.chars() {
@@ -292,7 +292,7 @@ impl MutationProcessor {
                         ref_base as char
                     ));
 
-                    add_to_hist( match_len, rl, mapping_info );
+                    add_to_hist( match_len, rl, run_stats );
 
                     // Update the current position
                     current_pos += 1;
@@ -400,7 +400,7 @@ read3:AGCTGCTGAGATCGATACAGTTAAAGGTCA    0   chr1    4   60  10M *   0   0   ACTG
             Err(e) => panic!("Error opening BAM file: {}", e),
         };
 
-        let mut mapping_info = MappingInfo::new(None, 3.0, 0 );
+        let mut run_stats = RunStats::new(None, 3.0, 0 );
         let mut gex = Scdata::new(1, MatrixValueType::Integer);
         let mut idx = IndexedGenes::empty(Some(0));
         let cell_id = 1_u64;
@@ -419,7 +419,7 @@ read3:AGCTGCTGAGATCGATACAGTTAAAGGTCA    0   chr1    4   60  10M *   0   0   ACTG
                 Ok((_id, read)) => {
                     // Process the read if successful
                     processor.handle_mutations(&read, "unknown", &mut idx, &mut gex, 
-                        &mut mapping_info, &cell_id,30, None);
+                        &mut run_stats, &cell_id,30, None);
                 },
                 Err(e) => {
                     // Handle the error, log it, and continue processing

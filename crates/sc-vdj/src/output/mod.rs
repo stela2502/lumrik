@@ -1,6 +1,6 @@
 use crate::{Recombination, VdjIndex};
 use anyhow::{Context, Result};
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use sc_primer::{BdCellVersion, RhapsodyWhitelist};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -224,14 +224,14 @@ impl ReportWriter {
     }
 }
 
-pub fn write_mapping_info<P: AsRef<Path>>(
+pub fn write_run_stats<P: AsRef<Path>>(
     path: P,
     receptor_records: usize,
     cells: usize,
     recombinations: usize,
     by_chain: &HashMap<String, usize>,
 ) -> Result<()> {
-    let mut info = MappingInfo::new(None, 0.0, 0);
+    let mut info = RunStats::new(None, 0.0, 0);
     info.total = receptor_records;
     info.report_n("vdj.receptor_overlap_records", receptor_records);
     info.report_n("vdj.cells_with_evidence", cells);
@@ -239,10 +239,10 @@ pub fn write_mapping_info<P: AsRef<Path>>(
     for (chain, count) in by_chain {
         info.report_n(format!("vdj.calls.{}", chain.to_ascii_lowercase()), *count);
     }
-    write_mapping_info_report(path, &info)
+    write_run_stats_report(path, &info)
 }
 
-pub fn write_mapping_info_report<P: AsRef<Path>>(path: P, info: &MappingInfo) -> Result<()> {
+pub fn write_run_stats_report<P: AsRef<Path>>(path: P, info: &RunStats) -> Result<()> {
     let mut w = writer(path.as_ref().to_path_buf())?;
     write!(w, "{info}")?;
     w.flush()?;

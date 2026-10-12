@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use int_to_dna::int_to_dna::IntToDna;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use read_tag_table::ReadTagRecord;
 use rust_htslib::bam::HeaderView;
 use sc_mapper::process::SamReadCluster;
@@ -24,7 +24,7 @@ pub struct TeCollector {
     pub rescued_unique: Scdata,
     anchor_features: HashSet<u64>,
     pending_multi: HashSet<MultiMolecule>,
-    report: MappingInfo,
+    report: RunStats,
     threads: usize,
 }
 
@@ -34,7 +34,7 @@ pub struct TeResult {
     pub multi_em: Scdata,
     pub multi_anchored_em: Scdata,
     pub multi_unanchored_em: Scdata,
-    pub report: MappingInfo,
+    pub report: RunStats,
 }
 
 impl TeResult {
@@ -52,7 +52,7 @@ impl TeCollector {
             rescued_unique: Scdata::new(threads.max(1), MatrixValueType::Real),
             anchor_features: HashSet::new(),
             pending_multi: HashSet::new(),
-            report: MappingInfo::new(None, 0.0, 0),
+            report: RunStats::new(None, 0.0, 0),
             threads: threads.max(1),
         }
     }

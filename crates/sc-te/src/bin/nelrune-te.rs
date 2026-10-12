@@ -197,7 +197,7 @@ fn main() -> Result<()> {
         &index,
         cli.cell_barcode_len,
     )?;
-    let mut f = File::create(cli.out.join("mapping_info.txt"))?;
+    let mut f = File::create(cli.out.join("run_stats.txt"))?;
     write!(f, "{}", result.report)?;
     drop(f);
     let mut combined = result.combined();

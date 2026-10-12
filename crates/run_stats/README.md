@@ -1,4 +1,4 @@
-# mapping_info
+# run_stats
 
 > **Lumrik crate.** This crate is part of [Lumrik](../../README.md) and is distributed as part of the Lumrik workspace. See the [Lumrik README](../../README.md#license) and root `LICENSE` for the workspace licensing terms.
 
@@ -12,11 +12,11 @@ None. This crate is library-only.
 
 ## Library use
 
-Create and update `MappingInfo` from library code; its display/reporting implementation is shared by multiple Lumrik tools.
+Create and update `RunStats` from library code; its display/reporting implementation is shared by multiple Lumrik tools.
 
 ## Detailed documentation
 
-# mapping_info
+# run_stats
 
 
 A lightweight Rust helper library for collecting, timing, logging and
@@ -34,7 +34,7 @@ This crate is designed for:
 
 # Overview
 
-`MappingInfo` is a structured statistics collector that tracks:
+`RunStats` is a structured statistics collector that tracks:
 
 - Read filtering categories
 - Cell/gene assignment success
@@ -49,7 +49,7 @@ This crate is designed for:
 The **recommended modern usage pattern** is centered around:
 
 ```rust
-mapping_info.report("some_error_type");
+run_stats.report("some_error_type");
 ```
 
 ---
@@ -57,22 +57,22 @@ mapping_info.report("some_error_type");
 # Installation
 
 ```toml
-mapping_info = { git = "https://github.com/stela2502/lumrik" }
+run_stats = { git = "https://github.com/stela2502/lumrik" }
 ```
 
 ---
 
 # Basic Usage
 
-## Create a MappingInfo instance
+## Create a RunStats instance
 
 ```rust
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use std::fs::File;
 
 let logfile = File::create("run.log").ok();
 
-let mut info = MappingInfo::new(
+let mut info = RunStats::new(
     Some(logfile),    // Optional<File>
     20.0,       // min_quality
     0           // max_reads (0 = unlimited)
@@ -115,7 +115,7 @@ println!("{}", info.report_to_string());
 
 # Built-in Read Counters
 
-MappingInfo tracks structured counters:
+RunStats tracks structured counters:
 
 - `quality`
 - `length`
@@ -152,7 +152,7 @@ println!(
 
 # Timing Measurements
 
-MappingInfo contains structured timing support.
+RunStats contains structured timing support.
 
 ## Categories
 
@@ -188,13 +188,13 @@ println!("{}", info.program_states_string());
 
 # Logging Functionality
 
-MappingInfo supports structured logging to file.
+RunStats supports structured logging to file.
 
 ## Create with log file
 
 ```rust
 let file = File::create("run.log").ok();
-let mut info = MappingInfo::new(file, 20.0, 0);
+let mut info = RunStats::new(file, 20.0, 0);
 ```
 
 ## Write arbitrary log line
@@ -276,7 +276,7 @@ Outputs:
 
 ---
 
-# When To Use mapping_info
+# When To Use run_stats
 
 ✔ BAM parsing tools\
 ✔ Single-cell quantifiers\

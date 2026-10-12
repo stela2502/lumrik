@@ -1,4 +1,4 @@
-use sc_vdj::output::{write_mapping_info, ReportWriter};
+use sc_vdj::output::{write_run_stats, ReportWriter};
 use sc_vdj::{NelruneIdentityResolver, VdjIndex, VdjRunner, VdjRunnerConfig};
 use std::collections::HashMap;
 use std::fs;
@@ -87,7 +87,7 @@ fn one_cell_real_fixture_detects_expected_recombinations() {
     writer
         .finish()
         .unwrap_or_else(|e| panic!("finishing output in {}: {e:#}", out_dir.display()));
-    write_mapping_info(
+    write_run_stats(
         out_dir.join("vdj-mapping-info.txt"),
         receptor_records,
         calls.len(),
@@ -108,10 +108,48 @@ fn one_cell_real_fixture_detects_expected_recombinations() {
         "wrong cell reconstructed from real fixture BAM"
     );
 
+    let observed_recombinations = recombinations
+        .iter()
+        .map(|recombination| {
+            let chain = recombination.chain.to_string();
+            let v = runner
+                .index
+                .segment(recombination.v)
+                .map(|segment| segment.name.as_str())
+                .unwrap_or("<missing V>");
+            let d = recombination
+                .d
+                .and_then(|id| runner.index.segment(id))
+                .map(|segment| segment.name.as_str())
+                .unwrap_or("-");
+            let j = runner
+                .index
+                .segment(recombination.j)
+                .map(|segment| segment.name.as_str())
+                .unwrap_or("<missing J>");
+            let c = recombination
+                .constant
+                .as_ref()
+                .and_then(|constant| runner.index.segment(constant.segment))
+                .map(|segment| segment.name.as_str())
+                .unwrap_or("-");
+            let cdr3 = String::from_utf8_lossy(&recombination.cdr3);
+            format!(
+                "  {chain}: V={v} D={d} J={j} C={c} CDR3={cdr3} support={} UMIs={} id={}",
+                recombination.supporting_features,
+                recombination.supporting_umis,
+                recombination.stable_id,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     assert_eq!(
         recombinations.len(),
         3,
-        "expected exactly IGH, IGK and IGL recombinations"
+        "expected exactly three recombinations (IGH, IGK and IGL), but observed {}:\n{}",
+        recombinations.len(),
+        observed_recombinations,
     );
 
     let expected = HashMap::from([

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 const CDR3_UPSTREAM_BASES: usize = 32;
 const J_BAIT_BASES: usize = 24;
-const RESCAN_EVIDENCE_BATCH_SIZE: usize = 200_000;
+const RESCAN_EVIDENCE_BATCH_SIZE: usize = 1_000_000;
 const RESCAN_PROGRESS_EVERY_BAM_RECORDS: usize = 100_000;
 const MIN_JUNCTION_OVERLAP: usize = 8;
 const MIN_REFINE_DEPTH: u32 = 3;

@@ -187,3 +187,29 @@ If the base build reports proteins but unexpectedly reports zero protein feature
 Ommverse keeps downloaded source files instead of deleting them after import. The source tree is therefore both a cache and the provenance/evidence reservoir for later Lumrik stages.
 
 In particular, large state-dependent experimental resources do not automatically become static biological truth inside Ommverse. The cached source may contain substantially richer information than the compact `.ommverse` representation. Later evidence-generating code can query those sources directly when it needs the original observations.
+
+
+## MSigDB gene sets (GMT)
+
+MSigDB collections are supplied by the user as downloaded GMT or GMT.gz files.
+This does not download or redistribute MSigDB data. Obtain the appropriate
+organism-specific release under its access terms; use **gene-symbol** GMTs
+matching the genome organism (e.g. human Hs with hg38).
+
+```bash
+ommverse ingest-msigdb --index /data1/UCSC/hg38/hg38.interpro.ommverse \
+  --release 2026.1.Hs --gmt /path/to/h.all.v2026.1.Hs.symbols.gmt \
+  /path/to/c2.all.v2026.1.Hs.symbols.gmt /path/to/c3.all.v2026.1.Hs.symbols.gmt
+ommverse msigdb-gene --index /data1/UCSC/hg38/hg38.interpro.ommverse TP53
+ommverse msigdb-set --index /data1/UCSC/hg38/hg38.interpro.ommverse HALLMARK_P53_PATHWAY
+```
+
+This creates `<index>.msigdb.bin` beside the existing index, **without
+rebuilding or modifying** its genome/protein data. Gene-to-set and set-to-gene
+lookups are case-insensitive. Each gene set retains its name, description,
+source GMT filename and declared release. Importing replaces the sidecar; pass
+all desired collections together. Duplicate set names are rejected.
+
+**Interpretation:** MSigDB membership is not proof of a direct TP53 target,
+TF binding, regulation direction, or a cell-specific effect. The source GMT
+description is retained; biological evidence must be checked separately.

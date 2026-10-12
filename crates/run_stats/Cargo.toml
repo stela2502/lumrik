@@ -1,5 +1,5 @@
 [package]
-name = "mapping_info"
+name = "run_stats"
 version.workspace = true
 edition = "2024"
 

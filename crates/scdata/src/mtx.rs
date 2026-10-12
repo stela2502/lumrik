@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use flate2::read::MultiGzDecoder;
 use int_to_dna::IntToDna;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 use crate::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
 
@@ -151,7 +151,7 @@ pub fn load_mtx_feature_matrix(
         .unwrap_or(0);
 
     let mut cells = Scdata::new(threads.max(1), MatrixValueType::Integer);
-    let mut report = MappingInfo::new(None, 0.0, 0);
+    let mut report = RunStats::new(None, 0.0, 0);
 
     let matrix_path = find_text_file(dir, &["matrix.mtx.gz", "matrix.mtx"])?;
     let mut lines = text_lines(&matrix_path)?;

@@ -35,9 +35,9 @@ Dataset names are identities. Adding a second dataset with an existing name is a
 
 ## Run state is not quantification data
 
-`MappingInfo`, timers, counters, progress state, and similar run bookkeeping do **not** belong to `QuantData`.
+`RunStats`, timers, counters, progress state, and similar run bookkeeping do **not** belong to `QuantData`.
 
-The runner/processor owns run state. If an `Scdata` operation needs a `MappingInfo` while inserting or merging, `QuantData` may accept it for that operation or return merge accounting to the caller. It must not retain the run report as part of the biological data object.
+The runner/processor owns run state. If an `Scdata` operation needs a `RunStats` while inserting or merging, `QuantData` may accept it for that operation or return merge accounting to the caller. It must not retain the run report as part of the biological data object.
 
 ## Cell selection belongs to the caller; consistent application belongs to `QuantData`
 

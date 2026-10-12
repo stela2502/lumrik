@@ -1,4 +1,4 @@
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata, ScdataInsertState};
 
 use std::collections::HashMap;
@@ -57,7 +57,7 @@ fn test_out_dir(name: &str) -> PathBuf {
 #[test]
 fn singlecelldata_to_sparse_integer_roundtrip() {
     let mut celldata = Scdata::new(1, MatrixValueType::Integer);
-    let mut report = MappingInfo::new(None, 56.0, 10_000);
+    let mut report = RunStats::new(None, 56.0, 10_000);
 
     let feature_index = TestFeatureIndex::new(vec!["Gene1", "Gene2", "Gene3", "Gene4"]);
 
@@ -162,7 +162,7 @@ fn singlecelldata_to_sparse_integer_roundtrip() {
 #[test]
 fn singlecelldata_to_sparse_real_can_be_written_and_read() {
     let mut celldata = Scdata::new(1, MatrixValueType::Real);
-    let mut report = MappingInfo::new(None, 56.0, 10_000);
+    let mut report = RunStats::new(None, 56.0, 10_000);
 
     let feature_index = TestFeatureIndex::new(vec!["Gene1", "Gene2", "Gene3", "Gene4"]);
 
@@ -217,7 +217,7 @@ fn singlecelldata_to_sparse_real_can_be_written_and_read() {
 #[test]
 fn sparse_export_ignores_explicit_zero_values_in_nnz() {
     let mut celldata = Scdata::new(1, MatrixValueType::Real);
-    let mut report = MappingInfo::new(None, 0.0, 0);
+    let mut report = RunStats::new(None, 0.0, 0);
     let feature_index = TestFeatureIndex::new(vec!["Gene1", "Gene2", "Gene3"]);
 
     let gene1 = feature_index.feature_id("Gene1");

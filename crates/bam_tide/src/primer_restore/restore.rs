@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use flate2::read::MultiGzDecoder;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use sc_primer::PrimerDetector;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -29,14 +29,14 @@ pub struct PrimerRestoreConfig {
 
 pub struct PrimerRestore {
     config: PrimerRestoreConfig,
-    stats: MappingInfo,
+    stats: RunStats,
 }
 
 impl PrimerRestore {
     pub fn new(config: PrimerRestoreConfig) -> Self {
         Self {
             config,
-            stats: MappingInfo::new(None, 0.0, 0),
+            stats: RunStats::new(None, 0.0, 0),
         }
     }
 
@@ -52,7 +52,7 @@ impl PrimerRestore {
         }))
     }
 
-    pub fn stats(&self) -> &MappingInfo {
+    pub fn stats(&self) -> &RunStats {
         &self.stats
     }
 

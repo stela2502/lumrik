@@ -2,13 +2,13 @@ use fast_tag_mapper::{
     FastTagFeatureIndex, FastTagMapper, FeatureEntry, MapStatus, HUMAN_SAMPLE_TAGS,
     MOUSE_SAMPLE_TAGS,
 };
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use scdata::FeatureIndex;
 
 const BD_PREFIX: &[u8] = b"GTTGTCAAGATGCTACCGTTCAGAG";
 
-fn info() -> MappingInfo {
-    MappingInfo::new(None, 0.0, 0)
+fn info() -> RunStats {
+    RunStats::new(None, 0.0, 0)
 }
 
 #[test]

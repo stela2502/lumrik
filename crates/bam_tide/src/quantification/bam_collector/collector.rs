@@ -25,13 +25,13 @@ use sc_primer::Grammar;
 use gtf_splice_index::{MatchOptions, SpliceIndex};
 
 use snp_index::Genome;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 const CHUNK: usize = 100_000;
 
 pub struct BamCollectorResult {
     pub data: QuantData,
-    pub report: MappingInfo,
+    pub report: RunStats,
     pub snp: Option<SnpSideChannel>,
 }
 
@@ -146,13 +146,13 @@ impl BamCollector {
         mut progress: F,
     ) -> Result<BamCollectorResult>
     where
-        F: FnMut(&QuantData, &MappingInfo),
+        F: FnMut(&QuantData, &RunStats),
     {
         let mut data = QuantData::standard();
         let Some(first_path) = paths.first() else {
             anyhow::bail!("no BAM files supplied");
         };
-        let mut report = MappingInfo::new(
+        let mut report = RunStats::new(
             None,
             self.config.min_mapq as f32,
             self.config.max_reads.unwrap_or(usize::MAX),
@@ -229,7 +229,7 @@ impl BamCollector {
 
         let mut data = QuantData::standard();
 
-        let mut report = MappingInfo::new(
+        let mut report = RunStats::new(
             None,
             self.config.min_mapq as f32,
             self.config.max_reads.unwrap_or(usize::MAX),
@@ -240,7 +240,7 @@ impl BamCollector {
         let mut n_seen = 0usize;
         let mut seen_unbarcoded = HashSet::<(u64, u64)>::new();
 
-        let mut no_progress = |_: &QuantData, _: &MappingInfo| {};
+        let mut no_progress = |_: &QuantData, _: &RunStats| {};
         self.collect_reader(
             &mut reader,
             snp.as_ref(),
@@ -261,12 +261,12 @@ impl BamCollector {
         reader: &mut Reader,
         snp: Option<&SnpSideChannel>,
         data: &mut QuantData,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
         read_tag_table: Option<&ReadTagTable>,
         bulk_cell_id: u64,
-        progress: &mut dyn FnMut(&QuantData, &MappingInfo),
+        progress: &mut dyn FnMut(&QuantData, &RunStats),
     ) -> Result<()> {
         let header = reader.header().clone();
 
@@ -355,11 +355,11 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
         bulk_cell_id: u64,
-        progress: &mut dyn FnMut(&QuantData, &MappingInfo),
+        progress: &mut dyn FnMut(&QuantData, &RunStats),
     ) -> Result<bool> {
         report
             .report_n("bam_records_seen", group.records().len());
@@ -510,9 +510,9 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
         n_seen: usize,
-        progress: &mut dyn FnMut(&QuantData, &MappingInfo),
+        progress: &mut dyn FnMut(&QuantData, &RunStats),
     ) -> Result<bool> {
         if jobs.len() >= CHUNK {
             self.flush_jobs(processor, jobs, data, report)?;
@@ -526,7 +526,7 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
     ) -> Result<()> {
         if jobs.is_empty() {
             return Ok(());

@@ -117,7 +117,7 @@ fn subset_cells(data: &SingleCellData, keep: &[usize]) -> Result<SingleCellData>
         .iter()
         .map(|&i| data.cells[i].clone())
         .collect::<Vec<_>>();
-    let annotations = CellAnnotations::from_columns(vec![("cell", cells.clone())], cells.len())?;
+    let annotations = data.annotations.subset(keep)?;
     SingleCellData::new(triplets.to_csr(), data.features.clone(), cells, annotations)
 }
 
@@ -135,8 +135,9 @@ pub fn analyze_exon_matrix(
 
     eprintln!("Starting matrix loading...");
     let started = Instant::now();
-    let exonic = resolve_exonic(path.as_ref())?;
-    let raw = load_mex(&exonic)?;
+    let is_h5ad = path.as_ref().extension().is_some_and(|ext| ext == "h5ad");
+    let exonic = if is_h5ad { path.as_ref().to_path_buf() } else { resolve_exonic(path.as_ref())? };
+    let raw = if is_h5ad { SingleCellData::from_h5ad(&exonic)? } else { load_mex(&exonic)? };
     finish_stage(&mut timings, "matrix loading", started);
     let input_cells = raw.n_cells();
     let n_genes = raw.n_features();
@@ -262,11 +263,11 @@ pub fn analyze_exon_matrix(
     finish_stage(&mut timings, "UMAP", started);
     eprintln!("Starting Beacon integration...");
     let started = Instant::now();
-    let beacon = load_beacon_blocks(&exonic, &norm.cells)?;
+    let beacon = if is_h5ad { Vec::new() } else { load_beacon_blocks(&exonic, &norm.cells)? };
     finish_stage(&mut timings, "Beacon integration", started);
     eprintln!("Starting ClonoMap integration...");
     let started = Instant::now();
-    let clonomap = load_clonomap(path.as_ref(), &norm.cells)?;
+    let clonomap = if is_h5ad { None } else { load_clonomap(path.as_ref(), &norm.cells)? };
     finish_stage(&mut timings, "ClonoMap integration", started);
     eprintln!("Starting pseudo-deep holdout...");
     let started = Instant::now();

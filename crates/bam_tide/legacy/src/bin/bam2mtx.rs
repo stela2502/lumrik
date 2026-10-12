@@ -2,7 +2,7 @@
 //use rustody::cellids::CellIds;
 //use rustody::cellids10x::CellIds10x;
 //use rustody::traits::CellIndex;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 use bam_tide::gtf::GTF;
 use bam_tide::mutation_processor::MutationProcessor;
@@ -100,8 +100,8 @@ fn main() {
 
     let num_threads = opts.num_proc.unwrap_or_else(rayon::current_num_threads);
 
-    let mut mapping_info = MappingInfo::new(Some(log_file), 3.0, 0);
-    mapping_info.start_counter();
+    let mut run_stats = RunStats::new(Some(log_file), 3.0, 0);
+    run_stats.start_counter();
 
     // Parse BAM and GTF
     println!("reading GTF file");
@@ -124,7 +124,7 @@ fn main() {
     // Process data
     let ( mut expr_results, mut mut_results ) =  match process_data(
         &opts.bam,
-        &mut mapping_info,
+        &mut run_stats,
         &gtf,
         cell_tag,
         umi_tag,
@@ -145,20 +145,20 @@ fn main() {
     println!("Writing data to path {:?}", file_path_sp);
 
     let info = expr_results.0.write_sparse_sub(file_path_sp, &expr_results.1, &expr_results.1.get_all_gene_names(), opts.min_umi).unwrap();
-    mapping_info.write_to_log( info );
+    run_stats.write_to_log( info );
 
     if mut_results.0.len() > 0 {
         let file_path_sp_mut = PathBuf::from(&opts.outpath).join( &*PROGRAM_NAME ).join("_mutations");
         println!("Writing mutation data to path {:?}", file_path_sp_mut);
         let i2 = mut_results.0.write_sparse_sub(file_path_sp_mut, &mut_results.1, &mut_results.1.get_all_gene_names(), opts.min_umi).unwrap();
-        mapping_info.write_to_log( i2 );
+        run_stats.write_to_log( i2 );
     }
 
     
-    mapping_info.log_report( );
+    run_stats.log_report( );
 
-    println!("The total issues report:\n{}", mapping_info.report_to_string());
-    println!("Runtime assessment:\n{}", mapping_info.program_states_string());
+    println!("The total issues report:\n{}", run_stats.report_to_string());
+    println!("Runtime assessment:\n{}", run_stats.program_states_string());
 
     match now.elapsed() {
         Ok(elapsed) => {
@@ -173,12 +173,12 @@ fn main() {
             let min = milli % 60;
             milli= (milli -min) /60;
 
-            mapping_info.write_to_log( format!("\nfinished in {milli}h {min}min {sec} sec {mil}milli sec\n") );
+            run_stats.write_to_log( format!("\nfinished in {milli}h {min}min {sec} sec {mil}milli sec\n") );
             println!("\nI have analyzed the bam file in {milli}h {min}min {sec} sec {mil}milli sec\n");
         },
         Err(e) => {println!("Error: {e:?}");}
     }
 
-    mapping_info.report_to_string();
+    run_stats.report_to_string();
 }
 

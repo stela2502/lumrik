@@ -29,6 +29,7 @@ pub const OMMVERSE_FORMAT_VERSION: u32 = 10;
 pub mod sources;
 pub mod query;
 pub mod schema;
+pub mod msigdb;
 
 // Source layout is split by responsibility while deliberately sharing the crate-root
 // namespace. `include!` keeps this reorganisation API- and logic-neutral.
@@ -40,3 +41,12 @@ include!("training.rs");
 include!("storage.rs");
 include!("helpers.rs");
 include!("tests.rs");
+
+impl Ommverse {
+    /// Human-readable capabilities of this loaded reference, not hypothetical providers.
+    pub fn contains(&self) -> String {
+        format!("Ommverse assembly={}; genes={}; transcripts={}; proteins={}; InterPro entries={}; chromatin elements={}. Available: gene/transcript/protein lookup, gene-protein mapping, protein features and genomic reference queries. STRING and MSigDB graph traversal are not yet exposed by this API. Reference annotations are not patient measurements.",
+            self.assembly, self.splice.genes.len(), self.splice.transcripts.len(),
+            self.proteins.len(), self.interpro_entries.len(), self.chromatin.len())
+    }
+}

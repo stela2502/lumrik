@@ -22,6 +22,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 statrs = "0.18"
 sc_primer = { path = "../sc_primer" }
+sc-vdj = { path = "../sc-vdj" }
 
 ommverse = { path = "../ommverse" }
 lumrik-status = { path = "../lumrik-status" }

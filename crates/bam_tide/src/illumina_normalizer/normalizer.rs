@@ -6,7 +6,7 @@ use read_tag_table::{ReadTagRecord, ReadTagTable};
 
 use anyhow::{Context, Result, bail};
 use int_to_dna::IntToDna;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use onehot_dna::OneHotSequence;
 use rayon::prelude::*;
 use sc_primer::PrimerDetector;
@@ -40,7 +40,7 @@ pub struct IlluminaNormalizerConfig {
 pub struct IlluminaPartial {
     pub candidates: Vec<IlluminaCandidate>,
     pub feature_tag_table: Scdata,
-    pub stats: MappingInfo,
+    pub stats: RunStats,
 }
 
 pub struct IlluminaCandidate {
@@ -352,7 +352,7 @@ fn usable_insert(seq: &[u8], min_len: usize, max_single_base_fraction: f64) -> b
 
 pub struct IlluminaNormalizer {
     config: IlluminaNormalizerConfig,
-    stats: MappingInfo,
+    stats: RunStats,
     read_tags: ReadTagTable,
     feature_tag_counts: FeatureTagCounts,
     seen: HashSet<DedupKey>,
@@ -436,7 +436,7 @@ impl IlluminaNormalizer {
     ) -> Result<()>
     where
         F: FnMut(&[(Option<FastqRecord>, FastqRecord)]) -> Result<bool>,
-        P: FnMut(&MappingInfo),
+        P: FnMut(&RunStats),
     {
         let mut reader = FastqPairReader::from_paths(r1_path, r2_path).with_context(|| {
             format!(
@@ -512,7 +512,7 @@ impl IlluminaNormalizer {
         mut report_progress: P,
     ) -> Result<Vec<PathBuf>>
     where
-        P: FnMut(&MappingInfo),
+        P: FnMut(&RunStats),
     {
         std::fs::create_dir_all(out_dir)
             .with_context(|| format!("creating {}", out_dir.display()))?;
@@ -568,7 +568,7 @@ impl IlluminaNormalizer {
         Ok(paths)
     }
 
-    pub fn stats(&self) -> &MappingInfo {
+    pub fn stats(&self) -> &RunStats {
         &self.stats
     }
 

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use int_to_dna::int_to_dna::IntToDna;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use rust_htslib::bam::{self, Read, record::Aux};
 use sc_te::TeIndex;
 use scdata::FeatureIndex;
@@ -37,7 +37,7 @@ struct Cli {
     #[arg(long, default_value = "UB")]
     umi_tag: String,
 
-    /// Output directory for MappingInfo and diagnostic TSV files.
+    /// Output directory for RunStats and diagnostic TSV files.
     #[arg(long)]
     out: PathBuf,
 }
@@ -77,7 +77,7 @@ fn main() -> Result<()> {
     }
     fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
 
-    let mut report = MappingInfo::new(None, 0.0, 0);
+    let mut report = RunStats::new(None, 0.0, 0);
 
     report.start_timer("te_index.load");
     let mut index = TeIndex::load(&cli.te_index)?;
@@ -260,7 +260,7 @@ fn main() -> Result<()> {
     write_feature_table(&cli.out, &index, &features)?;
     report.stop_timer("diagnostics.write");
 
-    write_mapping_info(&cli.out, &report)?;
+    write_run_stats(&cli.out, &report)?;
     write_diagnostic_report(
         &cli.out,
         &report,
@@ -340,7 +340,7 @@ fn write_count_line(
 
 fn write_diagnostic_report(
     out: &PathBuf,
-    report: &MappingInfo,
+    report: &RunStats,
     index: &TeIndex,
     scanned: usize,
     candidate_histogram: &HashMap<usize, usize>,
@@ -359,7 +359,7 @@ fn write_diagnostic_report(
 
 fn print_diagnostic_report(
     writer: &mut impl Write,
-    report: &MappingInfo,
+    report: &RunStats,
     index: &TeIndex,
     scanned: usize,
     candidate_histogram: &HashMap<usize, usize>,
@@ -613,8 +613,8 @@ fn hash_qname(qname: &[u8]) -> u64 {
     hasher.finish()
 }
 
-fn write_mapping_info(out: &PathBuf, report: &MappingInfo) -> Result<()> {
-    let mut writer = BufWriter::new(File::create(out.join("mapping_info.txt"))?);
+fn write_run_stats(out: &PathBuf, report: &RunStats) -> Result<()> {
+    let mut writer = BufWriter::new(File::create(out.join("run_stats.txt"))?);
     write!(writer, "{}", report)?;
     Ok(())
 }

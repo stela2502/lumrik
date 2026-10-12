@@ -37,8 +37,8 @@ fn snp_matches_can_be_inserted_into_scdata_and_exported() -> Result<()> {
     let mut scdata_ref = Scdata::new(1, MatrixValueType::Real);
     let mut scdata_alt = Scdata::new(1, MatrixValueType::Real);
 
-    // TODO: replace this with your real MappingInfo constructor/import.
-    let mut report = mapping_info::MappingInfo::new(None, 0.0, usize::MAX);
+    // TODO: replace this with your real RunStats constructor/import.
+    let mut report = run_stats::RunStats::new(None, 0.0, usize::MAX);
 
     let reads = make_test_reads();
 

@@ -147,7 +147,7 @@ dependencies = [
  "fast_tag_mapper",
  "flate2",
  "gtf_splice_index",
- "mapping_info",
+ "run_stats",
  "rand",
  "rayon",
  "read-tag-table",
@@ -557,7 +557,7 @@ source = "git+https://github.com/stela2502/fast_tag_mapper#209c6067d937d296bd581
 dependencies = [
  "anyhow",
  "clap",
- "mapping_info",
+ "run_stats",
  "scdata 0.2.3 (git+https://github.com/stela2502/scdata)",
  "int-to-str 0.2.3",
 ]
@@ -1106,7 +1106,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
-name = "mapping_info"
+name = "run_stats"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27075f46874b6f948e70bea35f58ff3e1d6584c1b9e05852db66f001d6579869"
@@ -1377,7 +1377,7 @@ dependencies = [
  "clap",
  "csv",
  "flate2",
- "mapping_info",
+ "run_stats",
  "serde",
 ]
 
@@ -1547,7 +1547,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c7e337b7d82610d0bf7fff7c0ede56da7f878c1f90ee928ef38d8497f542945"
 dependencies = [
  "flate2",
- "mapping_info",
+ "run_stats",
  "rayon",
  "regex",
  "int-to-str 0.1.0",
@@ -1559,7 +1559,7 @@ version = "0.2.3"
 source = "git+https://github.com/stela2502/scdata#bce79c3f013162503f4999723b86f2a9a3fe1cd0"
 dependencies = [
  "flate2",
- "mapping_info",
+ "run_stats",
  "rayon",
  "regex",
  "int-to-str 0.1.0",
@@ -1694,7 +1694,7 @@ dependencies = [
  "anyhow",
  "flate2",
  "gtf_splice_index",
- "mapping_info",
+ "run_stats",
  "rust-htslib",
  "scdata 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

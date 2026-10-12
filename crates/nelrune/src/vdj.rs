@@ -4,9 +4,9 @@ use lumrik_status::{
     memory_status, public_hostname, snapshot_html, spawn_status_server, ServerContent,
     ServerSnapshot, StatusMetric, StatusSection,
 };
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use sc_primer::BdCellVersion;
-use sc_vdj::output::{write_mapping_info_report, ReportWriter};
+use sc_vdj::output::{write_run_stats_report, ReportWriter};
 use sc_vdj::{
     BamIngestProgress, CellEvidenceVdj, Chain, NelruneIdentityResolver, SegmentKind, VdjIndex,
     VdjIndexBuilder, VdjRunner, VdjRunnerConfig,
@@ -98,6 +98,9 @@ struct VdjRunStatus {
     preliminary_cells: Option<usize>,
     evidence_cells: usize,
     compact_summaries: usize,
+    last_batch_seconds: f64,
+    last_batch_records_per_second: f64,
+    last_batch_new_models: usize,
     physical_fragments: usize,
     cells_with_v: usize,
     cells_with_d: usize,
@@ -160,6 +163,9 @@ impl VdjRunStatus {
             preliminary_cells: None,
             evidence_cells: 0,
             compact_summaries: 0,
+            last_batch_seconds: 0.0,
+            last_batch_records_per_second: 0.0,
+            last_batch_new_models: 0,
             physical_fragments: 0,
             cells_with_v: 0,
             cells_with_d: 0,
@@ -220,16 +226,6 @@ impl VdjRunStatus {
         if seconds > 0.0 { self.rescan_records as f64 / seconds } else { 0.0 }
     }
 
-    fn models_per_second(&self) -> f64 {
-        let seconds = if let Some(elapsed) = self.phase_times.get(1).and_then(|x| *x) {
-            elapsed.as_secs_f64()
-        } else if self.phase == 1 {
-            self.phase_started.elapsed().as_secs_f64()
-        } else {
-            0.0
-        };
-        if seconds > 0.0 { self.compact_summaries as f64 / seconds } else { 0.0 }
-    }
 }
 
 impl ServerContent for VdjRunStatus {
@@ -283,8 +279,16 @@ impl ServerContent for VdjRunStatus {
                         ),
                         StatusMetric::new("Models", self.compact_summaries.to_string()),
                         StatusMetric::new(
-                            "Models / second",
-                            format!("{:.0}", self.models_per_second()),
+                            "New models / last batch",
+                            self.last_batch_new_models.to_string(),
+                        ),
+                        StatusMetric::new(
+                            "Last batch time",
+                            format!("{:.3} s", self.last_batch_seconds),
+                        ),
+                        StatusMetric::new(
+                            "Last batch BAM records / second",
+                            format!("{:.0}", self.last_batch_records_per_second),
                         ),
                         StatusMetric::new(
                             "IGH / IGK / IGL evidence cells",
@@ -592,9 +596,30 @@ fn preliminary_cell_ids(exonic: Option<&Path>) -> Result<Option<HashSet<u64>>> {
     Ok(Some(cells))
 }
 
-fn sync_evidence_status(
+fn sync_ingest_progress_status(
     status: &Arc<RwLock<VdjRunStatus>>,
     progress: BamIngestProgress,
+    evidence: &CellEvidenceVdj,
+) {
+    update_status(status, |state| {
+        state.bam_records = progress.bam_records;
+        state.initial_bam_read_time = progress.bam_read_time;
+        state.allowed_cell_records = progress.allowed_cell_records;
+        state.receptor_overlap_records = progress.receptor_overlap_records;
+        state.unmapped_candidates = progress.unmapped_candidates;
+        state.unmapped_igh_admitted = progress.unmapped_igh_admitted;
+        state.unmapped_igh_rescued_cells = progress.unmapped_igh_rescued_cells;
+        state.unmapped_igh_v_mappings = progress.unmapped_igh_v_mappings;
+        state.unmapped_igh_d_mappings = progress.unmapped_igh_d_mappings;
+        state.unmapped_igh_j_mappings = progress.unmapped_igh_j_mappings;
+        state.unmapped_igh_c_mappings = progress.unmapped_igh_c_mappings;
+        state.evidence_cells = evidence.cell_count();
+        state.compact_summaries = evidence.live_model_count();
+    });
+}
+
+fn sync_evidence_status(
+    status: &Arc<RwLock<VdjRunStatus>>,
     evidence: &CellEvidenceVdj,
     index: &VdjIndex,
 ) {
@@ -666,17 +691,6 @@ fn sync_evidence_status(
     }
 
     update_status(status, |state| {
-        state.bam_records = progress.bam_records;
-        state.initial_bam_read_time = progress.bam_read_time;
-        state.allowed_cell_records = progress.allowed_cell_records;
-        state.receptor_overlap_records = progress.receptor_overlap_records;
-        state.unmapped_candidates = progress.unmapped_candidates;
-        state.unmapped_igh_admitted = progress.unmapped_igh_admitted;
-        state.unmapped_igh_rescued_cells = progress.unmapped_igh_rescued_cells;
-        state.unmapped_igh_v_mappings = progress.unmapped_igh_v_mappings;
-        state.unmapped_igh_d_mappings = progress.unmapped_igh_d_mappings;
-        state.unmapped_igh_j_mappings = progress.unmapped_igh_j_mappings;
-        state.unmapped_igh_c_mappings = progress.unmapped_igh_c_mappings;
         state.evidence_cells = cells;
         state.compact_summaries = summaries;
         state.physical_fragments = fragments;
@@ -912,10 +926,10 @@ pub fn run() -> Result<()> {
         Some(server)
     };
 
-    let mut mapping_info = MappingInfo::new(None, 0.0, 0);
+    let mut run_stats = RunStats::new(None, 0.0, 0);
     let loading_prebuilt_index = c.index.is_some();
-    mapping_info.start_counter();
-    mapping_info.start_timer("vdj.index_load_or_build");
+    run_stats.start_counter();
+    run_stats.start_timer("vdj.index_load_or_build");
     let index = match (&c.index, &c.gtf, &c.genome) {
         (Some(p), None, None) => {
             VdjIndex::load(p).with_context(|| format!("loading {}", p.display()))?
@@ -923,16 +937,16 @@ pub fn run() -> Result<()> {
         (None, Some(g), Some(f)) => VdjIndexBuilder::default().build(g, f)?,
         _ => bail!("provide either --index or --gtf + --genome"),
     };
-    mapping_info.stop_timer("vdj.index_load_or_build");
+    run_stats.stop_timer("vdj.index_load_or_build");
     if loading_prebuilt_index && !index.has_precise_exon_blocks() {
         bail!(
             "VDJ index uses legacy span-only coordinates; rebuild it with the current vdj-index so constant-gene exons and introns can be distinguished"
         );
     }
     if loading_prebuilt_index {
-        mapping_info.stop_file_io_time();
+        run_stats.stop_file_io_time();
     } else {
-        mapping_info.stop_single_processor_time();
+        run_stats.stop_single_processor_time();
     }
     update_status(&status, |state| state.reference_segments = index.len());
 
@@ -955,27 +969,63 @@ pub fn run() -> Result<()> {
     runner.set_threads(c.threads);
 
     advance_stage(&status, 1, "1/3 initial V(D)J evidence collection");
-    mapping_info.start_timer("vdj.initial_evidence_collection");
+    run_stats.start_timer("vdj.initial_evidence_collection");
     let status_for_read = Arc::clone(&status);
+    let mut ticker_last = Instant::now();
+    let mut ticker_last_models = 0usize;
+    let mut ticker_last_records = 0usize;
     let (n, initial_timing) = runner.read_bam_with_progress_for_cells_limited(
         &c.bam,
         &NelruneIdentityResolver,
         preliminary_cells.as_ref(),
         c.max_bam_records,
+        &mut run_stats,
         move |progress, evidence, index| {
-            sync_evidence_status(&status_for_read, progress, evidence, index);
+            // Per-batch status obeys the CellHash contract: local/new work drives
+            // updates and persistent evidence is never traversed here.
+            let elapsed = ticker_last.elapsed().as_secs_f64();
+            let delta_records = progress.bam_records.saturating_sub(ticker_last_records);
+            let records_per_second = if elapsed > 0.0 {
+                delta_records as f64 / elapsed
+            } else {
+                0.0
+            };
+
+            sync_ingest_progress_status(&status_for_read, progress, evidence);
+            if let Ok(mut state) = status_for_read.write() {
+                let delta_models = state.compact_summaries.saturating_sub(ticker_last_models);
+                state.last_batch_seconds = elapsed;
+                state.last_batch_records_per_second = records_per_second;
+                state.last_batch_new_models = delta_models;
+                eprintln!(
+                    "[nelrune vdj] batch ticker: {:.3}s; {:.0} BAM records/s; {} new models; {} total models; {} BAM records",
+                    elapsed,
+                    records_per_second,
+                    delta_models,
+                    state.compact_summaries,
+                    state.bam_records,
+                );
+                ticker_last_models = state.compact_summaries;
+            }
+            // Start the next interval after the cheap incremental status update.
+            ticker_last = Instant::now();
+            ticker_last_records = progress.bam_records;
         },
     )?;
+
+    // Exact expensive evidence/dashboard totals are refreshed once at the stage
+    // boundary, never once per BAM batch.
+    sync_evidence_status(&status, &runner.evidence, &runner.index);
     // `n` remains the public return value: receptor-overlap records ingested.
     let _ = n;
-    mapping_info.stop_timer("vdj.initial_evidence_collection");
-    mapping_info.add_timer_duration("vdj.initial_bam_read", initial_timing.bam_read);
-    mapping_info.add_timer_duration(
+    run_stats.stop_timer("vdj.initial_evidence_collection");
+    run_stats.add_timer_duration("vdj.initial_bam_read", initial_timing.bam_read);
+    run_stats.add_timer_duration(
         "vdj.initial_evidence_processing",
         initial_timing.evidence_processing,
     );
-    mapping_info.file_io_time += initial_timing.bam_read;
-    mapping_info.multi_processor_time += initial_timing.evidence_processing;
+    run_stats.file_io_time += initial_timing.bam_read;
+    run_stats.multi_processor_time += initial_timing.evidence_processing;
 
     let receptor_evidence = runner.receptor_evidence_cells();
     update_status(&status, |state| {
@@ -985,22 +1035,22 @@ pub fn run() -> Result<()> {
     });
 
     advance_stage(&status, 2, "2/3 reconstructing cell-specific receptors");
-    mapping_info.start_counter();
-    mapping_info.start_timer("vdj.recombination_calling");
+    run_stats.start_counter();
+    run_stats.start_timer("vdj.recombination_calling");
     let mut calls = runner.identify();
     for (chain, evidence_cells) in receptor_evidence {
         let prefix = format!(
             "vdj.evidence.{}",
             chain.to_string().to_ascii_lowercase()
         );
-        mapping_info.report_n(format!("{prefix}.cells"), evidence_cells);
+        run_stats.report_n(format!("{prefix}.cells"), evidence_cells);
         eprintln!(
             "[nelrune vdj] {} receptor evidence: {} cell(s); all retained",
             chain, evidence_cells
         );
     }
-    mapping_info.stop_timer("vdj.recombination_calling");
-    mapping_info.stop_multi_processor_time();
+    run_stats.stop_timer("vdj.recombination_calling");
+    run_stats.stop_multi_processor_time();
 
     let mut nr = 0usize;
     let mut productive = 0usize;
@@ -1031,7 +1081,7 @@ pub fn run() -> Result<()> {
         3,
         "3/3 remapping CDR3s and confirming constant regions",
     );
-    mapping_info.start_timer("vdj.receptor_rediscovery");
+    run_stats.start_timer("vdj.receptor_rediscovery");
     let status_for_rescan = Arc::clone(&status);
     let rescan = runner.rediscover_receptor_linkage_from_bam_with_report_and_progress(
         &c.bam,
@@ -1053,14 +1103,14 @@ pub fn run() -> Result<()> {
             });
         },
     )?;
-    mapping_info.add_timer_duration("vdj.rediscovery_bam_read", rescan.bam_read_time);
-    mapping_info.add_timer_duration(
+    run_stats.add_timer_duration("vdj.rediscovery_bam_read", rescan.bam_read_time);
+    run_stats.add_timer_duration(
         "vdj.rediscovery_evidence_processing",
         rescan.evidence_processing_time,
     );
-    mapping_info.stop_timer("vdj.receptor_rediscovery");
-    mapping_info.file_io_time += rescan.bam_read_time;
-    mapping_info.multi_processor_time += rescan.evidence_processing_time;
+    run_stats.stop_timer("vdj.receptor_rediscovery");
+    run_stats.file_io_time += rescan.bam_read_time;
+    run_stats.multi_processor_time += rescan.evidence_processing_time;
     update_status(&status, |state| {
         state.rescan_records = rescan.bam_records_scanned;
         state.rescan_bam_read_time = rescan.bam_read_time;
@@ -1077,8 +1127,8 @@ pub fn run() -> Result<()> {
     });
 
     advance_stage(&status, 4, "writing V(D)J summaries");
-    mapping_info.start_counter();
-    mapping_info.start_timer("vdj.output_write");
+    run_stats.start_counter();
+    run_stats.start_timer("vdj.output_write");
     let mut writer = ReportWriter::create(&c.out, c.write_sequences)?;
     if let Some(raw) = c.bd_cell_version.as_deref() {
         let version = BdCellVersion::parse(raw)
@@ -1098,62 +1148,62 @@ pub fn run() -> Result<()> {
         }
     }
     writer.finish()?;
-    mapping_info.stop_timer("vdj.output_write");
-    mapping_info.stop_file_io_time();
+    run_stats.stop_timer("vdj.output_write");
+    run_stats.stop_file_io_time();
 
-    mapping_info.total = n;
-    mapping_info.report_n("vdj.threads", c.threads.max(1));
-    mapping_info.report_n("vdj.receptor_overlap_records", n);
+    run_stats.total = n;
+    run_stats.report_n("vdj.threads", c.threads.max(1));
+    run_stats.report_n("vdj.receptor_overlap_records", n);
     let ingest_status = status
         .read()
         .expect("reading VDJ status after BAM ingestion")
         .clone();
-    mapping_info.report_n("vdj.unmapped_candidates", ingest_status.unmapped_candidates);
-    mapping_info.report_n(
+    run_stats.report_n("vdj.unmapped_candidates", ingest_status.unmapped_candidates);
+    run_stats.report_n(
         "vdj.unmapped_igh_admitted",
         ingest_status.unmapped_igh_admitted,
     );
-    mapping_info.report_n(
+    run_stats.report_n(
         "vdj.unmapped_igh_rescued_cells",
         ingest_status.unmapped_igh_rescued_cells,
     );
-    mapping_info.report_n(
+    run_stats.report_n(
         "vdj.unmapped_igh_v_mappings",
         ingest_status.unmapped_igh_v_mappings,
     );
-    mapping_info.report_n(
+    run_stats.report_n(
         "vdj.unmapped_igh_d_mappings",
         ingest_status.unmapped_igh_d_mappings,
     );
-    mapping_info.report_n(
+    run_stats.report_n(
         "vdj.unmapped_igh_j_mappings",
         ingest_status.unmapped_igh_j_mappings,
     );
-    mapping_info.report_n(
+    run_stats.report_n(
         "vdj.unmapped_igh_c_mappings",
         ingest_status.unmapped_igh_c_mappings,
     );
     if let Some(cells) = preliminary_cells.as_ref() {
-        mapping_info.report_n("vdj.preliminary_cells", cells.len());
+        run_stats.report_n("vdj.preliminary_cells", cells.len());
     }
-    mapping_info.report_n("vdj.cells_with_evidence", calls.len());
-    mapping_info.report_n("vdj.recombinations", nr);
-    mapping_info.report_n("vdj.receptor_rediscovery_constant_calls", rescan.rescued);
-    mapping_info.report_n("vdj.junction_support_reads", rescan.junction_support_reads);
-    mapping_info.report_n(
+    run_stats.report_n("vdj.cells_with_evidence", calls.len());
+    run_stats.report_n("vdj.recombinations", nr);
+    run_stats.report_n("vdj.receptor_rediscovery_constant_calls", rescan.rescued);
+    run_stats.report_n("vdj.junction_support_reads", rescan.junction_support_reads);
+    run_stats.report_n(
         "vdj.junction_spanning_reads",
         rescan.junction_spanning_reads,
     );
-    mapping_info.report_n(
+    run_stats.report_n(
         "vdj.junction_conflicting_reads",
         rescan.junction_conflicting_reads,
     );
-    mapping_info.report_n("vdj.junction_refined_calls", rescan.junction_refined_calls);
-    mapping_info.report_n("vdj.junction_refined_bases", rescan.junction_refined_bases);
+    run_stats.report_n("vdj.junction_refined_calls", rescan.junction_refined_calls);
+    run_stats.report_n("vdj.junction_refined_bases", rescan.junction_refined_bases);
     for (chain, count) in &by_chain {
-        mapping_info.report_n(format!("vdj.calls.{}", chain.to_ascii_lowercase()), *count);
+        run_stats.report_n(format!("vdj.calls.{}", chain.to_ascii_lowercase()), *count);
     }
-    write_mapping_info_report(c.out.join("vdj-mapping-info.txt"), &mapping_info)?;
+    write_run_stats_report(c.out.join("vdj-mapping-info.txt"), &run_stats)?;
 
     finish_status(&status, "finished — receptors reconstructed");
 
@@ -1169,14 +1219,14 @@ pub fn run() -> Result<()> {
     // snapshot; this file is deliberately human-readable.
     let mut run_log =
         File::create(c.out.join("nelrune-vdj.log")).context("creating nelrune-vdj.log")?;
-    writeln!(run_log, "{mapping_info}")?;
+    writeln!(run_log, "{run_stats}")?;
     writeln!(run_log, "final stage: {}", final_status.stage)?;
     writeln!(run_log, "evidence cells: {}", runner.evidence.cell_count())?;
     writeln!(run_log, "recombinations: {nr}")?;
     writeln!(run_log, "constant calls rescued: {}", rescan.rescued)?;
     run_log.flush()?;
 
-    eprintln!("{mapping_info}");
+    eprintln!("{run_stats}");
     eprintln!(
         "nelrune-vdj: {n} receptor-overlapping BAM records; {} evidence cell(s); {nr} recombination(s); {} constant call(s) added by CDR3/constant remapping; outputs in {}",
         runner.evidence.cell_count(),

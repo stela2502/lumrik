@@ -418,6 +418,7 @@ mod tests {
                     .into(),
             alternative_reconstructions: 0,
             evidence_reads: 3,
+            support_umis: 1,
         };
         assert!(models.resolve_receptor(&mut receptor, 0.75));
         let candidate = models.curator().candidate(&receptor.v).unwrap();

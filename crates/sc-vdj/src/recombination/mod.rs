@@ -285,10 +285,17 @@ pub fn process_chain_work(work: ChainWork<'_>) -> Vec<Recombination> {
         .collect();
 
     // The transient summary count may exceed two because unlinked fragments are
-    // intentionally kept apart.  Biology constrains the final resolved calls.
-    calls.sort_by_key(|r| std::cmp::Reverse(r.supporting_features));
-    let mut seen_sequences = std::collections::HashSet::<Vec<u8>>::new();
-    calls.retain(|r| seen_sequences.insert(r.observed_rearrangement.clone()));
+    // intentionally kept apart.  A cell cannot retain two resolved calls for the
+    // same V-(D)-J recombination merely because their reconstructed junctions differ.
+    // Prefer independent molecule support first, then raw feature/read support.
+    calls.sort_by(|a, b| {
+        b.supporting_umis
+            .cmp(&a.supporting_umis)
+            .then_with(|| b.supporting_features.cmp(&a.supporting_features))
+            .then_with(|| a.stable_id.to_string().cmp(&b.stable_id.to_string()))
+    });
+    let mut seen_vdj = std::collections::HashSet::<(SegmentId, Option<SegmentId>, SegmentId)>::new();
+    calls.retain(|r| seen_vdj.insert((r.v, r.d, r.j)));
     calls.truncate(MAX_FINAL_RECOMBINATIONS_PER_LOCUS);
 
     rescue_missing_constant_regions(&mut calls, work.cell, work.index, work.chain);

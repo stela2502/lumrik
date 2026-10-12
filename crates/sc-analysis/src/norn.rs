@@ -214,7 +214,7 @@ mod tests {
         fs::create_dir_all(&clonomap).unwrap();
         fs::write(
             clonomap.join("cells.tsv"),
-            "source\tcell\tfamily\tlc_clone\thc_mutation_count\nS1\tCELL_A\tHC_1\tLC_2\t7\n",
+            "source\tcell\tfamily\tlc_clone\thc_recombination_id\tlc_recombination_id\thc_mutation_count\nS1\tCELL_A\tHC_1\tLC_2\tHC:abc123\tLC:def456\t7\n",
         ).unwrap();
 
         assert_eq!(resolve_exonic(&root).unwrap(), exprs);
@@ -224,6 +224,10 @@ mod tests {
         assert_eq!(block.columns[family], ["HC_1", ""]);
         let lc = block.headers.iter().position(|x| x == "clonomap_lc_clone").unwrap();
         assert_eq!(block.columns[lc], ["LC_2", ""]);
+        let hc_id = block.headers.iter().position(|x| x == "clonomap_hc_recombination_id").unwrap();
+        assert_eq!(block.columns[hc_id], ["HC:abc123", ""]);
+        let lc_id = block.headers.iter().position(|x| x == "clonomap_lc_recombination_id").unwrap();
+        assert_eq!(block.columns[lc_id], ["LC:def456", ""]);
         fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -16,6 +16,7 @@ keywords = ["single-cell", "bioinformatics", "umi", "sparse", "rna-seq"]
 categories = ["science", "data-structures"]
 
 [dependencies]
+sc_anndata = { path = "../sc_anndata" }
 anyhow = "1"
 flate2 = "1.1.2"
 rayon = "1.10.0"
@@ -23,7 +24,7 @@ regex = "1.11.1"
 sprs = "0.11"
 clap.workspace = true
 
-mapping_info = { path = "../mapping_info" }
+run_stats = { path = "../run_stats" }
 int-to-dna = { path = "../int_to_dna" }
 
 [features]

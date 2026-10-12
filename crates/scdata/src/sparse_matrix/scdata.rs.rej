@@ -5,10 +5,10 @@
  
      /// Merge another matrix into this one in parallel, bucket by bucket.
 -    pub fn merge(&mut self, other: &Scdata) {
-+    pub fn merge(&mut self, other: &Scdata) -> MappingInfo {
++    pub fn merge(&mut self, other: &Scdata) -> RunStats {
          if other.is_empty() {
 -            return;
-+            return MappingInfo::new(None, 0.0, 0);
++            return RunStats::new(None, 0.0, 0);
          }
  
          self.invalidate_export_cache();

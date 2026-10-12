@@ -256,7 +256,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "mapping_info",
+ "run_stats",
  "scdata",
  "int-to-str 0.2.3",
 ]
@@ -391,7 +391,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
-name = "mapping_info"
+name = "run_stats"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27075f46874b6f948e70bea35f58ff3e1d6584c1b9e05852db66f001d6579869"
@@ -540,7 +540,7 @@ version = "0.2.3"
 source = "git+https://github.com/stela2502/scdata#bce79c3f013162503f4999723b86f2a9a3fe1cd0"
 dependencies = [
  "flate2",
- "mapping_info",
+ "run_stats",
  "rayon",
  "regex",
  "int-to-str 0.1.0",

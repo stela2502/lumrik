@@ -1,6 +1,7 @@
+use run_stats::RunStats;
 use crate::cellrep::{
     AlignmentGeometry, BamFeatureEvidence, BamFeatureSequenceParts, CellEvidence, CellEvidenceVdj,
-    EvidenceId, MapperEvidence, SequencePart,
+    EvidenceId, MapperEvidence, RawBamFeatureEvidence, RawCellEvidence, SequencePart,
 };
 use crate::index::{SegmentKind, VdjIndex};
 use crate::recombination::{
@@ -14,11 +15,13 @@ use int_to_dna::IntToDna;
 use rayon::prelude::*;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
+use sc_primer::ReadTagRecord;
+use scdata::CellHash;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-const EVIDENCE_BATCH_SIZE: usize = 200_000;
+const EVIDENCE_BATCH_SIZE: usize = 1_000_000;
 const UNMAPPED_IGH_SEED_LEN: usize = 13;
 const UNMAPPED_IGH_MIN_J_SEEDS: usize = 2;
 const UNMAPPED_IGH_MIN_J_SEED_SPAN: usize = UNMAPPED_IGH_SEED_LEN;
@@ -419,10 +422,21 @@ impl UnmappedIghSeeds {
 }
 
 fn bam_umi(record: &bam::Record) -> Option<Vec<u8>> {
-    match record.aux(b"UB").ok()? {
-        Aux::String(umi) if !umi.is_empty() => Some(umi.as_bytes().to_vec()),
-        _ => None,
+    // External single-cell BAMs normally carry corrected/raw UMI tags.
+    for tag in [b"UB", b"UR"] {
+        if let Ok(Aux::String(umi)) = record.aux(tag) {
+            if !umi.is_empty() {
+                return Some(umi.as_bytes().to_vec());
+            }
+        }
     }
+
+    // Native Lumrik mapper BAMs retain the complete ReadTagRecord in the QNAME.
+    // The quantifier already restores CB/UB from this metadata; sc-vdj reads the
+    // mapper BAM directly, so recover the UMI here instead of silently losing it.
+    let qname = std::str::from_utf8(record.qname()).ok()?;
+    let read_tag = ReadTagRecord::from_qname(qname).ok()?;
+    (!read_tag.umi_seq.is_empty()).then_some(read_tag.umi_seq)
 }
 
 pub trait BamIdentityResolver {
@@ -555,6 +569,7 @@ impl VdjRunner {
         candidates: &mut Vec<UnmappedReadCandidate>,
         seeds: &UnmappedIghSeeds,
         pool: Option<&rayon::ThreadPool>,
+        run_stats: &mut RunStats,
     ) -> UnmappedIghRescueStats {
         if candidates.is_empty() {
             return UnmappedIghRescueStats::default();
@@ -594,7 +609,7 @@ impl VdjRunner {
 
         if !rescued.is_empty() {
             self.evidence
-                .consume_batch(rescued, &self.index, self.config.min_sequence_overlap);
+                .consume_batch(rescued, &self.index, self.config.min_sequence_overlap, run_stats);
         }
         stats
     }
@@ -637,8 +652,11 @@ impl VdjRunner {
         R: BamIdentityResolver,
         F: FnMut(BamIngestProgress, &CellEvidenceVdj, &VdjIndex),
     {
-        self.read_bam_with_progress_for_cells_limited(path, resolver, allowed_cells, None, progress)
-            .map(|(records, _)| records)
+        let mut run_stats = RunStats::new(None, 0.0, 0);
+        self.read_bam_with_progress_for_cells_limited(
+            path, resolver, allowed_cells, None, &mut run_stats, progress,
+        )
+        .map(|(records, _)| records)
     }
 
     /// As `read_bam_with_progress_for_cells`, but optionally stop the initial
@@ -651,6 +669,7 @@ impl VdjRunner {
         resolver: &R,
         allowed_cells: Option<&HashSet<u64>>,
         max_bam_records: Option<usize>,
+        run_stats: &mut RunStats,
         mut progress: F,
     ) -> Result<(usize, BamIngestTiming)>
     where
@@ -668,7 +687,11 @@ impl VdjRunner {
         let mut allowed_cell_records = 0usize;
         let mut unmapped_rescue = UnmappedIghRescueStats::default();
         let mut entry = 0u32;
-        let mut batch = Vec::<(u64, BamFeatureEvidence)>::with_capacity(EVIDENCE_BATCH_SIZE);
+        let mut batch = CellHash::<RawCellEvidence>::new();
+        let mut batch_records = 0usize;
+        let contig_names: Vec<String> = (0..header.target_count())
+            .map(|tid| String::from_utf8_lossy(header.tid2name(tid)).into_owned())
+            .collect();
         let mut unmapped_candidates =
             Vec::<UnmappedReadCandidate>::with_capacity(UNMAPPED_CANDIDATE_BATCH_SIZE);
         let unmapped_igh_seeds = UnmappedIghSeeds::new(&self.index);
@@ -698,13 +721,6 @@ impl VdjRunner {
             };
             result?;
             let cell = resolver.cell(&rec);
-            let umi = rec
-                .aux(b"UB")
-                .ok()
-                .and_then(|aux| match aux {
-                    rust_htslib::bam::record::Aux::String(value) => Some(value.as_bytes().to_vec()),
-                _ => None,
-            });
 
             let query_key = cell.as_ref().map(|cell| {
                 (
@@ -730,15 +746,18 @@ impl VdjRunner {
             let query_key = (cell_id, query_name);
 
             if last_query.as_ref() != Some(&query_key) {
-                if batch.len() >= EVIDENCE_BATCH_SIZE {
-                    let full =
-                        std::mem::replace(&mut batch, Vec::with_capacity(EVIDENCE_BATCH_SIZE));
+                if batch_records >= EVIDENCE_BATCH_SIZE {
+                    let full = std::mem::replace(&mut batch, CellHash::new());
+                    batch_records = 0;
                     let processing_started = Instant::now();
-                    self.evidence.consume_batch(
+                    let (accepted, batch_stats) = self.evidence.consume_raw_batch(
                         full,
+                        &contig_names,
                         &self.index,
                         self.config.min_sequence_overlap,
                     );
+                    n = n.saturating_add(accepted);
+                    run_stats.merge(&batch_stats);
                     timing.evidence_processing += processing_started.elapsed();
                     progress(
                         unmapped_rescue.progress(bam_records, allowed_cell_records, n, timing.bam_read),
@@ -752,6 +771,7 @@ impl VdjRunner {
                         &mut unmapped_candidates,
                         &unmapped_igh_seeds,
                         unmapped_pool.as_ref(),
+                        run_stats,
                     );
                     timing.evidence_processing += processing_started.elapsed();
                     n = n.saturating_add(rescue.admitted);
@@ -799,42 +819,8 @@ impl VdjRunner {
             }
             allowed_cell_records = allowed_cell_records.saturating_add(1);
 
-            // Broad B-cell discovery is complete for this cell. Avoid all
-            // further overlap lookup, sequence copying and model generation
-            // during the initial pass. Reconstruction and confirmation still
-            // operate on the evidence already retained for the cell.
-            if self.evidence.first_pass_b_cell_complete(cell_id) {
-                continue;
-            }
-
             let tid = rec.tid();
             if tid < 0 {
-                continue;
-            }
-            let chr = String::from_utf8_lossy(header.tid2name(tid as u32)).into_owned();
-            let blocks = aligned_blocks(&rec);
-            let segment_ids = self.index.overlapping(&chr, &blocks);
-            let intronic_constant_segments =
-                self.index.intronic_constant_overlapping(&chr, &blocks, 8);
-            let rearrangement_chains: HashSet<_> = segment_ids
-                .iter()
-                .filter_map(|id| self.index.segment(*id))
-                .filter(|segment| segment.kind != SegmentKind::C)
-                .map(|segment| segment.chain)
-                .collect();
-            let admitted_chains = rearrangement_chains;
-
-            // Intronic-C state is independent evidence and must survive even
-            // when every rearrangement chain on this record is already done.
-            if admitted_chains.is_empty() && intronic_constant_segments.is_empty() {
-                continue;
-            }
-
-            let has_rearrangement_segment = !admitted_chains.is_empty();
-            // C-exon-only reads are ambiguous: they may belong to a normal
-            // rearranged transcript whose fragment simply does not reach J.
-            // They neither classify biology nor seed expensive reconstruction.
-            if !has_rearrangement_segment && intronic_constant_segments.is_empty() {
                 continue;
             }
 
@@ -847,60 +833,37 @@ impl VdjRunner {
                 id
             });
 
-            let geometry = AlignmentGeometry {
+            // The serial BAM path deliberately records only facts already present
+            // in the BAM. Receptor/index interpretation happens after the batch
+            // boundary in the CellHash Rayon loop.
+            batch.entry_cell(cell_id).or_default().records.push(RawBamFeatureEvidence {
+                id,
+                umi: bam_umi(&rec),
                 tid,
-                start: blocks.first().map_or(0, |x| x.0),
-                end: blocks.last().map_or(0, |x| x.1),
+                pos: rec.pos().max(0) as u32,
+                cigar: rec.cigar().iter().copied().collect(),
+                bases: rec.seq().as_bytes(),
+                qualities: rec.qual().to_vec(),
+                is_last_in_template: rec.is_last_in_template(),
                 is_reverse: rec.is_reverse(),
                 is_secondary: rec.is_secondary(),
                 is_supplementary: rec.is_supplementary(),
                 mapq: rec.mapq(),
-                ref_blocks: blocks,
-            };
-            let mappings = segment_ids
-                .into_iter()
-                .filter(|segment_id| {
-                    self.index.segment(*segment_id).is_some_and(|segment| {
-                        segment.kind == SegmentKind::C
-                            || admitted_chains.contains(&segment.chain)
-                    })
-                })
-                .map(|segment_id| MapperEvidence {
-                    segment_id,
-                    alignment: geometry.clone(),
-                })
-                .collect();
-            let mut sequence = BamFeatureSequenceParts::default();
-            if has_rearrangement_segment {
-                let part = SequencePart {
-                    bases: rec.seq().as_bytes(),
-                    qualities: rec.qual().to_vec(),
-                };
-                if rec.is_last_in_template() {
-                    sequence.r2 = Some(part)
-                } else {
-                    sequence.r1 = Some(part)
-                };
-            }
-
-            batch.push((
-                cell_id,
-                BamFeatureEvidence {
-                    id,
-                    sequence,
-                    umi,
-                    mappings,
-                    intronic_constant_segments,
-                },
-            ));
+            });
+            batch_records = batch_records.saturating_add(1);
             self.cell_names.entry(cell_id).or_insert(cell);
-            n += 1;
         }
 
-        if !batch.is_empty() {
+        if !batch.cells_are_empty() {
             let processing_started = Instant::now();
-            self.evidence
-                .consume_batch(batch, &self.index, self.config.min_sequence_overlap);
+            let (accepted, batch_stats) = self.evidence.consume_raw_batch(
+                batch,
+                &contig_names,
+                &self.index,
+                self.config.min_sequence_overlap,
+            );
+            n = n.saturating_add(accepted);
+            run_stats.merge(&batch_stats);
             timing.evidence_processing += processing_started.elapsed();
             progress(
                 unmapped_rescue.progress(bam_records, allowed_cell_records, n, timing.bam_read),
@@ -915,6 +878,7 @@ impl VdjRunner {
                 &mut unmapped_candidates,
                 &unmapped_igh_seeds,
                 unmapped_pool.as_ref(),
+                run_stats,
             );
             timing.evidence_processing += processing_started.elapsed();
             n = n.saturating_add(rescue.admitted);
@@ -933,6 +897,7 @@ impl VdjRunner {
         self.evidence.flush_pending_refinement(
             &self.index,
             self.config.min_sequence_overlap,
+            run_stats,
         );
         timing.evidence_processing += processing_started.elapsed();
 
@@ -1085,6 +1050,42 @@ mod runner_tests {
     };
     use crate::cellrep::EvidenceId;
     use crate::index::{Chain, SegmentKind, Strand, VdjIndex, VdjSegment};
+    use rust_htslib::bam;
+    use rust_htslib::bam::record::Aux;
+    use sc_primer::ReadTagRecord;
+use scdata::CellHash;
+
+
+    #[test]
+    fn bam_umi_recovers_native_lumrik_qname() {
+        let tag = ReadTagRecord::new(
+            "read-1".to_string(),
+            None,
+            b"ACGTACGT",
+            b"IIIIIIII",
+            b"GATTAC",
+            b"IIIIII",
+        );
+        let mut record = bam::Record::new();
+        record.set_qname(tag.extend_qname("read-1").as_bytes());
+        assert_eq!(super::bam_umi(&record), Some(b"GATTAC".to_vec()));
+    }
+
+    #[test]
+    fn bam_umi_prefers_aux_tag_over_qname() {
+        let tag = ReadTagRecord::new(
+            "read-1".to_string(),
+            None,
+            b"ACGTACGT",
+            b"IIIIIIII",
+            b"GATTAC",
+            b"IIIIII",
+        );
+        let mut record = bam::Record::new();
+        record.set_qname(tag.extend_qname("read-1").as_bytes());
+        record.push_aux(b"UB", Aux::String("CCCCCC")).unwrap();
+        assert_eq!(super::bam_umi(&record), Some(b"CCCCCC".to_vec()));
+    }
 
     fn test_segment(name: &str, kind: SegmentKind, sequence: &[u8]) -> VdjSegment {
         VdjSegment {

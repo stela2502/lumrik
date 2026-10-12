@@ -7,7 +7,7 @@
 //! longer treating a pile of seed votes as an alignment.
 
 use int_to_dna::IntToDna;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use onehot_dna::OneHotSequence;
 use std::{
     fs::File,
@@ -275,7 +275,7 @@ impl FastTagMapper {
         }
     }
 
-    pub fn map_feature_id(&self, seq: &[u8], mapping: &mut MappingInfo) -> Option<u64> {
+    pub fn map_feature_id(&self, seq: &[u8], mapping: &mut RunStats) -> Option<u64> {
         match self.map_status(seq, mapping) {
             MapStatus::Hit { feature_id, .. } => Some(feature_id),
             _ => None,
@@ -287,7 +287,7 @@ impl FastTagMapper {
         &self,
         seq: &[u8],
         qual: &[u8],
-        mapping: &mut MappingInfo,
+        mapping: &mut RunStats,
     ) -> Option<u64> {
         match self.map_status_with_qual(seq, qual, mapping) {
             MapStatus::Hit { feature_id, .. } => Some(feature_id),
@@ -295,7 +295,7 @@ impl FastTagMapper {
         }
     }
 
-    pub fn map_status(&self, seq: &[u8], mapping: &mut MappingInfo) -> MapStatus {
+    pub fn map_status(&self, seq: &[u8], mapping: &mut RunStats) -> MapStatus {
         self.map_status_impl(seq, None, mapping)
     }
 
@@ -303,7 +303,7 @@ impl FastTagMapper {
         &self,
         seq: &[u8],
         qual: &[u8],
-        mapping: &mut MappingInfo,
+        mapping: &mut RunStats,
     ) -> MapStatus {
         self.map_status_impl(seq, Some(qual), mapping)
     }
@@ -312,7 +312,7 @@ impl FastTagMapper {
         &self,
         seq: &[u8],
         qual: Option<&[u8]>,
-        mapping: &mut MappingInfo,
+        mapping: &mut RunStats,
     ) -> MapStatus {
         mapping.start_ticker();
 

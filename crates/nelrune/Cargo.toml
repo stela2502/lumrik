@@ -15,7 +15,7 @@ flate2 = "1"
 
 bam_tide = { path = "../bam_tide" }
 gtf_splice_index = { path = "../gtf_splice_index" }
-mapping_info = { path = "../mapping_info" }
+run_stats = { path = "../run_stats" }
 lumrik-status = { path = "../lumrik-status" }
 ommverse = { path = "../ommverse" }
 sc-mapper = { path = "../sc-mapper" }

@@ -10,7 +10,7 @@ use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 
 use anyhow::{Context, Result};
 use int_to_dna::IntToDna;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use rayon::prelude::*;
 use rust_htslib::bam::{Read, Reader};
 use sc_primer::{Orientation, PrimerDetector};
@@ -144,7 +144,7 @@ impl OntNormalizerConfig {
 
 pub struct OntNormalizer {
     config: OntNormalizerConfig,
-    stats: MappingInfo,
+    stats: RunStats,
     read_tags: ReadTagTable,
     feature_tag_counts: FeatureTagCounts,
 }
@@ -223,7 +223,7 @@ impl OntNormalizer {
     pub fn nelrune_run<F, P>(&mut self, mut emit: F, mut report_progress: P) -> Result<()>
     where
         F: FnMut(&[(Option<FastqRecord>, FastqRecord)]) -> Result<bool>,
-        P: FnMut(&MappingInfo),
+        P: FnMut(&RunStats),
     {
         let mut bam = Reader::from_path(&self.config.bam)
             .with_context(|| format!("failed to open BAM: {}", self.config.bam.display()))?;
@@ -292,7 +292,7 @@ impl OntNormalizer {
         Ok(())
     }
 
-    pub fn stats(&self) -> &MappingInfo {
+    pub fn stats(&self) -> &RunStats {
         &self.stats
     }
 

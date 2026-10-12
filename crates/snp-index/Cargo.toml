@@ -16,6 +16,6 @@ flate2 = "1"
 rust-htslib.workspace = true
 
 gtf_splice_index = { path = "../gtf_splice_index" }
-mapping_info = { path = "../mapping_info" }
+run_stats = { path = "../run_stats" }
 scdata = { path = "../scdata" }
 

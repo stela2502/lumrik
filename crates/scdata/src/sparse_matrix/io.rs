@@ -8,10 +8,12 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 
 use int_to_dna::int_to_dna::IntToDna;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 use crate::cell_data::GeneUmiHash;
 use crate::{FeatureIndex, Scdata};
+use sc_anndata::{AnnData, Matrix, Table};
+use std::collections::BTreeMap;
 
 impl Scdata {
     /// Write a dense TSV matrix.
@@ -68,6 +70,35 @@ impl Scdata {
             self.passing_cells(),
             self.total_feature_data_entries,
         )
+    }
+
+    /// Write the current matrix as AnnData/H5AD.
+    ///
+    /// `Scdata` stores feature x cell matrices; H5AD stores cell x feature.
+    pub fn write_h5ad<I: FeatureIndex + ?Sized>(
+        &self,
+        path: &Path,
+        index: &I,
+        cell_barcode_len: usize,
+    ) -> Result<(), String> {
+        if cell_barcode_len == 0 || cell_barcode_len > 32 {
+            return Err(format!("cell barcode length must be in 1..=32, got {cell_barcode_len}"));
+        }
+        let feature_by_cell = self.as_sprs()?;
+        let (feature_ids, cell_ids) = self.matrix_axis_ids();
+        let cells = cell_ids.iter().map(|id| {
+            let full = IntToDna::u8_array_to_str(&id.to_le_bytes());
+            full.chars().take(cell_barcode_len).collect::<String>()
+        }).collect();
+        let features = feature_ids.iter().map(|&id| index.feature_name(id).to_string()).collect();
+        let adata = AnnData {
+            x: Matrix::CsrF32(feature_by_cell.transpose_view().to_csr()),
+            obs: Table::new("_index", cells),
+            var: Table::new("_index", features),
+            obsm: BTreeMap::new(),
+            layers: BTreeMap::new(),
+        };
+        adata.write_h5ad(path).map_err(|e| format!("H5AD export failed: {e:#}"))
     }
 
     /// Write a sparse MatrixMarket matrix (10x compatible layout).
@@ -206,7 +237,7 @@ impl Scdata {
         let features_path = base.join("features.tsv.gz");
         let matrix_path = base.join("matrix.mtx.gz");
 
-        let mut report = MappingInfo::new(None, 0.0, 0);
+        let mut report = RunStats::new(None, 0.0, 0);
 
         let barcodes: Vec<u64> = {
             let f = File::open(&barcodes_path)

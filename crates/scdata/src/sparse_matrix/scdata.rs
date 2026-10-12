@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use core::fmt;
 use rayon::prelude::*;
 
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 use crate::cell_data::CellData;
 use crate::cell_data::GeneUmiHash;
@@ -183,6 +183,17 @@ impl Scdata {
     /// Imported matrices preserve their source feature and cell order, including
     /// empty rows or columns. For matrices assembled directly in `Scdata`, rows
     /// and columns are ordered by their numeric feature and cell ids.
+    pub(crate) fn matrix_axis_ids(&self) -> (Vec<u64>, Vec<u64>) {
+        use std::collections::BTreeSet;
+        let features = if self.matrix_feature_ids.is_empty() {
+            self.values().flat_map(|cell| cell.total_reads.keys().copied()).collect::<BTreeSet<_>>().into_iter().collect()
+        } else { self.matrix_feature_ids.clone() };
+        let cells = if self.matrix_cell_ids.is_empty() {
+            let mut ids = self.keys(); ids.sort_unstable(); ids
+        } else { self.matrix_cell_ids.clone() };
+        (features, cells)
+    }
+
     pub fn as_sprs(&self) -> Result<CsMat<f32>, String> {
         use std::collections::{BTreeSet, HashMap};
 
@@ -288,53 +299,33 @@ impl Scdata {
     }
 
     /// Merge another matrix into this one in parallel, bucket by bucket.
-    pub fn merge(&mut self, other: &Scdata) -> MappingInfo {
+    pub fn merge(&mut self, other: &Scdata) -> RunStats {
         if other.is_empty() {
-            return MappingInfo::new(None, 0.0, 0);
+            return RunStats::new(None, 0.0, 0);
         }
 
         self.invalidate_export_cache();
 
-        let mapping = self
-            .data
-            .par_iter_mut()
-            .enumerate()
-            .map(|(index, self_bucket)| {
-                let mut local_mapping = MappingInfo::new(None, 0.0, 0);
-
-                if let Some(other_bucket) = other.data.get(index) {
-                    for (cell_name, other_cell) in other_bucket {
-                        match self_bucket.entry(*cell_name) {
-                            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                                entry
-                                    .get_mut()
-                                    .merge_with_mapping(other_cell, &mut local_mapping);
-                            }
-                            std::collections::hash_map::Entry::Vacant(entry) => {
-                                // No destination cell exists, therefore none of its UMIs
-                                // can collide at this merge boundary.
-                                local_mapping.ok_reads += other_cell.seen.len();
-                                entry.insert(other_cell.clone());
-                            }
+        self.data.par_merge_with_mapping(
+            &other.data,
+            |self_bucket, other_bucket, local_mapping| {
+                for (cell_name, other_cell) in other_bucket {
+                    match self_bucket.entry(*cell_name) {
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            entry
+                                .get_mut()
+                                .merge_with_mapping(other_cell, local_mapping);
+                        }
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            // No destination cell exists, therefore none of its UMIs
+                            // can collide at this merge boundary.
+                            local_mapping.ok_reads += other_cell.seen.len();
+                            entry.insert(other_cell.clone());
                         }
                     }
                 }
-
-                local_mapping
-            })
-            .reduce(
-                || MappingInfo::new(None, 0.0, 0),
-                |mut mapping, local_mapping| {
-                    mapping.merge(&local_mapping);
-                    mapping
-                },
-            );
-
-        /*eprintln!(
-            "SCDATA MERGE: accepted UMIs={} rejected duplicate UMIs={}",
-            mapping.ok_reads, mapping.pcr_duplicates
-        );*/
-        mapping
+            },
+        )
     }
 
     /// Merge another matrix into this one by consuming the source in a single thread.
@@ -413,7 +404,7 @@ impl Scdata {
         name: &u64,
         data: GeneUmiHash,
         value: f32,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
     ) -> bool {
         let index = self.to_key(name);
         self.invalidate_export_cache();

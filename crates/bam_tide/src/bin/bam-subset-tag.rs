@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use bam_tide::multi_subset_bam::Subsetter;
 
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 /// Split a BAM file into multiple BAMs based on tag values.
 ///
@@ -66,7 +66,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut stats = MappingInfo::new(None, 0.0, 0);
+    let mut stats = RunStats::new(None, 0.0, 0);
 
     let tag = parse_tag(&cli.tag)?;
     let threads = cli.threads;

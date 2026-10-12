@@ -10,7 +10,7 @@ clap = { workspace = true }
 flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 
-mapping_info = { path = "../mapping_info" }
+run_stats = { path = "../run_stats" }
 scdata = { path = "../scdata" }
 int-to-dna = { path = "../int_to_dna" }
 onehot_dna = { path = "../onehot_dna" }

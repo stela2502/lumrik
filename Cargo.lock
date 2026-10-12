@@ -160,6 +160,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "ascii"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d92bec98840b8f03a5ff5413de5293bfcd8bf96467cf5452609f939ec6f5de16"
+
+[[package]]
 name = "assert_cmd"
 version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -230,11 +236,11 @@ dependencies = [
  "gtf_splice_index",
  "hts-sys",
  "int-to-dna",
- "mapping_info",
  "ommverse",
  "onehot_dna",
  "rayon",
  "read-tag-table",
+ "run_stats",
  "rust-htslib",
  "sc-beacon",
  "sc_primer",
@@ -294,7 +300,7 @@ version = "0.71.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
  "itertools 0.13.0",
@@ -319,6 +325,12 @@ dependencies = [
  "strum_macros",
  "thiserror 1.0.69",
 ]
+
+[[package]]
+name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
@@ -500,7 +512,7 @@ checksum = "157a8ba7b480713b56f4c09fd13fc3e0a22a5dfab8097ba61cbc5feef950788a"
 dependencies = [
  "glob",
  "libc",
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -558,6 +570,7 @@ dependencies = [
  "plotters",
  "rayon",
  "reference_curator",
+ "sc-vdj",
  "sc_primer",
  "statrs",
 ]
@@ -989,8 +1002,8 @@ dependencies = [
  "clap",
  "flate2",
  "int-to-dna",
- "mapping_info",
  "onehot_dna",
+ "run_stats",
  "scdata",
  "serde",
 ]
@@ -1366,6 +1379,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "hdf5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdcd9b131fd67bb827b386d0dc63d3e74196a14616ef800acf87ca5fef741a10"
+dependencies = [
+ "bitflags 1.3.2",
+ "cfg-if",
+ "hdf5-derive",
+ "hdf5-sys",
+ "hdf5-types",
+ "lazy_static",
+ "libc",
+ "ndarray 0.15.6",
+ "parking_lot",
+ "paste",
+]
+
+[[package]]
+name = "hdf5-derive"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5a77ac6a41e6880594d506118c0b8bc665ec959fe4636e0c84809756d224820"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "hdf5-src"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01493db39ddc0519cf2a83d620d2c037fee60f4fed724cb72dc23763f1727a8"
+dependencies = [
+ "cmake",
+ "libz-sys",
+]
+
+[[package]]
+name = "hdf5-sys"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4842d5980dc311a7c8933c7b45534fdae84df5ae7939a0ae8e449a56d4beb3d2"
+dependencies = [
+ "hdf5-src",
+ "libc",
+ "libloading 0.7.4",
+ "libz-sys",
+ "pkg-config",
+ "regex",
+ "serde",
+ "serde_derive",
+ "winreg",
+]
+
+[[package]]
+name = "hdf5-types"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b47268c0dfb499b1ffe5638b6e7694e7a87fe49fb92eca998a4346e5483e428f"
+dependencies = [
+ "ascii",
+ "cfg-if",
+ "hdf5-sys",
+ "libc",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1591,6 +1672,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "instant"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "int-to-dna"
 version = "0.8.2"
 dependencies = [
@@ -1714,6 +1804,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cbb8285d2e2bd4b8d4155840ae81929354b4ba0d7b3c272c84761ffa2141e1f"
 dependencies = [
  "libdeflate-sys",
+]
+
+[[package]]
+name = "libloading"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
+dependencies = [
+ "cfg-if",
+ "winapi",
 ]
 
 [[package]]
@@ -1843,6 +1943,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "lock_api"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1896,16 +2005,6 @@ dependencies = [
  "rustc-hash",
  "thiserror 2.0.21",
  "thousands",
-]
-
-[[package]]
-name = "mapping_info"
-version = "0.8.2"
-dependencies = [
- "atty",
- "chrono",
- "indicatif",
- "num-format",
 ]
 
 [[package]]
@@ -2108,10 +2207,10 @@ dependencies = [
  "gtf_splice_index",
  "int-to-dna",
  "lumrik-status",
- "mapping_info",
  "ommverse",
  "rayon",
  "reference_curator",
+ "run_stats",
  "rust-htslib",
  "sc-mapper",
  "sc-vdj",
@@ -2136,7 +2235,7 @@ version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
  "cfg-if",
  "cfg_aliases",
  "libc",
@@ -2354,6 +2453,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c860fd3227ca4ac3cc032e2cd20cba3f02ccdf4b610538f8ee6584d56bb62e96"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
+dependencies = [
+ "instant",
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a2cfe6f0ad2bfc16aefa463b497d5c7a5ecd44a23efa72aa342d90177356dc"
+dependencies = [
+ "cfg-if",
+ "instant",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "winapi",
 ]
 
 [[package]]
@@ -2714,7 +2838,7 @@ version = "11.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
 ]
 
 [[package]]
@@ -2767,7 +2891,7 @@ dependencies = [
  "clap",
  "csv",
  "flate2",
- "mapping_info",
+ "run_stats",
  "sc_primer",
  "serde",
 ]
@@ -2777,6 +2901,15 @@ name = "reborrow"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
+
+[[package]]
+name = "redox_syscall"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb5a58c1855b4b6819d59012155603f0b22ad30cad752600aadfcb695265519a"
+dependencies = [
+ "bitflags 1.3.2",
+]
 
 [[package]]
 name = "reference_curator"
@@ -2832,6 +2965,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "run_stats"
+version = "0.8.2"
+dependencies = [
+ "atty",
+ "chrono",
+ "indicatif",
+ "num-format",
+]
+
+[[package]]
 name = "rust-htslib"
 version = "1.0.0"
 dependencies = [
@@ -2878,7 +3021,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
  "errno",
  "libc",
  "linux-raw-sys",
@@ -2975,11 +3118,15 @@ dependencies = [
  "clap",
  "csv",
  "flate2",
+ "hdf5",
+ "hdf5-sys",
  "linfa",
  "linfa-reduction",
  "manifolds-rs",
  "ndarray 0.15.6",
  "plotters",
+ "rayon",
+ "sc_anndata",
  "scdata",
  "sprs",
 ]
@@ -2991,9 +3138,9 @@ dependencies = [
  "anyhow",
  "clap",
  "int-to-dna",
- "mapping_info",
  "plotters",
  "rayon",
+ "run_stats",
  "scdata",
  "statrs",
  "tempfile",
@@ -3024,8 +3171,8 @@ dependencies = [
  "flate2",
  "gtf_splice_index",
  "int-to-dna",
- "mapping_info",
  "read-tag-table",
+ "run_stats",
  "rust-htslib",
  "sc-mapper",
  "scdata",
@@ -3042,13 +3189,25 @@ dependencies = [
  "gtf_splice_index",
  "int-to-dna",
  "lumrik-status",
- "mapping_info",
  "onehot_dna",
  "rayon",
+ "run_stats",
  "rust-htslib",
  "sc_primer",
  "scdata",
  "tempfile",
+]
+
+[[package]]
+name = "sc_anndata"
+version = "0.8.2"
+dependencies = [
+ "anyhow",
+ "data_table",
+ "hdf5",
+ "hdf5-sys",
+ "ndarray 0.15.6",
+ "sprs",
 ]
 
 [[package]]
@@ -3061,10 +3220,10 @@ dependencies = [
  "fast_tag_mapper",
  "flate2",
  "int-to-dna",
- "mapping_info",
  "onehot_dna",
  "predicates",
  "pretty_assertions",
+ "run_stats",
  "serde",
 ]
 
@@ -3076,9 +3235,10 @@ dependencies = [
  "clap",
  "flate2",
  "int-to-dna",
- "mapping_info",
  "rayon",
  "regex",
+ "run_stats",
+ "sc_anndata",
  "sprs",
  "tempfile",
 ]
@@ -3099,6 +3259,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
+name = "scopeguard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
 name = "sct"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3114,7 +3280,7 @@ version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
  "core-foundation",
  "core-foundation-sys",
  "libc",
@@ -3274,7 +3440,7 @@ dependencies = [
  "anyhow",
  "flate2",
  "gtf_splice_index",
- "mapping_info",
+ "run_stats",
  "rust-htslib",
  "scdata",
 ]
@@ -3394,7 +3560,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01198a2debb237c62b6826ec7081082d951f46dbb64b0e8c7649a452230d1dfc"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.2",
  "byteorder",
  "enum-as-inner",
  "libc",
@@ -3580,10 +3746,16 @@ version = "0.8.2"
 dependencies = [
  "anyhow",
  "clap",
+ "flate2",
  "hmm",
+ "ndarray 0.15.6",
  "ommverse",
  "rayon",
  "sc-analysis",
+ "sc_anndata",
+ "serde",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -4063,6 +4235,16 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winreg"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
+dependencies = [
+ "serde",
+ "winapi",
+]
 
 [[package]]
 name = "wit-bindgen"

@@ -12,7 +12,11 @@ anyhow = "1"
 csv = "1"
 flate2 = "1"
 sprs = "0.11"
+rayon = "1"
 scdata = { path = "../scdata" }
+sc_anndata = { path = "../sc_anndata" }
+hdf5 = "0.8"
+hdf5-sys = { version = "0.8.1", features = ["static", "zlib"] }
 ndarray = "0.15"
 linfa = "0.7"
 linfa-reduction = "0.7"

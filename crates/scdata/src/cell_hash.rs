@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ops::{Deref, DerefMut};
 
+use run_stats::RunStats;
+use rayon::prelude::*;
+
 /// Sparse cell-indexed storage split into 1024 buckets.
 ///
 /// Cell ids are expected to come from `IntToDna::into_u64()`. That encoding
@@ -65,6 +68,157 @@ impl<T> CellHash<T> {
 
     pub fn buckets_mut(&mut self) -> &mut [HashMap<u64, T>; CELL_HASH_BUCKETS] {
         &mut self.data
+    }
+
+    /// Consume this CellHash and transform each bucket independently in Rayon.
+    ///
+    /// CellHash owns the bucket geometry, so callers can build a completely fresh
+    /// cell tree without touching any persistent destination state. This is useful
+    /// for batch-local model construction: expensive interpretation happens against
+    /// bounded batch state first, and only the resulting compact tree is reconciled
+    /// with historical state afterwards.
+    pub fn par_map_owned<U, F>(self, map: F) -> CellHash<U>
+    where
+        T: Send,
+        U: Send,
+        F: Fn(HashMap<u64, T>) -> HashMap<u64, U> + Sync + Send,
+    {
+        let buckets: Vec<HashMap<u64, U>> = self
+            .data
+            .into_par_iter()
+            .map(map)
+            .collect();
+        let data: [HashMap<u64, U>; CELL_HASH_BUCKETS] = buckets
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("CellHash bucket count is invariant"));
+        CellHash { data }
+    }
+
+    /// Consume this CellHash while reading the corresponding buckets of a second
+    /// CellHash. Useful when batch-local work needs a compact read-only persistent
+    /// gate with the same cell partitioning.
+    pub fn par_map_owned_with<U, V, F>(self, other: &CellHash<U>, map: F) -> CellHash<V>
+    where
+        T: Send,
+        U: Sync,
+        V: Send,
+        F: Fn(HashMap<u64, T>, &HashMap<u64, U>) -> HashMap<u64, V> + Sync + Send,
+    {
+        let buckets: Vec<HashMap<u64, V>> = self
+            .data
+            .into_par_iter()
+            .zip(other.data.par_iter())
+            .map(|(self_bucket, other_bucket)| map(self_bucket, other_bucket))
+            .collect();
+        let data: [HashMap<u64, V>; CELL_HASH_BUCKETS] = buckets
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("CellHash bucket count is invariant"));
+        CellHash { data }
+    }
+
+    /// Consume this CellHash while reading corresponding buckets from another
+    /// CellHash, and reduce one thread-local RunStats per Rayon bucket.
+    pub fn par_map_owned_with_stats<U, V, F>(
+        self,
+        other: &CellHash<U>,
+        map: F,
+    ) -> (CellHash<V>, RunStats)
+    where
+        T: Send,
+        U: Sync,
+        V: Send,
+        F: Fn(HashMap<u64, T>, &HashMap<u64, U>, &mut RunStats) -> HashMap<u64, V>
+            + Sync
+            + Send,
+    {
+        let bucket_results: Vec<(HashMap<u64, V>, RunStats)> = self
+            .data
+            .into_par_iter()
+            .zip(other.data.par_iter())
+            .map(|(self_bucket, other_bucket)| {
+                let mut local_stats = RunStats::new(None, 0.0, 0);
+                let mapped = map(self_bucket, other_bucket, &mut local_stats);
+                (mapped, local_stats)
+            })
+            .collect();
+
+        let mut stats = RunStats::new(None, 0.0, 0);
+        let buckets: Vec<HashMap<u64, V>> = bucket_results
+            .into_iter()
+            .map(|(bucket, local_stats)| {
+                stats.merge(&local_stats);
+                bucket
+            })
+            .collect();
+        let data: [HashMap<u64, V>; CELL_HASH_BUCKETS] = buckets
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("CellHash bucket count is invariant"));
+        (CellHash { data }, stats)
+    }
+
+    /// Merge corresponding cell buckets in parallel while collecting mapping telemetry.
+    ///
+    /// `CellHash` owns the partitioning invariant: a cell id can only occur in one
+    /// corresponding bucket in both stores. Callers therefore only define the
+    /// per-cell merge semantics; the bucket-level Rayon fan-out and RunStats
+    /// reduction live here once for every CellHash consumer.
+    pub fn par_merge_with_mapping<U, F>(
+        &mut self,
+        other: &CellHash<U>,
+        merge: F,
+    ) -> RunStats
+    where
+        T: Send,
+        U: Sync,
+        F: Fn(&mut HashMap<u64, T>, &HashMap<u64, U>, &mut RunStats) + Sync + Send,
+    {
+        self.data
+            .par_iter_mut()
+            .zip(other.data.par_iter())
+            .map(|(self_bucket, other_bucket)| {
+                let mut local_mapping = RunStats::new(None, 0.0, 0);
+                merge(self_bucket, other_bucket, &mut local_mapping);
+                local_mapping
+            })
+            .reduce(
+                || RunStats::new(None, 0.0, 0),
+                |mut mapping, local_mapping| {
+                    mapping.merge(&local_mapping);
+                    mapping
+                },
+            )
+    }
+
+    /// Consuming variant of `par_merge_with_mapping`.
+    ///
+    /// This is useful for compact batch deltas whose contents should be moved into
+    /// persistent storage rather than cloned. Each source bucket is consumed by the
+    /// Rayon worker that owns the corresponding mutable destination bucket.
+    pub fn par_merge_owned_with_mapping<U, F>(
+        &mut self,
+        other: CellHash<U>,
+        merge: F,
+    ) -> RunStats
+    where
+        T: Send,
+        U: Send,
+        F: Fn(&mut HashMap<u64, T>, HashMap<u64, U>, &mut RunStats) + Sync + Send,
+    {
+        self.data
+            .par_iter_mut()
+            .zip(other.data.into_par_iter())
+            .map(|(self_bucket, other_bucket)| {
+                let mut local_mapping = RunStats::new(None, 0.0, 0);
+                merge(self_bucket, other_bucket, &mut local_mapping);
+                local_mapping
+            })
+            .reduce(
+                || RunStats::new(None, 0.0, 0),
+                |mut mapping, local_mapping| {
+                    mapping.merge(&local_mapping);
+                    mapping
+                },
+            )
     }
 }
 

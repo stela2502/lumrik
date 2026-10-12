@@ -4,7 +4,7 @@ use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use int_to_dna::IntToDna;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use onehot_dna::OneHotSequence;
 use sc_primer::{Chemistry, Grammar, PrimerDetector};
 use std::fs::File;
@@ -611,7 +611,7 @@ fn main() -> Result<(), String> {
         let mut total = Duration::ZERO;
         let mut hits = 0usize;
         for iteration in 0..cli.iterations {
-            let mut stats = MappingInfo::new(None, 0.0, reads.len());
+            let mut stats = RunStats::new(None, 0.0, reads.len());
             let start = Instant::now();
             let mut this_hits = 0usize;
             for r in &reads {
@@ -643,13 +643,13 @@ fn main() -> Result<(), String> {
 
     // Production-shaped cumulative benchmark, except that R1 is intentionally
     // fed to FastTagMapper. We are measuring mapper cost, not biological calls.
-    // MappingInfo is kept for the full pass, matching normal usage.
+    // RunStats is kept for the full pass, matching normal usage.
     {
         let mut best = Duration::MAX;
         let mut total = Duration::ZERO;
         let mut called = 0usize;
         for iteration in 0..cli.iterations {
-            let mut stats = MappingInfo::new(None, 0.0, reads.len());
+            let mut stats = RunStats::new(None, 0.0, reads.len());
             let start = Instant::now();
             let mut this_called = 0usize;
             for r in &reads {
@@ -727,7 +727,7 @@ fn main() -> Result<(), String> {
         let mut trimmed = 0usize;
         let mut feature_hits = 0usize;
         for iteration in 0..cli.iterations {
-            let mut stats = MappingInfo::new(None, 0.0, reads.len());
+            let mut stats = RunStats::new(None, 0.0, reads.len());
             let start = Instant::now();
             let mut this_called = 0usize;
             let mut this_trimmed = 0usize;
@@ -828,7 +828,7 @@ fn main() -> Result<(), String> {
             // resolution and feature-tag removal. Deduplication is deliberately
             // not included here: these stages isolate serialization/compression.
             let mut output_indices = Vec::new();
-            let mut stats = MappingInfo::new(None, 0.0, reads.len());
+            let mut stats = RunStats::new(None, 0.0, reads.len());
             for (idx, r) in reads.iter().enumerate() {
                 let Some(_m) = detector
                     .detect_first(&r.r1_seq, &r.r1_qual)

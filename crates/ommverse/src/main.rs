@@ -82,6 +82,33 @@ enum Command {
         #[arg(long)]
         no_health_server: bool,
     },
+    /// Import one or more MSigDB GMT files into a compact, queryable sidecar.
+    /// Download licensed MSigDB collections separately; no redistribution is performed.
+    IngestMsigdb {
+        #[arg(long)]
+        index: PathBuf,
+        /// Optional local GMT files. If omitted, download Hallmark, C2 and C3.
+        #[arg(long, num_args = 1..)]
+        gmt: Vec<PathBuf>,
+        /// MSigDB human release, pinned for reproducibility.
+        #[arg(long, default_value = "2026.1.Hs")]
+        release: String,
+        /// Download cache directory (default: <index parent>/MSigDB).
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+    /// Look up MSigDB sets containing a gene symbol, without loading the genome index.
+    MsigdbGene {
+        #[arg(long)]
+        index: PathBuf,
+        gene: String,
+    },
+    /// Retrieve members of a named MSigDB set, without loading the genome index.
+    MsigdbSet {
+        #[arg(long)]
+        index: PathBuf,
+        set: String,
+    },
     /// Query the biological reference model with the Ommverse query language.
     Query {
         #[arg(long)]
@@ -1089,6 +1116,26 @@ fn main() -> Result<()> {
                 eprintln!("[ommverse] wrote {} genome plot(s)", genes.len());
             }
         },
+        Command::IngestMsigdb { index, gmt, release, cache_dir } => {
+            let paths = if gmt.is_empty() {
+                let cache = cache_dir.unwrap_or_else(|| index.parent().unwrap_or(std::path::Path::new(".")).join("MSigDB"));
+                ommverse::msigdb::download_collections(&cache, &release)?
+            } else {
+                gmt
+            };
+            let count = ommverse::msigdb::ingest(&index, &paths, &release)?;
+            println!("[ommverse] indexed {count} MSigDB gene sets in {}", ommverse::msigdb::sidecar(&index).display());
+        }
+        Command::MsigdbGene { index, gene } => {
+            for row in ommverse::msigdb::find_gene(&index, &gene)? {
+                println!("{}\t{}\t{}\t{}", row.name, row.description, row.source, row.release);
+            }
+        }
+        Command::MsigdbSet { index, set } => {
+            for row in ommverse::msigdb::find_set(&index, &set)? {
+                println!("{}\t{}\t{}\t{}\t{}", row.name, row.description, row.source, row.release, row.genes.join(","));
+            }
+        }
         Command::Query { index, query } => {
             let query = ommverse::query::Query::parse(&query)?;
             let schema = ommverse::schema::OmmverseSchema::load_for_index(&index)?;

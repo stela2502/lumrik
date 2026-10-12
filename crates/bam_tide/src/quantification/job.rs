@@ -9,7 +9,7 @@ use gtf_splice_index::{SplicedRead, Strand};
 
 use int_to_dna::int_to_dna::IntToDna;
 
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use snp_index::{AlignedRead, Genome, RefineOptions, SnpIndex};
 
 use read_tag_table::ReadTagTable;
@@ -88,7 +88,7 @@ impl<'a> JobBuilder<'a> {
         self
     }
 
-    pub fn build(&self, rec: &Record, report: &mut MappingInfo) -> Result<Option<Job>> {
+    pub fn build(&self, rec: &Record, report: &mut RunStats) -> Result<Option<Job>> {
         if !self.passes_initial_filters(rec, report) {
             return Ok(None);
         }
@@ -161,7 +161,7 @@ impl<'a> JobBuilder<'a> {
     pub fn build_with_identity(
         &self,
         rec: &Record,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
         cell: u64,
         umi: u64,
     ) -> Result<Option<Job>> {
@@ -171,7 +171,7 @@ impl<'a> JobBuilder<'a> {
         self.build_filtered_with_identity(rec, report, cell, umi)
     }
 
-    fn passes_initial_filters(&self, rec: &Record, report: &mut MappingInfo) -> bool {
+    fn passes_initial_filters(&self, rec: &Record, report: &mut RunStats) -> bool {
         if rec.is_unmapped() {
             report.report("unmapped");
             return false;
@@ -194,7 +194,7 @@ impl<'a> JobBuilder<'a> {
     fn build_filtered_with_identity(
         &self,
         rec: &Record,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
         cell: u64,
         umi: u64,
     ) -> Result<Option<Job>> {

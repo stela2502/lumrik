@@ -1,5 +1,5 @@
-#SAMPLE="ZD-4631-BcellsLaneF"
-SAMPLE="ZD-4631-Undetermined"
+SAMPLE="ZD-4631-BcellsLaneF"
+#SAMPLE="ZD-4631-Undetermined"
 
 rm -rf /home/med-sal/sens05_home/NAS/NELRUNE/REAL_TEST_M39/$SAMPLE/vdj/vdj_out
 

@@ -1,19 +1,151 @@
+mod experiment;
+mod regulatory;
+mod module_plots;
+mod cluster_profiles;
+mod wt_match;
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use hmm::{CategoricalEmission, Hmm, StateId};
 use ommverse::Ommverse;
 use rayon::prelude::*;
 use sc_analysis::{AnalysisConfig, SingleCellData, analyze_exon_matrix};
+use sc_analysis::cli::{AnalysisCli, run_analysis};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+mod ai;
 
 
+/// Every analysis mode is explicit. No flag can silently select another mode.
 #[derive(Debug, Parser)]
-#[command(name = "traconmech")]
-#[command(about = "Trace biological context to candidate mechanisms")]
+#[command(name = "traconmech", about = "Trace biological context to candidate mechanisms")]
+struct App {
+    #[command(subcommand)]
+    mode: Mode,
+}
+
+#[derive(Debug, Subcommand)]
+enum Mode {
+    /// Run the existing sc-analyse CLI (all its options are forwarded).
+    Analysis(AnalysisCli),
+    /// TP53 -> STRING -> MSigDB regulatory analysis with per-cluster WT fallback.
+    Investigate(Cli),
+    /// Compare a case Louvain population to an adequate WT reference.
+    MatchWt(Cli),
+    /// Export population expression summaries and correlation tables.
+    ProfileClusters(Cli),
+    /// Genomic light tables and HMM analysis.
+    Genomic(Cli),
+    /// Evidence-based Ollama investigation.
+    Ai(Cli),
+    /// Inspect H5AD annotations and metadata.
+    Inspect(Cli),
+    /// Inspect module and gene effects in a saved investigation.
+    InspectResults(InspectResultsCli),
+    /// Print evidence contract registry.
+    Contracts(Cli),
+    /// Print the current experimental scope.
+    Scope(Cli),
+}
+
+#[derive(Debug, Args)]
+struct InspectResultsCli {
+    /// Existing TraConMech investigation folder.
+    results: PathBuf,
+    /// Only print genes from this module (default: all modules).
+    #[arg(long)]
+    module: Option<usize>,
+    /// Maximum genes printed per module; 0 prints all.
+    #[arg(long, default_value_t = 20)]
+    top: usize,
+}
+
+#[derive(Debug, Args)]
 struct Cli {
+    /// Compare case cells with WT in the same Louvain cluster; otherwise nearest eligible cluster.
+    #[arg(long)]
+    match_wt_clusters: bool,
+    /// Louvain cluster containing the DBA population of interest.
+    #[arg(long)]
+    target_cluster: Option<String>,
+    /// Minimum WT cells required for a reference population.
+    #[arg(long, default_value_t = 100)]
+    min_wt_cells: usize,
+
+    /// Export expression summaries and correlations for all cell populations.
+    #[arg(long)]
+    profile_clusters: bool,
+    /// Reuse gene module assignments from an earlier effect_clusters.tsv.
+    #[arg(long)]
+    reference_modules: Option<PathBuf>,
+    /// Seed gene for deterministic regulatory-module analysis (e.g. TP53).
+    #[arg(long = "gene", visible_alias = "investigate-gene")]
+    investigate_gene: Option<String>,
+    /// STRING protein info table (protein ID to preferred gene symbol).
+    #[arg(long)]
+    string_info: Option<PathBuf>,
+    /// STRING protein links table (protein1 protein2 combined_score).
+    #[arg(long)]
+    string_links: Option<PathBuf>,
+    /// Population annotation for regulatory projection.
+    #[arg(long = "cluster")]
+    cluster: Option<String>,
+    /// Condition annotation (e.g. sname).
+    #[arg(long, default_value = "sname")]
+    condition: String,
+    /// Comma-separated case sample values (exact matching).
+    #[arg(long)]
+    case: Option<String>,
+    /// Comma-separated control sample values (exact matching).
+    #[arg(long)]
+    control: Option<String>,
+    /// Do not ask interactive questions; fail if experiment design is ambiguous.
+    #[arg(long)]
+    non_interactive: bool,
+    /// Cluster gene targets by their shared MSigDB set membership.
+    #[arg(long)]
+    effect_cluster: bool,
+    /// Biological cluster IDs to compare the WT/DBA effect profiles across.
+    #[arg(long, num_args = 1..)]
+    co_variant_clusters: Vec<String>,
+    /// Minimum STRING combined score (0-1000).
+    #[arg(long, default_value_t = 700)]
+    string_min_score: u32,
+
+    /// Print the versioned template, callback and evidence registry as JSON.
+    #[arg(long)]
+    list_contracts: bool,
+
+    /// Ask Ollama a biological question using real expression evidence.
+    /// Without --ask, --ai starts an interactive question/answer session.
+    #[arg(long)]
+    ask: Option<String>,
+
+    /// Start an interactive Ollama investigation.
+    #[arg(long)]
+    ai: bool,
+
+    /// Investigation directory (conversation.md, evidence.jsonl, error.log).
+    #[arg(long, default_value = "investigation")]
+    out: PathBuf,
+
+    /// Ollama model used for evidence-driven investigation.
+    #[arg(long, default_value = "gpt-oss:20b")]
+    model: String,
+
+    /// Local Ollama API endpoint.
+    #[arg(long, default_value = "http://localhost:11434")]
+    ollama_url: String,
+
+    /// Inspect an H5AD expression analysis and exit (no AI inference).
+    #[arg(long)]
+    inspect_h5ad: Option<PathBuf>,
+
+    /// Grouping annotation for H5AD inspection.
+    #[arg(long)]
+    main_grouping: Option<String>,
+
     /// Print the current experimental scope and exit.
     #[arg(long)]
     scope: bool,
@@ -22,7 +154,7 @@ struct Cli {
     #[arg(long)]
     ommverse: Option<PathBuf>,
 
-    /// Directory containing expression.mtx.gz, genes.tsv.gz and cells.tsv.gz.
+    /// H5AD expression file or sc-analysis directory (expression.mtx.gz, genes.tsv.gz, cells.tsv.gz).
     #[arg(long)]
     data: Option<PathBuf>,
 
@@ -112,9 +244,96 @@ struct GeneLocus {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = match App::parse().mode {
+        Mode::Analysis(args) => {
+            return run_analysis(args);
+        }
+        Mode::InspectResults(args) => {
+            return inspect_results(&args);
+        }
+        Mode::Investigate(mut cli) => {
+            // --gene is the preferred spelling; --investigate-gene remains an alias.
+            anyhow::ensure!(cli.investigate_gene.is_some(),
+                "investigate requires --gene TP53");
+            anyhow::ensure!(cli.data.is_some(), "investigate requires --data");
+            anyhow::ensure!(cli.ommverse.is_some(), "investigate requires --ommverse");
+            anyhow::ensure!(cli.string_info.is_some() && cli.string_links.is_some(),
+                "investigate requires --string-info and --string-links");
+            cli.match_wt_clusters = false;
+            cli.profile_clusters = false;
+            cli
+        }
+        Mode::MatchWt(mut cli) => {
+            anyhow::ensure!(cli.data.is_some(), "match-wt requires --data");
+            anyhow::ensure!(cli.target_cluster.is_some(), "match-wt requires --target-cluster");
+            anyhow::ensure!(cli.case.is_some() && cli.control.is_some(),
+                "match-wt requires --case and --control");
+            cli.match_wt_clusters = true;
+            cli.profile_clusters = false;
+            cli.investigate_gene = None;
+            cli
+        }
+        Mode::ProfileClusters(mut cli) => {
+            anyhow::ensure!(cli.data.is_some(), "profile-clusters requires --data");
+            cli.profile_clusters = true;
+            cli.match_wt_clusters = false;
+            cli.investigate_gene = None;
+            cli
+        }
+        Mode::Genomic(mut cli) => {
+            anyhow::ensure!(cli.data.is_some() || cli.exon_matrix.is_some(),
+                "genomic requires --data or --exon-matrix");
+            cli.investigate_gene = None;
+            cli.match_wt_clusters = false;
+            cli.profile_clusters = false;
+            cli.ai = false;
+            cli.ask = None;
+            cli
+        }
+        Mode::Ai(mut cli) => {
+            anyhow::ensure!(cli.data.is_some(), "ai requires --data");
+            cli.investigate_gene = None;
+            cli.match_wt_clusters = false;
+            cli.profile_clusters = false;
+            cli.ai = true;
+            cli
+        }
+        Mode::Inspect(mut cli) => {
+            anyhow::ensure!(cli.inspect_h5ad.is_some(), "inspect requires --inspect-h5ad");
+            cli
+        }
+        Mode::Contracts(mut cli) => { cli.list_contracts = true; cli }
+        Mode::Scope(mut cli) => { cli.scope = true; cli }
+    };
+    if cli.list_contracts {
+        println!("{}", serde_json::to_string_pretty(&traconmech::contracts::registry_json()?)?);
+        return Ok(());
+    }
     println!("{} — {}", traconmech::NAME, traconmech::TAGLINE);
 
+    if let Some(path) = &cli.inspect_h5ad {
+        let (overview, warnings) = traconmech::exprs::inspect_overview(path)?;
+        println!("Dataset: {} cells x {} features", overview.cells, overview.features);
+        for (label, columns) in [("obs (cell annotations)", &overview.obs),
+                                 ("var (feature annotations)", &overview.var)] {
+            println!("\n{label}:");
+            for col in columns {
+                let distinct = col.distinct_values.map(|n| format!(", {n} distinct"))
+                    .unwrap_or_default();
+                println!("  {}: {}{}", col.name, col.data_type, distinct);
+                if let Some(counts) = &col.counts {
+                    for (value, count) in counts { println!("    {value}\t{count}"); }
+                }
+            }
+        }
+        if let Some(grouping) = &cli.main_grouping {
+            let summary = traconmech::exprs::inspect(path, grouping)?;
+            println!("\nSelected grouping: {grouping}");
+            for (group, count) in summary.groups { println!("{group}\t{count}"); }
+        }
+        for warning in warnings { eprintln!("H5AD warning: {warning}"); }
+        return Ok(());
+    }
     if cli.scope {
         println!(
             "Current experiment: test whether genomically neighbouring genes share expression states across populations."
@@ -124,15 +343,85 @@ fn main() -> Result<()> {
         );
     }
 
+    if cli.match_wt_clusters {
+        let path = cli.data.as_ref().context("--match-wt-clusters requires --data")?;
+        let data = if path.is_dir() { SingleCellData::from_mtx_dir(path)? }
+            else { SingleCellData::from_h5ad(path)? };
+        return wt_match::run(&data, &cli.out,
+            cli.cluster.as_deref().unwrap_or(&cli.group), &cli.condition,
+            cli.case.as_deref().context("--match-wt-clusters requires --case")?,
+            cli.control.as_deref().context("--match-wt-clusters requires --control")?,
+            cli.target_cluster.as_deref().context("--match-wt-clusters requires --target-cluster")?,
+            cli.min_wt_cells);
+    }
+    if cli.profile_clusters {
+        let path = cli.data.as_ref().context("--profile-clusters requires --data")?;
+        let data = if path.is_dir() { SingleCellData::from_mtx_dir(path)? }
+            else if path.extension().is_some_and(|e| e == "h5ad") { SingleCellData::from_h5ad(path)? }
+            else { anyhow::bail!("--data must be H5AD or sc-analysis directory"); };
+        return cluster_profiles::run(&data, &cli.out,
+            cli.cluster.as_deref().unwrap_or(&cli.group),
+            if cli.case.is_some() || cli.control.is_some() { Some(&cli.condition) } else { None },
+            cli.case.as_deref().unwrap_or(""),
+            cli.control.as_deref().unwrap_or(""),
+            cli.reference_modules.as_deref());
+    }
     let Some(ommverse_path) = cli.ommverse.as_ref() else {
         if cli.scope && cli.data.is_none() && cli.exon_matrix.is_none() {
             return Ok(());
         }
         anyhow::bail!("--ommverse is required with --data or --exon-matrix");
     };
+    if let Some(gene) = &cli.investigate_gene {
+        let path = cli.data.as_ref().context("--investigate-gene requires --data")?;
+        let data = if path.is_dir() { SingleCellData::from_mtx_dir(path)? }
+            else { SingleCellData::from_h5ad(path)? };
+        let design = experiment::resolve(&data, &cli.out,
+            cli.cluster.as_deref().unwrap_or(&cli.group), &cli.condition,
+            cli.case.as_deref(), cli.control.as_deref(), cli.min_wt_cells,
+            cli.non_interactive)?;
+        let result = regulatory::run(regulatory::Config {
+            gene, index: ommverse_path, data: &data, out: &cli.out,
+            string_info: cli.string_info.as_deref().context("--string-info required")?,
+            string_links: cli.string_links.as_deref().context("--string-links required")?,
+            cluster: cli.cluster.as_deref().unwrap_or(&cli.group),
+            condition: &cli.condition,
+            cases: &design.cases.join(","),
+            controls: &design.controls.join(","),
+            effect_cluster: cli.effect_cluster,
+            co_variant: &cli.co_variant_clusters,
+            min_score: cli.string_min_score,
+            min_wt_cells: cli.min_wt_cells,
+            ai_development: cli.ai, ai_model: &cli.model, ai_url: &cli.ollama_url,
+        });
+        result?;
+        experiment::record_references(&cli.out)?;
+        return Ok(());
+    }
     if let Some(data_path) = cli.data.as_ref() {
+        if cli.ai || cli.ask.is_some() {
+            let data = if data_path.is_dir() {
+                SingleCellData::from_mtx_dir(data_path)
+            } else if data_path.extension().is_some_and(|ext| ext == "h5ad") {
+                SingleCellData::from_h5ad(data_path)
+            } else {
+                anyhow::bail!("--data must be an H5AD file or sc-analysis MEX directory");
+            }.with_context(|| format!("loading {}", data_path.display()))?;
+            // Validate the reference path here; expression tools do not yet use its contents.
+            anyhow::ensure!(ommverse_path.exists(), "Ommverse reference not found: {}", ommverse_path.display());
+            return ai::investigate(&data, &cli.group, &cli.out, &cli.model, &cli.ollama_url, cli.ask.as_deref());
+        }
 
-        let data = SingleCellData::from_mtx_dir(data_path)
+        let data = if data_path.is_dir() {
+            SingleCellData::from_mtx_dir(data_path)
+        } else if data_path.extension().is_some_and(|ext| ext == "h5ad") {
+            SingleCellData::from_h5ad(data_path)
+        } else {
+            anyhow::bail!(
+                "--data must be an H5AD file or sc-analysis MEX directory: {}",
+                data_path.display()
+            );
+        }
             .with_context(|| format!("loading single-cell data {}", data_path.display()))?;
 
         run_lights(
@@ -143,6 +432,7 @@ fn main() -> Result<()> {
             cli.hmm_holdout_tech.as_deref(),
         )
     } else if let Some(exon_path) = cli.exon_matrix.as_ref() {
+        anyhow::ensure!(!cli.ai && cli.ask.is_none(), "AI investigation currently requires --data");
         if cli.hmm_holdout_tech.is_some() {
             anyhow::bail!("--hmm-holdout-tech is automatic with --exon-matrix (pseudo_deep)");
         }
@@ -200,7 +490,7 @@ fn main() -> Result<()> {
 
 fn run_lights(
     cli: &Cli,
-    ommverse_path: &PathBuf,
+    ommverse_path: &Path,
     data: SingleCellData,
     group_column: &str,
     holdout_tech: Option<&str>,
@@ -1427,4 +1717,70 @@ fn transition_count_chr(states: &[StateId], segments: &[HmmSegment]) -> usize {
         .zip(segments.windows(2))
         .filter(|(state, seg)| seg[0].chromosome == seg[1].chromosome && state[0] != state[1])
         .count()
+}
+
+/// Inspect saved evidence; never recalculate module assignments or expression effects.
+fn inspect_results(args: &InspectResultsCli) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+    fn table(path: &Path) -> Result<(Vec<String>, Vec<Vec<String>>)> {
+        let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        let mut lines = BufReader::new(file).lines();
+        let header = lines.next().context("empty TSV")??
+            .split('\t').map(str::to_owned).collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        for (i, line) in lines.enumerate() {
+            let row = line?.split('\t').map(str::to_owned).collect::<Vec<_>>();
+            anyhow::ensure!(row.len() == header.len(),
+                "{}: line {} has {} columns, expected {}", path.display(), i + 2, row.len(), header.len());
+            rows.push(row);
+        }
+        Ok((header, rows))
+    }
+    fn col(header: &[String], name: &str) -> Result<usize> {
+        header.iter().position(|h| h == name)
+            .with_context(|| format!("missing required column {name}"))
+    }
+    let (mh, modules) = table(&args.results.join("effect_modules.tsv"))?;
+    let mi = col(&mh, "module")?;
+    let gi = col(&mh, "genes")?;
+    println!("Module effects (mean gene log2(case/control) by population):");
+    println!("{}", mh.join("\t"));
+    let mut found = false;
+    for row in &modules {
+        if args.module.is_some_and(|id| row[mi] != id.to_string()) { continue; }
+        found = true;
+        println!("{}", row.join("\t"));
+    }
+    anyhow::ensure!(found, "module {:?} not found", args.module);
+    let (gh, genes) = table(&args.results.join("effect_clusters.tsv"))?;
+    let gene_i = col(&gh, "gene")?;
+    let module_i = col(&gh, "effect_cluster")?;
+    let cluster_i = col(&gh, "cluster")?;
+    let effect_i = col(&gh, "log2_ratio")?;
+    for name in ["case_n", "control_n", "case_mean", "control_mean", "case_detected", "control_detected"] {
+        col(&gh, name)?;
+    }
+    let mut grouped: BTreeMap<(usize, String), Vec<&Vec<String>>> = BTreeMap::new();
+    for row in &genes {
+        let id: usize = row[module_i].parse().with_context(|| format!("invalid module ID for {}", row[gene_i]))?;
+        if args.module.is_some_and(|selected| selected != id) { continue; }
+        grouped.entry((id, row[cluster_i].clone())).or_default().push(row);
+    }
+    for ((id, cluster), mut rows) in grouped {
+        rows.sort_by(|a,b| {
+            let ae = a[effect_i].parse::<f64>().unwrap_or(0.0).abs();
+            let be = b[effect_i].parse::<f64>().unwrap_or(0.0).abs();
+            be.total_cmp(&ae).then_with(|| a[gene_i].cmp(&b[gene_i]))
+        });
+        let count = rows.len();
+        println!("\nModule {id}, population {cluster}: {count} genes (ranked by absolute log2 effect)");
+        println!("{}", gh.join("\t"));
+        for row in rows.into_iter().take(if args.top == 0 { count } else { args.top }) {
+            println!("{}", row.join("\t"));
+        }
+    }
+    println!("\nNote: these are existing gene-level means and effects; per-gene SD was not saved in this investigation.");
+    println!("Module numbers are local to each investigation and are not matched across datasets.");
+    let _ = gi;
+    Ok(())
 }

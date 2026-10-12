@@ -5,19 +5,20 @@
 //! summaries and linkage counters, then drops the raw sequence, qualities and
 //! mapper geometry before reading the next batch.
 
+use run_stats::RunStats;
 use crate::index::{Chain, SegmentId, SegmentKind, VdjIndex};
 use rayon::prelude::*;
+use rust_htslib::bam::record::Cigar;
 use scdata::CellHash;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 mod evidence;
 mod summary;
 
 pub use evidence::{RawEvidenceDisplay, SummarizedEvidenceDisplay};
-use summary::{flush_refinement_buffers, merge_summary_batch};
-pub use summary::{
-    summarize_chain_work, ChainSummaryWork, GermlineAnchor, ReceptorSequenceEvidence,
-};
+use summary::{flush_refinement_buffers, merge_completed_models, ChainSummaryWork};
+pub use summary::{GermlineAnchor, ReceptorSequenceEvidence};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EvidenceId {
@@ -66,6 +67,102 @@ pub struct MapperEvidence {
     pub alignment: AlignmentGeometry,
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawBamFeatureEvidence {
+    pub id: EvidenceId,
+    pub umi: Option<Vec<u8>>,
+    pub tid: i32,
+    pub pos: u32,
+    pub cigar: Vec<Cigar>,
+    pub bases: Vec<u8>,
+    pub qualities: Vec<u8>,
+    pub is_last_in_template: bool,
+    pub is_reverse: bool,
+    pub is_secondary: bool,
+    pub is_supplementary: bool,
+    pub mapq: u8,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RawCellEvidence {
+    pub records: Vec<RawBamFeatureEvidence>,
+}
+
+const UMI_REGION_JOIN_GAP: u32 = 8;
+
+#[derive(Debug, Clone, Default)]
+struct UmiRegionState {
+    regions: HashMap<Vec<u8>, Vec<(u32, u32)>>,
+}
+
+impl UmiRegionState {
+    #[inline]
+    fn read_span(read: &RawBamFeatureEvidence) -> (u32, u32) {
+        let start = read.pos;
+        let end = start.saturating_add(read.bases.len() as u32);
+        (start, end)
+    }
+
+    /// Add one observed UMI span. Regions separated by at most 8 bp are treated
+    /// as connected informative territory; larger holes remain explicit.
+    fn add_span(regions: &mut Vec<(u32, u32)>, start: u32, end: u32) {
+        let mut merged_start = start;
+        let mut merged_end = end;
+        regions.retain(|&(known_start, known_end)| {
+            let connected = known_start <= merged_end.saturating_add(UMI_REGION_JOIN_GAP)
+                && merged_start <= known_end.saturating_add(UMI_REGION_JOIN_GAP);
+            if connected {
+                merged_start = merged_start.min(known_start);
+                merged_end = merged_end.max(known_end);
+                false
+            } else {
+                true
+            }
+        });
+        regions.push((merged_start, merged_end));
+    }
+
+    fn absorb_read(&mut self, read: &RawBamFeatureEvidence) {
+        let Some(umi) = read.umi.as_ref() else { return; };
+        let (start, end) = Self::read_span(read);
+        Self::add_span(self.regions.entry(umi.clone()).or_default(), start, end);
+    }
+}
+
+impl RawCellEvidence {
+    /// Copy-on-first-touch UMI reduction against persistent genomic territory.
+    /// Only a touched UMI's tiny region list is cloned. Reads wholly contained
+    /// in already observed territory are discarded before receptor/model work.
+    /// Reads that extend, bridge <=8 bp, or create a new region are retained.
+    fn retain_umi_region_extensions(&mut self, persistent: Option<&UmiRegionState>) {
+        let mut touched = HashMap::<Vec<u8>, Vec<(u32, u32)>>::new();
+
+        self.records.retain(|read| {
+            let Some(umi) = read.umi.as_ref() else {
+                return true;
+            };
+            let (start, end) = UmiRegionState::read_span(read);
+            let regions = touched.entry(umi.clone()).or_insert_with(|| {
+                persistent
+                    .and_then(|state| state.regions.get(umi))
+                    .cloned()
+                    .unwrap_or_default()
+            });
+
+            if regions
+                .iter()
+                .any(|&(known_start, known_end)| known_start <= start && end <= known_end)
+            {
+                return false;
+            }
+
+            UmiRegionState::add_span(regions, start, end);
+            true
+        });
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BamFeatureEvidence {
     pub id: EvidenceId,
@@ -112,127 +209,321 @@ pub struct CellEvidence {
 #[derive(Debug, Default)]
 pub struct CellEvidenceVdj {
     cells: CellHash<CellEvidence>,
-    /// Cells for which broad B-cell discovery already has a depth-complete
-    /// heavy-chain model and a depth-complete light-chain model. These cells
-    /// no longer need additional first-pass model generation.
-    finished_b_cells: HashSet<u64>,
+    /// Incrementally maintained live model count. Batch merges update this from
+    /// local deltas; the hot path never scans the persistent CellHash to count models.
+    live_model_count: usize,
+    /// Number of raw evidence batches consumed; used only for compact telemetry.
+    batch_number: usize,
+    /// Persistent per-cell/per-UMI connected genomic territory. This is a cheap
+    /// pre-model memory: repeated PCR observations that add no new territory can
+    /// be rejected before receptor interpretation.
+    umi_regions: CellHash<UmiRegionState>,
 }
 
 impl CellEvidenceVdj {
     pub fn new() -> Self {
         Self {
             cells: CellHash::new(),
-            finished_b_cells: HashSet::new(),
+            live_model_count: 0,
+            batch_number: 0,
+            umi_regions: CellHash::new(),
         }
     }
 
-    /// Fold a bounded raw-evidence batch into persistent compact state.
-    /// Nothing from `batch` is retained after this function returns.
+    /// Interpret one minimal CellHash BAM batch entirely against fresh batch-local
+    /// model state, then reconcile the resulting compact model tree with persistent
+    /// evidence in one separate bucket-parallel merge. Raw reads never interrogate
+    /// the progressively growing historical model tree.
+    pub fn consume_raw_batch(
+        &mut self,
+        batch: CellHash<RawCellEvidence>,
+        contig_names: &[String],
+        index: &VdjIndex,
+        min_overlap: usize,
+    ) -> (usize, RunStats) {
+        self.batch_number = self.batch_number.saturating_add(1);
+        let batch_number = self.batch_number;
+        let input_records: usize = batch
+            .buckets()
+            .iter()
+            .flat_map(|bucket| bucket.values())
+            .map(|cell| cell.records.len())
+            .sum();
+
+        // Phase 1: reject same-UMI observations that add no genomic territory.
+        // Persistent state is read-only here. Each worker clones only the tiny
+        // region list for a UMI on first touch, then mutates that local copy.
+        let umi_reduce_started = Instant::now();
+        let reduced_batch = batch.par_map_owned_with(&self.umi_regions, |raw_bucket, region_bucket| {
+            let mut reduced_bucket = HashMap::with_capacity(raw_bucket.len());
+            for (cell_id, mut raw_cell) in raw_bucket {
+                raw_cell.retain_umi_region_extensions(region_bucket.get(&cell_id));
+                if !raw_cell.records.is_empty() {
+                    reduced_bucket.insert(cell_id, raw_cell);
+                }
+            }
+            reduced_bucket
+        });
+
+        let umi_reduce_elapsed = umi_reduce_started.elapsed();
+        let reduced_records: usize = reduced_batch
+            .buckets()
+            .iter()
+            .flat_map(|bucket| bucket.values())
+            .map(|cell| cell.records.len())
+            .sum();
+        let umi_contained_skips = input_records.saturating_sub(reduced_records);
+
+        // Persist only information that survived the local reduction. Replaying
+        // those retained spans against the global state reproduces the worker's
+        // copy-on-first-touch result without sharing mutable state in Rayon.
+        let umi_merge_started = Instant::now();
+        let _ = self.umi_regions.par_merge_with_mapping(
+            &reduced_batch,
+            |region_bucket, raw_bucket, _local_stats| {
+                for (&cell_id, raw_cell) in raw_bucket {
+                    let state = region_bucket.entry(cell_id).or_default();
+                    for read in &raw_cell.records {
+                        state.absorb_read(read);
+                    }
+                }
+            },
+        );
+
+        let umi_merge_elapsed = umi_merge_started.elapsed();
+
+        // Phase 2: build a completely independent model tree from only reads that
+        // add molecule territory. No historical depth/saturation analysis is used.
+        let model_build_started = Instant::now();
+        let empty_context = CellHash::<()>::new();
+        let (batch_models, mut batch_stats) = reduced_batch.par_map_owned_with_stats(
+            &empty_context,
+            |raw_bucket, _unused_bucket, local_stats| {
+            let mut model_bucket = HashMap::with_capacity(raw_bucket.len());
+            for (cell_id, raw_cell) in raw_bucket {
+                let features: Vec<BamFeatureEvidence> = raw_cell
+                    .records
+                    .into_iter()
+                    .filter_map(|raw| interpret_raw_feature(raw, contig_names, index))
+                    .collect();
+                if features.is_empty() {
+                    continue;
+                }
+
+                let feature_refs: Vec<_> = features.iter().collect();
+                let mut cell = CellEvidence::default();
+                cell.consume_compact_metadata(&feature_refs, index);
+
+                for chain in Chain::ALL {
+                    let chain_features: Vec<_> = feature_refs
+                        .iter()
+                        .copied()
+                        .filter(|feature| {
+                            feature_has_rearrangement_segment(feature, index, chain)
+                        })
+                        .collect();
+                    if chain_features.is_empty() {
+                        continue;
+                    }
+                    let summaries = ChainSummaryWork {
+                        features: &chain_features,
+                        index,
+                        chain,
+                        min_overlap,
+                    }
+                    .summarize(local_stats);
+                    if !summaries.is_empty() {
+                        cell.summaries.insert(chain, summaries);
+                    }
+                }
+
+                model_bucket.insert(cell_id, cell);
+            }
+            model_bucket
+        });
+
+        let model_build_elapsed = model_build_started.elapsed();
+        let batch_model_count: usize = batch_models
+            .buckets()
+            .iter()
+            .flat_map(|bucket| bucket.values())
+            .map(CellEvidence::summary_count)
+            .sum();
+
+        // Phase 3: merge compact batch-local models into the persistent tree once.
+        // UMI provenance lives on ReceptorSequenceEvidence and is merged by the
+        // existing summary merge machinery, so local collapsing does not turn PCR
+        // copies into independent molecule support.
+        let model_merge_started = Instant::now();
+        let merge_mapping = self.cells.par_merge_owned_with_mapping(
+            batch_models,
+            |self_bucket, model_bucket, mapping| {
+                for (cell_id, delta) in model_bucket {
+                    mapping.ok_reads = mapping
+                        .ok_reads
+                        .saturating_add(delta.stats.accepted_records);
+                    let cell = self_bucket.entry(cell_id).or_default();
+                    let before = cell.summary_count();
+                    cell.merge_compact_delta(delta, index, min_overlap, mapping);
+                    let after = cell.summary_count();
+                    if after >= before {
+                        mapping.report_n("vdj.batch.models_added", after - before);
+                    } else {
+                        mapping.report_n("vdj.batch.models_removed", before - after);
+                    }
+                }
+            },
+        );
+
+        let model_merge_elapsed = model_merge_started.elapsed();
+        let models_merged = merge_mapping.get_issue_count("vdj.model_merge.merged");
+        let models_inserted = merge_mapping.get_issue_count("vdj.model_merge.inserted");
+        let merge_accounted = models_merged.saturating_add(models_inserted);
+        let merge_us_per_merged = if models_merged == 0 {
+            0.0
+        } else {
+            model_merge_elapsed.as_secs_f64() * 1_000_000.0 / models_merged as f64
+        };
+        debug_assert_eq!(
+            batch_model_count, merge_accounted,
+            "every completed batch model must be either inserted or merged"
+        );
+
+        let models_added = merge_mapping.get_issue_count("vdj.batch.models_added");
+        let models_removed = merge_mapping.get_issue_count("vdj.batch.models_removed");
+        self.live_model_count = self
+            .live_model_count
+            .saturating_add(models_added)
+            .saturating_sub(models_removed);
+        batch_stats.merge(&merge_mapping);
+
+
+        batch_stats
+            .reads_log
+            .insert("vdj.umi_region.contained_skips".to_string(), umi_contained_skips);
+        batch_stats.add_timer_duration("vdj.batch.umi_reduce", umi_reduce_elapsed);
+        batch_stats.add_timer_duration("vdj.batch.umi_persist", umi_merge_elapsed);
+        batch_stats.add_timer_duration("vdj.batch.model_build", model_build_elapsed);
+        batch_stats.add_timer_duration("vdj.batch.model_merge", model_merge_elapsed);
+
+        if batch_number == 1 {
+            eprintln!(
+                "[nelrune vdj] batch performance\n\
+ batch |      raw | retained |  skipped | incoming | inserted |  merged | build_s | merge_s | us/merge\n\
+-------+----------+----------+----------+----------+----------+---------+---------+---------+---------"
+            );
+        }
+        eprintln!(
+            "{:>6} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>7} | {:>7.3} | {:>7.3} | {:>8.1}",
+            batch_number,
+            input_records,
+            reduced_records,
+            umi_contained_skips,
+            batch_model_count,
+            models_inserted,
+            models_merged,
+            model_build_elapsed.as_secs_f64(),
+            model_merge_elapsed.as_secs_f64(),
+            merge_us_per_merged,
+        );
+
+        (merge_mapping.ok_reads, batch_stats)
+    }
+
+    /// Existing interpreted-evidence entry point retained for unmapped rescue.
     pub fn consume_batch(
         &mut self,
         batch: Vec<(u64, BamFeatureEvidence)>,
         index: &VdjIndex,
         min_overlap: usize,
+        run_stats: &mut RunStats,
     ) {
-        let mut by_cell = HashMap::<u64, Vec<&BamFeatureEvidence>>::new();
-        for (cell_id, feature) in &batch {
-            by_cell.entry(*cell_id).or_default().push(feature);
+        let mut by_cell = CellHash::<Vec<BamFeatureEvidence>>::new();
+        for (cell_id, feature) in batch {
+            by_cell.entry_cell(cell_id).or_default().push(feature);
         }
-
-        // Cell-local batch compaction is the expensive part and cells are
-        // independent. Build one compact delta per cell in parallel, without
-        // touching the persistent CellHash from worker threads.
-        let deltas: Vec<_> = by_cell
-            .into_par_iter()
-            .map(|(cell_id, features)| {
-                let mut delta = CellEvidence::default();
-                delta.consume_compact_metadata(&features, index);
-
-                for chain in Chain::ALL {
-                    let chain_features: Vec<_> = features
-                        .iter()
-                        .copied()
-                        .filter(|feature| feature_has_rearrangement_segment(feature, index, chain))
-                        .collect();
-                    if chain_features.is_empty() {
-                        continue;
+        let batch_stats = self.cells.par_merge_owned_with_mapping(
+            by_cell,
+            |self_bucket, other_bucket, mapping| {
+                for (cell_id, features) in other_bucket {
+                    let refs: Vec<_> = features.iter().collect();
+                    let mut delta = CellEvidence::default();
+                    delta.consume_compact_metadata(&refs, index);
+                    for chain in Chain::ALL {
+                        let chain_features: Vec<_> = refs.iter().copied()
+                            .filter(|feature| feature_has_rearrangement_segment(feature, index, chain))
+                            .collect();
+                        if chain_features.is_empty() { continue; }
+                        let summaries = ChainSummaryWork {
+                            features: &chain_features, index, chain, min_overlap
+                        }.summarize(mapping);
+                        if !summaries.is_empty() { delta.summaries.insert(chain, summaries); }
                     }
-
-                    let batch_summaries = summarize_chain_work(ChainSummaryWork {
-                        features: &chain_features,
-                        index,
-                        chain,
-                        min_overlap,
-                    });
-                    if !batch_summaries.is_empty() {
-                        delta.summaries.insert(chain, batch_summaries);
+                    mapping.ok_reads = mapping.ok_reads.saturating_add(delta.stats.accepted_records);
+                    let cell = self_bucket.entry(cell_id).or_default();
+                    let before = cell.summary_count();
+                    cell.merge_compact_delta(delta, index, min_overlap, mapping );
+                    let after = cell.summary_count();
+                    if after >= before {
+                        mapping.report_n("vdj.batch.models_added", after - before);
+                    } else {
+                        mapping.report_n("vdj.batch.models_removed", before - after);
                     }
                 }
-
-                (cell_id, delta)
-            })
-            .collect();
-
-        // Only compact deltas cross back into the persistent scdata-like
-        // CellHash. This merge is intentionally serial; the expensive raw
-        // read summarization above is already complete and lock-free.
-        for (cell_id, delta) in deltas {
-            let cell = self.cells.entry_cell(cell_id).or_default();
-            cell.merge_compact_delta(delta, index, min_overlap);
-
-            // Once broad discovery has one depth-complete heavy-chain model
-            // and one depth-complete light-chain model, stop spending future
-            // BAM batches on additional first-pass models for this cell. The
-            // later receptor reconstruction/confirmation stages still run on
-            // the evidence already collected.
-            if cell.first_pass_b_cell_complete(index, 3) {
-                self.finished_b_cells.insert(cell_id);
-            }
-        }
-        // `batch` dies here: sequence, qualities, mappings and ref_blocks are
-        // returned to the allocator before the next BAM batch is accumulated.
+            },
+        );
+        self.live_model_count = self
+            .live_model_count
+            .saturating_add(batch_stats.get_issue_count("vdj.batch.models_added"))
+            .saturating_sub(batch_stats.get_issue_count("vdj.batch.models_removed"));
+        run_stats.merge(&batch_stats);
     }
 
     /// Finalize every partial per-model refinement buffer after the complete
     /// BAM has been consumed. This is intentionally separate from consume_batch:
     /// BAM/Rayon transport boundaries must not force 1..19-read refinements.
-    pub fn flush_pending_refinement(&mut self, index: &VdjIndex, min_overlap: usize) {
-        self.cells
+    pub fn flush_pending_refinement(
+        &mut self,
+        index: &VdjIndex,
+        min_overlap: usize,
+        run_stats: &mut RunStats,
+    ) {
+        let stats = self
+            .cells
             .buckets_mut()
             .par_iter_mut()
-            .for_each(|bucket| {
+            .map(|bucket| {
+                let mut local_stats = RunStats::new(None, 0.0, 0);
                 for cell in bucket.values_mut() {
                     for summaries in cell.summaries.values_mut() {
-                        flush_refinement_buffers(summaries, index, min_overlap, true);
+                        flush_refinement_buffers(
+                            summaries, index, min_overlap, true, &mut local_stats,
+                        );
                     }
                 }
-            });
+                local_stats
+            })
+            .reduce(
+                || RunStats::new(None, 0.0, 0),
+                |mut stats, local_stats| {
+                    stats.merge(&local_stats);
+                    stats
+                },
+            );
+        run_stats.merge(&stats);
     }
 
     pub fn get(&self, cell_id: &u64) -> Option<&CellEvidence> {
         self.cells.get_cell(cell_id)
     }
 
-    /// True once the initial broad B-cell discovery pass has enough evidence
-    /// for at least one heavy-chain and one light-chain receptor model.
-    pub fn first_pass_b_cell_complete(&self, cell_id: u64) -> bool {
-        self.finished_b_cells.contains(&cell_id)
-    }
-
-    pub fn first_pass_finished_for_segments(
-        &self,
-        cell_id: u64,
-        chain: Chain,
-        index: &VdjIndex,
-        segment_ids: &[SegmentId],
-        min_depth: u16,
-    ) -> bool {
-        self.get(&cell_id).is_some_and(|cell| {
-            cell.first_pass_finished_for_segments(chain, index, segment_ids, min_depth)
-        })
-    }
     pub fn cell_count(&self) -> usize {
         self.cells.cell_count()
+    }
+
+    /// O(1) live model count maintained by batch-local delta merges.
+    pub fn live_model_count(&self) -> usize {
+        self.live_model_count
     }
     pub fn cells(&self) -> impl Iterator<Item = (u64, &CellEvidence)> {
         self.cells
@@ -246,15 +537,6 @@ impl CellEvidenceVdj {
 }
 
 impl CellEvidence {
-    fn first_pass_b_cell_complete(&self, index: &VdjIndex, min_depth: u16) -> bool {
-        let chain_complete = |chain| {
-            self.summaries_for_chain(chain)
-                .iter()
-                .any(|summary| summary.first_pass_finished(index, min_depth))
-        };
-        chain_complete(Chain::Igh) && (chain_complete(Chain::Igk) || chain_complete(Chain::Igl))
-    }
-
     pub fn chains(&self, _index: &VdjIndex) -> Vec<Chain> {
         let mut out: Vec<_> = self.summaries.keys().copied().collect();
         out.sort();
@@ -263,27 +545,6 @@ impl CellEvidence {
 
     pub fn summaries_for_chain(&self, chain: Chain) -> &[ReceptorSequenceEvidence] {
         self.summaries.get(&chain).map(Vec::as_slice).unwrap_or(&[])
-    }
-
-    /// First-pass admission test for one mapped BAM record.  This is
-    /// receptor-component aware rather than a whole-locus switch so a second
-    /// V/J recombination at the same locus can still be discovered.
-    pub fn first_pass_finished_for_segments(
-        &self,
-        chain: Chain,
-        index: &VdjIndex,
-        segment_ids: &[SegmentId],
-        min_depth: u16,
-    ) -> bool {
-        let matching: Vec<_> = self
-            .summaries_for_chain(chain)
-            .iter()
-            .filter(|summary| summary.matches_vj_segments(index, segment_ids))
-            .collect();
-        !matching.is_empty()
-            && matching
-                .into_iter()
-                .all(|summary| summary.first_pass_finished(index, min_depth))
     }
 
     pub fn summary_count(&self) -> usize {
@@ -369,10 +630,18 @@ impl CellEvidence {
         mut delta: CellEvidence,
         index: &VdjIndex,
         min_overlap: usize,
+        stats: &mut RunStats,
     ) {
         for (chain, batch_summaries) in delta.summaries.drain() {
             let summaries = self.summaries.entry(chain).or_default();
-            merge_summary_batch(summaries, batch_summaries, index, min_overlap);
+            merge_completed_models(
+                summaries,
+                batch_summaries,
+                index,
+                min_overlap,
+                stats,
+                true,
+            );
         }
 
         for (signature, count) in delta.fragment_link_support.drain() {
@@ -527,6 +796,78 @@ impl CellEvidence {
             }
         }
     }
+}
+
+fn interpret_raw_feature(
+    raw: RawBamFeatureEvidence,
+    contig_names: &[String],
+    index: &VdjIndex,
+) -> Option<BamFeatureEvidence> {
+    let chr = contig_names.get(raw.tid as usize)?;
+    let blocks = aligned_blocks_from_cigar(raw.pos, &raw.cigar);
+    let segment_ids = index.overlapping(chr, &blocks);
+    let intronic_constant_segments = index.intronic_constant_overlapping(chr, &blocks, 8);
+    let rearrangement_chains: HashSet<_> = segment_ids
+        .iter()
+        .filter_map(|id| index.segment(*id))
+        .filter(|segment| segment.kind != SegmentKind::C)
+        .map(|segment| segment.chain)
+        .collect();
+    if rearrangement_chains.is_empty() && intronic_constant_segments.is_empty() {
+        return None;
+    }
+
+    let geometry = AlignmentGeometry {
+        tid: raw.tid,
+        start: blocks.first().map_or(raw.pos, |x| x.0),
+        end: blocks.last().map_or(raw.pos, |x| x.1),
+        is_reverse: raw.is_reverse,
+        is_secondary: raw.is_secondary,
+        is_supplementary: raw.is_supplementary,
+        mapq: raw.mapq,
+        ref_blocks: blocks,
+    };
+    let mappings = segment_ids
+        .into_iter()
+        .filter(|segment_id| index.segment(*segment_id).is_some_and(|segment| {
+            segment.kind == SegmentKind::C || rearrangement_chains.contains(&segment.chain)
+        }))
+        .map(|segment_id| MapperEvidence { segment_id, alignment: geometry.clone() })
+        .collect();
+
+    let mut sequence = BamFeatureSequenceParts::default();
+    if !rearrangement_chains.is_empty() {
+        let part = SequencePart { bases: raw.bases, qualities: raw.qualities };
+        if raw.is_last_in_template { sequence.r2 = Some(part); } else { sequence.r1 = Some(part); }
+    }
+    Some(BamFeatureEvidence {
+        id: raw.id, sequence, umi: raw.umi, mappings, intronic_constant_segments
+    })
+}
+
+fn aligned_blocks_from_cigar(start: u32, cigar: &[Cigar]) -> Vec<(u32, u32)> {
+    let mut ref_pos = start;
+    let mut out = Vec::new();
+    let mut block_start = None;
+    for c in cigar {
+        match *c {
+            Cigar::Match(n) | Cigar::Equal(n) | Cigar::Diff(n) => {
+                if block_start.is_none() { block_start = Some(ref_pos); }
+                ref_pos = ref_pos.saturating_add(n);
+            }
+            Cigar::Del(n) => {
+                if block_start.is_none() { block_start = Some(ref_pos); }
+                ref_pos = ref_pos.saturating_add(n);
+            }
+            Cigar::RefSkip(n) => {
+                if let Some(a) = block_start.take() { if a < ref_pos { out.push((a, ref_pos)); } }
+                ref_pos = ref_pos.saturating_add(n);
+            }
+            Cigar::Ins(_) | Cigar::SoftClip(_) | Cigar::HardClip(_) | Cigar::Pad(_) => {}
+        }
+    }
+    if let Some(a) = block_start { if a < ref_pos { out.push((a, ref_pos)); } }
+    out
 }
 
 fn feature_has_rearrangement_segment(

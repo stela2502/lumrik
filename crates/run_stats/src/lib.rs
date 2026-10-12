@@ -66,9 +66,9 @@ impl SignedHistogram {
     }
 }
 
-/// MappingInfo captures all mapping data and is a way to easily copy this data over multiple analysis runs.
+/// RunStats captures all mapping data and is a way to easily copy this data over multiple analysis runs.
 #[derive(Debug)]
-pub struct MappingInfo {
+pub struct RunStats {
     /// reads that did not pass the filters
     pub quality: usize,
     pub length: usize,
@@ -117,7 +117,7 @@ pub struct MappingInfo {
     pub hist: Vec<usize>,
 }
 
-impl fmt::Display for MappingInfo {
+impl fmt::Display for RunStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // --- helpers ---
         fn pct(n: usize, d: usize) -> f32 {
@@ -128,7 +128,7 @@ impl fmt::Display for MappingInfo {
             }
         }
         fn dur_str(d: Duration) -> String {
-            let (h, m, s, ms) = MappingInfo::split_duration(d);
+            let (h, m, s, ms) = RunStats::split_duration(d);
             format!("{h} h {m} min {s} sec {ms} ms")
         }
 
@@ -140,7 +140,7 @@ impl fmt::Display for MappingInfo {
         let unknown = self.quality + self.length + self.n_s + self.poly_a;
 
         // Header
-        writeln!(f, "MappingInfo")?;
+        writeln!(f, "RunStats")?;
         writeln!(f, "  started: {}", {
             let started: DateTime<Utc> = self.absolute_start.into();
             started.to_string()
@@ -148,7 +148,7 @@ impl fmt::Display for MappingInfo {
         writeln!(f)?;
 
         // Core counters. Only print this legacy summary when at least one
-        // of its counters is actually populated. Some tools use MappingInfo
+        // of its counters is actually populated. Some tools use RunStats
         // purely for named/read-type counters and would otherwise get a
         // misleading block of zeros just because `total` is known.
         let has_core_counts = self.cellular_reads > 0
@@ -428,7 +428,7 @@ impl fmt::Display for MappingInfo {
     }
 }
 
-impl MappingInfo {
+impl RunStats {
     pub fn new(log_writer: Option<File>, min_quality: f32, max_reads: usize) -> Self {
         let absolute_start = SystemTime::now();
         let single_processor_time = Duration::new(0, 0);
@@ -550,7 +550,7 @@ impl MappingInfo {
         self.tmp_counter = Some(SystemTime::now());
     }
     pub fn stop_ticker(&mut self) -> (u128, u128, u128, u128) {
-        let ret = MappingInfo::split_duration(
+        let ret = RunStats::split_duration(
             self.tmp_counter
                 .unwrap_or(SystemTime::now())
                 .elapsed()
@@ -582,7 +582,7 @@ impl MappingInfo {
 
     pub fn elapsed_time_split(&self) -> (u128, u128, u128, u128) {
         let elapsed = self.absolute_start.elapsed().unwrap();
-        MappingInfo::split_duration(elapsed)
+        RunStats::split_duration(elapsed)
     }
 
     pub fn now(&self) -> String {
@@ -602,7 +602,7 @@ impl MappingInfo {
 
     /// Add `count` observations to a named report counter. This is useful for
     /// batched/parallel code that already knows the multiplicity and should not
-    /// loop merely to update MappingInfo.
+    /// loop merely to update RunStats.
     pub fn report_n(&mut self, info: impl Into<String>, count: usize) {
         *self.reads_log.entry(info.into()).or_insert(0) += count;
     }
@@ -684,7 +684,7 @@ impl MappingInfo {
         formatted_entries
     }
 
-    pub fn merge(&mut self, other: &MappingInfo) {
+    pub fn merge(&mut self, other: &RunStats) {
         self.no_sample += other.no_sample;
         self.no_data += other.no_data;
         //unknown is defined without multiprocessor support
@@ -832,10 +832,10 @@ mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
 
-    fn base(mi_total: usize) -> MappingInfo {
-        // Build a MappingInfo that is deterministic enough for string assertions
+    fn base(mi_total: usize) -> RunStats {
+        // Build a RunStats that is deterministic enough for string assertions
         // (absolute_start is set in the past so overall elapsed is non-zero).
-        let mut m = MappingInfo::new(None, 0.0, 0);
+        let mut m = RunStats::new(None, 0.0, 0);
         m.total = mi_total;
 
         // Make timings deterministic-ish (overall is variable; we won't assert its value)
@@ -852,8 +852,8 @@ mod tests {
     }
 
     #[test]
-    fn mapping_info_display_full_layout_smoke_prints_every_section() {
-        let mut mi = MappingInfo::new(None, 0.9, 10_000_000);
+    fn run_stats_display_full_layout_smoke_prints_every_section() {
+        let mut mi = RunStats::new(None, 0.9, 10_000_000);
 
         // Make totals non-zero so "Counts" is printed
         mi.total = 1_234_567;
@@ -903,7 +903,7 @@ mod tests {
         println!("{rendered}");
 
         // ----- sections exist -----
-        assert!(rendered.contains("MappingInfo\n"));
+        assert!(rendered.contains("RunStats\n"));
         assert!(rendered.contains("  started: "));
         assert!(rendered.contains("\nCounts\n"));
         assert!(rendered.contains("\nRead types (n=1,234,567)\n"));
@@ -967,7 +967,7 @@ mod tests {
 
     #[test]
     fn read_type_fractions_use_reads_processed_counter_as_denominator() {
-        let mut mi = MappingInfo::new(None, 0.0, 0);
+        let mut mi = RunStats::new(None, 0.0, 0);
         mi.report_n("reads_processed", 1_000);
         mi.report_n("unique_genomic", 250);
         mi.report_n("duplicate", 100);
@@ -985,7 +985,7 @@ mod tests {
 
     #[test]
     fn read_type_fractions_use_bam_records_seen_when_no_fastq_total_exists() {
-        let mut mi = MappingInfo::new(None, 0.0, 0);
+        let mut mi = RunStats::new(None, 0.0, 0);
         mi.report_n("bam_records_seen", 2_000);
         mi.report_n("unmapped", 500);
 
@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn named_timers_accumulate_and_are_independent() {
-        let mut mi = MappingInfo::new(None, 0.0, 0);
+        let mut mi = RunStats::new(None, 0.0, 0);
 
         mi.start_timer("read_fastq");
         std::thread::sleep(Duration::from_millis(2));
@@ -1021,8 +1021,8 @@ mod tests {
 
     #[test]
     fn merge_accumulates_named_timings() {
-        let mut left = MappingInfo::new(None, 0.0, 0);
-        let mut right = MappingInfo::new(None, 0.0, 0);
+        let mut left = RunStats::new(None, 0.0, 0);
+        let mut right = RunStats::new(None, 0.0, 0);
 
         left.add_timer_duration("read_fastq", Duration::from_millis(10));
         right.add_timer_duration("read_fastq", Duration::from_millis(15));
@@ -1036,7 +1036,7 @@ mod tests {
 
     #[test]
     fn display_prints_named_timings_in_stable_order() {
-        let mut mi = MappingInfo::new(None, 0.0, 0);
+        let mut mi = RunStats::new(None, 0.0, 0);
         mi.add_timer_duration("write_star", Duration::from_millis(3));
         mi.add_timer_duration("read_fastq", Duration::from_millis(5));
 
@@ -1050,11 +1050,11 @@ mod tests {
 
     #[test]
     fn signed_histogram_is_bounded_and_merges() {
-        let mut a = MappingInfo::new(None, 0.0, 0);
+        let mut a = RunStats::new(None, 0.0, 0);
         a.observe_signed_histogram("splice donor offset [bp]", -1, -2, 2);
         a.observe_signed_histogram("splice donor offset [bp]", 9, -2, 2);
 
-        let mut b = MappingInfo::new(None, 0.0, 0);
+        let mut b = RunStats::new(None, 0.0, 0);
         b.observe_signed_histogram("splice donor offset [bp]", -1, -2, 2);
         b.observe_signed_histogram("splice donor offset [bp]", -9, -2, 2);
         a.merge(&b);

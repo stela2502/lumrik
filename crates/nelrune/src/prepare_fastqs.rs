@@ -92,9 +92,9 @@ pub fn run() -> Result<()> {
     let inputs: Vec<_> = args.r1.into_iter().zip(args.r2).collect();
     let shard_dir = args.outpath.join("prepared_fastqs");
     let shards = normalizer.prepare_fastqs_sharded(&inputs, &shard_dir, |stats| {
-        progress.update_from_mapping_info(stats);
+        progress.update_from_run_stats(stats);
     })?;
-    progress.update_from_mapping_info(normalizer.stats());
+    progress.update_from_run_stats(normalizer.stats());
 
     let feature_path = args.outpath.join("feature_observations.bin");
     normalizer

@@ -11,6 +11,8 @@ use rayon::prelude::*;
 use lumrik_status::{memory_status, public_hostname, spawn_status_server, ServerContent, ServerSnapshot, StatusMetric, StatusSection};
 use ndarray::Array2;
 use sc_primer::{Chemistry, PrimerDetector};
+use sc_vdj::RecombinationId;
+use std::str::FromStr;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{File, create_dir_all};
@@ -84,6 +86,13 @@ struct ClonoMapStatus {
     hc_cells: usize,
     families: usize,
     lc_clones: usize,
+    hc_only_attached: usize,
+    hc_only_ambiguous: usize,
+    hc_only_unresolved: usize,
+    lc_only_attached: usize,
+    lc_only_ambiguous: usize,
+    lc_only_unresolved: usize,
+    top_lc_rescues: Vec<String>,
     vault: Option<String>,
     vault_models: Option<usize>,
 }
@@ -102,6 +111,13 @@ impl ClonoMapStatus {
             hc_cells: 0,
             families: 0,
             lc_clones: 0,
+            hc_only_attached: 0,
+            hc_only_ambiguous: 0,
+            hc_only_unresolved: 0,
+            lc_only_attached: 0,
+            lc_only_ambiguous: 0,
+            lc_only_unresolved: 0,
+            top_lc_rescues: Vec::new(),
             vault: args.vault.as_ref().map(|p| p.display().to_string()),
             vault_models: None,
         }
@@ -127,7 +143,16 @@ impl ServerContent for ClonoMapStatus {
             StatusMetric::new("Qualified/final HC cells", self.hc_cells.to_string()),
             StatusMetric::new("HC families", self.families.to_string()),
             StatusMetric::new("LC clones", self.lc_clones.to_string()),
+            StatusMetric::new("HC-only attached to clone", self.hc_only_attached.to_string()),
+            StatusMetric::new("HC-only ambiguous", self.hc_only_ambiguous.to_string()),
+            StatusMetric::new("HC-only unresolved", self.hc_only_unresolved.to_string()),
+            StatusMetric::new("LC-only attached to clone", self.lc_only_attached.to_string()),
+            StatusMetric::new("LC-only ambiguous", self.lc_only_ambiguous.to_string()),
+            StatusMetric::new("LC-only unresolved", self.lc_only_unresolved.to_string()),
         ];
+        for (rank, summary) in self.top_lc_rescues.iter().enumerate() {
+            run.push(StatusMetric::new(format!("Top rescued LC #{}", rank + 1), summary.clone()));
+        }
         if let Some(vault) = &self.vault {
             run.push(StatusMetric::new("Model vault", vault.clone()));
             run.push(StatusMetric::new(
@@ -179,6 +204,95 @@ struct CallRow {
 struct UnassignedCell {
     cell: CellReceptor,
     from_family: String,
+}
+
+#[derive(Debug, Clone)]
+struct LightOnlyCell {
+    cell: String,
+    evidence_reads: usize,
+    support_umis: usize,
+}
+
+#[derive(Debug, Clone)]
+struct LightOnlyGroup {
+    receptor: Receptor,
+    cells: Vec<LightOnlyCell>,
+}
+
+#[derive(Debug, Clone)]
+struct LightOnlyAssignment {
+    family: String,
+    clone_id: String,
+    receptor: Receptor,
+    cells: Vec<LightOnlyCell>,
+}
+
+fn mean_sd(values: &[usize]) -> (f64, f64) {
+    if values.is_empty() {
+        return (0.0, 0.0);
+    }
+    let n = values.len() as f64;
+    let mean = values.iter().map(|&v| v as f64).sum::<f64>() / n;
+    let variance = values
+        .iter()
+        .map(|&v| {
+            let d = v as f64 - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / n;
+    (mean, variance.sqrt())
+}
+
+fn lc_rescue_summary(assignment: &LightOnlyAssignment, total: usize) -> String {
+    let reads: Vec<usize> = assignment.cells.iter().map(|c| c.evidence_reads).collect();
+    let umis: Vec<usize> = assignment.cells.iter().map(|c| c.support_umis).collect();
+    let (read_mean, read_sd) = mean_sd(&reads);
+    let (umi_mean, umi_sd) = mean_sd(&umis);
+    let share = if total == 0 { 0.0 } else { 100.0 * assignment.cells.len() as f64 / total as f64 };
+    format!(
+        "{} cells ({share:.1}%), evidence reads {read_mean:.2} +/- {read_sd:.2}, UMIs {umi_mean:.2} +/- {umi_sd:.2}; {}",
+        assignment.cells.len(), assignment.clone_id
+    )
+}
+
+/// Deliberately lossy, mutation-agnostic chain identity used by ClonoMap clones.
+/// Layout is five fixed-width u16 hex fields: V segment id, V 3' clipping,
+/// reconstructed V->J intervening length, J 5' clipping, J segment id.
+fn clone_chain_hex(receptor: &Receptor) -> Result<String> {
+    let id = RecombinationId::from_str(&receptor.id)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("decode recombination id {}", receptor.id))?;
+    let decoded = id
+        .decode_numeric_candidates()
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("decode recombination id {}", receptor.id))?;
+    if decoded.len() != 1 {
+        bail!(
+            "clone id requires an unambiguous numeric recombination id, got {} candidates for {}",
+            decoded.len(),
+            receptor.id
+        );
+    }
+    let d = decoded.into_iter().next().unwrap();
+    let vj_distance = u32::from(d.p_v3_len)
+        + u32::from(d.n1_len)
+        + u32::from(d.p_d5_len.unwrap_or(0))
+        + u32::from(d.d_retained_len.unwrap_or(0))
+        + u32::from(d.p_d3_len.unwrap_or(0))
+        + u32::from(d.n2_len.unwrap_or(0))
+        + u32::from(d.p_j5_len);
+    if d.v_id > u16::MAX as usize || d.j_id > u16::MAX as usize || vj_distance > u16::MAX as u32 {
+        bail!("clone structural fields exceed 16-bit encoding for {}", receptor.id);
+    }
+    Ok(format!(
+        "{:04X}{:04X}{:04X}{:04X}{:04X}",
+        d.v_id, d.v_del_3, vj_distance, d.j_del_5, d.j_id
+    ))
+}
+
+fn clone_id(hc: &Receptor, lc: &Receptor) -> Result<String> {
+    Ok(format!("CLONE:{}:{}", clone_chain_hex(hc)?, clone_chain_hex(lc)?))
 }
 
 struct StageLog {
@@ -312,6 +426,10 @@ fn run(args: Cli) -> Result<()> {
         ),
     )?;
 
+    // Keep the normalized receptor calls for the output contract. Family inference
+    // may discard ambiguous/non-functional alternatives, but cells.tsv and the
+    // duplicate audit must still describe what was observed in each cell.
+    let receptor_audit = rows.clone();
     let mut by_cell: BTreeMap<String, Vec<CallRow>> = BTreeMap::new();
     for row in rows {
         by_cell.entry(row.cell.clone()).or_default().push(row);
@@ -322,6 +440,7 @@ fn run(args: Cli) -> Result<()> {
     let mut no_hc = 0usize;
     let mut multiple_hc = 0usize;
     let mut qualified = Vec::new();
+    let mut light_only_raw: Vec<(String, Receptor)> = Vec::new();
 
     // LC normalization is deliberately performed while the cell is assembled.
     // Obvious non-functional alternatives must never leak into Family/plot/HMM
@@ -341,7 +460,16 @@ fn run(args: Cli) -> Result<()> {
             .filter(|r| r.productive && r.receptor.chain == "IGH" && receptor_complete(&r.receptor))
             .collect();
         match hcs.as_slice() {
-            [] => no_hc += 1,
+            [] => {
+                no_hc += 1;
+                for row in rows.iter().filter(|r| {
+                    matches!(r.receptor.chain.as_str(), "IGK" | "IGL")
+                        && r.productive
+                        && receptor_complete(&r.receptor)
+                }) {
+                    light_only_raw.push((cell_id.clone(), row.receptor.clone()));
+                }
+            }
             [hc] => {
                 let lc_rows: Vec<&CallRow> = rows
                     .iter()
@@ -382,6 +510,23 @@ fn run(args: Cli) -> Result<()> {
             _ => multiple_hc += 1,
         }
     }
+
+    // Compact LC-only observations before any family lookup. Identical observed
+    // receptor sequence/state is represented once and carries all source cells.
+    let mut light_only_by_sequence: BTreeMap<(String, String), LightOnlyGroup> = BTreeMap::new();
+    for (cell, receptor) in light_only_raw {
+        let key = (receptor.id.clone(), receptor.observed.clone());
+        let observation = LightOnlyCell {
+            cell,
+            evidence_reads: receptor.evidence_reads,
+            support_umis: receptor.support_umis,
+        };
+        light_only_by_sequence
+            .entry(key)
+            .and_modify(|g| g.cells.push(observation.clone()))
+            .or_insert_with(|| LightOnlyGroup { receptor, cells: vec![observation] });
+    }
+    let light_only_groups: Vec<LightOnlyGroup> = light_only_by_sequence.into_values().collect();
 
     println!("HC qualification");
     println!("  cells examined:                 {examined}");
@@ -458,13 +603,115 @@ fn run(args: Cli) -> Result<()> {
     for family in &mut families {
         family.split_light_chains(&cfg, &novel_v);
     }
+    // Freeze mutation-agnostic clone identities only after HC and LC clustering
+    // is complete. The clone id is a tandem of the deliberately lossy HC and LC
+    // structural hexes, never a concatenation of the full sc-vdj IDs.
+    for family in &mut families {
+        for lc in &mut family.light_clones {
+            lc.name = clone_id(&family.root, &lc.root)?;
+        }
+    }
+
+    // Reverse lookup: a compact LC structural clone may nominate an HC family
+    // only when every observed HC/LC connection agrees on that HC root.
+    let mut lc_to_hc: BTreeMap<String, BTreeSet<(String, String, String)>> = BTreeMap::new();
+    for family in &families {
+        let hc_hex = clone_chain_hex(&family.root)?;
+        for lc in &family.light_clones {
+            let lc_hex = clone_chain_hex(&lc.root)?;
+            lc_to_hc
+                .entry(lc_hex)
+                .or_default()
+                .insert((hc_hex.clone(), family.name.clone(), lc.name.clone()));
+        }
+    }
+    let mut light_only_assignments = Vec::new();
+    let mut light_only_ambiguous = 0usize;
+    let mut light_only_unmatched = 0usize;
+    for group in light_only_groups {
+        let lc_hex = clone_chain_hex(&group.receptor)?;
+        match lc_to_hc.get(&lc_hex) {
+            Some(targets) if targets.len() == 1 => {
+                let (_hc_hex, family, clone_id) = targets.iter().next().unwrap().clone();
+                light_only_assignments.push(LightOnlyAssignment {
+                    family,
+                    clone_id,
+                    receptor: group.receptor,
+                    cells: group.cells,
+                });
+            }
+            Some(_) => light_only_ambiguous += group.cells.len(),
+            None => light_only_unmatched += group.cells.len(),
+        }
+    }
+    let lc_only_attached: usize = light_only_assignments.iter().map(|a| a.cells.len()).sum();
+
+    // HC-only cells already belong to a finalized HC family. They can inherit
+    // the combined HC/LC clone id only when that family has exactly one LC
+    // clone. Multiple LC clones make the missing light chain genuinely
+    // ambiguous; zero LC clones leave it unresolved.
+    let mut hc_only_attached = 0usize;
+    let mut hc_only_ambiguous = 0usize;
+    let mut hc_only_unresolved = 0usize;
+    for family in &families {
+        let paired_cells: BTreeSet<&str> = family
+            .light_clones
+            .iter()
+            .flat_map(|lc| lc.members.iter().map(|m| m.cell.as_str()))
+            .collect();
+        let hc_only = family
+            .members
+            .iter()
+            .filter(|m| !paired_cells.contains(m.cell.cell_id.as_str()))
+            .count();
+        match family.light_clones.len() {
+            0 => hc_only_unresolved += hc_only,
+            1 => hc_only_attached += hc_only,
+            _ => hc_only_ambiguous += hc_only,
+        }
+    }
+
+    println!("Partial-chain clone rescue");
+    println!("  HC-only cells attached:   {hc_only_attached}");
+    println!("  HC-only cells ambiguous:  {hc_only_ambiguous}");
+    println!("  HC-only cells unresolved: {hc_only_unresolved}");
+    println!("  LC-only cells attached:   {lc_only_attached}");
+    println!("  LC-only cells ambiguous:  {light_only_ambiguous}");
+    println!("  LC-only cells unresolved: {light_only_unmatched}");
+
+    let mut top_lc_rescues: Vec<&LightOnlyAssignment> = light_only_assignments.iter().collect();
+    top_lc_rescues.sort_by_key(|a| std::cmp::Reverse(a.cells.len()));
+    top_lc_rescues.truncate(5);
+    if !top_lc_rescues.is_empty() {
+        println!("  Top rescued LC-only groups:");
+        for (rank, assignment) in top_lc_rescues.iter().enumerate() {
+            println!("    {}. {}", rank + 1, lc_rescue_summary(assignment, lc_only_attached));
+        }
+    }
+    let top_lc_rescue_summaries: Vec<String> = top_lc_rescues
+        .iter()
+        .map(|a| lc_rescue_summary(a, lc_only_attached))
+        .collect();
+
     let lc_clones: usize = families.iter().map(|family| family.light_clones.len()).sum();
     stage_log.mark(
         "lc_clone_assignment",
-        format!("families={} lc_clones={lc_clones}", families.len()),
+        format!(
+            "families={} lc_clones={lc_clones} hc_only_attached={hc_only_attached} hc_only_ambiguous={hc_only_ambiguous} hc_only_unresolved={hc_only_unresolved} lc_only_attached={lc_only_attached} lc_only_ambiguous={light_only_ambiguous} lc_only_unresolved={light_only_unmatched}",
+            families.len()
+        ),
     )?;
 
-    if let Ok(mut s) = status.write() { s.lc_clones = lc_clones; }
+    if let Ok(mut s) = status.write() {
+        s.lc_clones = lc_clones;
+        s.hc_only_attached = hc_only_attached;
+        s.hc_only_ambiguous = hc_only_ambiguous;
+        s.hc_only_unresolved = hc_only_unresolved;
+        s.lc_only_attached = lc_only_attached;
+        s.lc_only_ambiguous = light_only_ambiguous;
+        s.lc_only_unresolved = light_only_unmatched;
+        s.top_lc_rescues = top_lc_rescue_summaries;
+    }
     set_status(&status, "writing analysis reports", "Writing family, cell, overlap and reference reports");
     write_family_report(&args.out.join("families.tsv"), &families)?;
     let cell_id_detectors: Vec<PrimerDetector> = args
@@ -473,7 +720,16 @@ fn run(args: Cli) -> Result<()> {
         .copied()
         .filter_map(|chemistry| PrimerDetector::from_chemistry(chemistry).ok())
         .collect();
-    write_cell_report(&args.out.join("cells.tsv"), &families, &cell_id_detectors)?;
+    let receptor_rows_tmp = args.out.join(".cells.receptor_rows.tmp.tsv");
+    write_cell_report(&receptor_rows_tmp, &families, &light_only_assignments, &cell_id_detectors)?;
+    write_unique_cells_and_duplicates(
+        &receptor_rows_tmp,
+        &args.out.join("cells.tsv"),
+        &args.out.join("potential_duplicates.tsv"),
+        &receptor_audit,
+        &cell_id_detectors,
+    )?;
+    std::fs::remove_file(&receptor_rows_tmp).ok();
     write_overlap_reports(&args.out, &families)?;
     write_reference_candidate_report(&args.out.join("reference_candidates.tsv"), &novel_v)?;
     novel_v
@@ -1514,6 +1770,7 @@ fn read_vdj_output(dir: &Path, source: &str) -> Result<Vec<CallRow>> {
                 observed: reconstruction.observed_receptor.clone(),
                 alternative_reconstructions: reconstruction.alternatives,
                 evidence_reads: reconstruction.evidence_reads,
+                support_umis: reconstruction.support_umis,
             },
         });
     }
@@ -1531,6 +1788,7 @@ struct SelectedReconstruction {
     observed_receptor: String,
     alternatives: usize,
     evidence_reads: usize,
+    support_umis: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1542,6 +1800,7 @@ struct ReconstructionCandidate {
     mutation_events: usize,
     informative_pairs: usize,
     support_features: usize,
+    support_umis: usize,
     junction_support_reads: usize,
     junction_spanning_reads: usize,
     receptor_rediscovery_reads: usize,
@@ -1577,6 +1836,7 @@ fn read_reconstructions(path: &Path) -> Result<HashMap<(String, String), Selecte
     let receptor_i = req("observed_receptor_sequence")?;
     let productivity_i = req("productivity_status")?;
     let support_i = req("support_features")?;
+    let support_umis_i = req("support_umis")?;
     let junction_support_i = req("junction_support_reads")?;
     let junction_spanning_i = req("junction_spanning_reads")?;
     let rediscovery_i = req("receptor_rediscovery_reads")?;
@@ -1588,6 +1848,7 @@ fn read_reconstructions(path: &Path) -> Result<HashMap<(String, String), Selecte
         receptor_i,
         productivity_i,
         support_i,
+        support_umis_i,
         junction_support_i,
         junction_spanning_i,
         rediscovery_i,
@@ -1638,6 +1899,7 @@ fn read_reconstructions(path: &Path) -> Result<HashMap<(String, String), Selecte
                 mutation_events: usize::MAX,
                 informative_pairs: 0,
                 support_features: parse_count(fields[support_i]),
+                support_umis: parse_count(fields[support_umis_i]),
                 junction_support_reads: parse_count(fields[junction_support_i]),
                 junction_spanning_reads: parse_count(fields[junction_spanning_i]),
                 receptor_rediscovery_reads: parse_count(fields[rediscovery_i]),
@@ -1679,6 +1941,7 @@ fn read_reconstructions(path: &Path) -> Result<HashMap<(String, String), Selecte
                 observed_receptor: best.observed_receptor,
                 alternatives,
                 evidence_reads,
+                support_umis: best.support_umis,
             },
         );
     }
@@ -1853,12 +2116,13 @@ fn color_for(encoded: &str, cell: &str) -> String {
 fn write_cell_report(
     path: &Path,
     families: &[Family],
+    light_only: &[LightOnlyAssignment],
     cell_id_detectors: &[PrimerDetector],
 ) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
     writeln!(
         w,
-        "source\tcell\tbd_cell_id\tfamily\tlc_clone\thc_c_call\thc_mutation_count\tlc_mutation_count\ttotal_mutation_count\thc_distance\tlc_distance\ttotal_distance\tfamily_pearson_abundance_hc_n\tfamily_pearson_abundance_hc_r\tfamily_pearson_abundance_hc_p\tfamily_pearson_abundance_lc_n\tfamily_pearson_abundance_lc_r\tfamily_pearson_abundance_lc_p\tfamily_pearson_abundance_paired_n\tfamily_pearson_abundance_paired_r\tfamily_pearson_abundance_paired_p\tfamily_pearson_hc_lc_n\tfamily_pearson_hc_lc_r\tfamily_pearson_hc_lc_p\thclc_pearson_abundance_hc_n\thclc_pearson_abundance_hc_r\thclc_pearson_abundance_hc_p\thclc_pearson_abundance_lc_n\thclc_pearson_abundance_lc_r\thclc_pearson_abundance_lc_p\thclc_pearson_abundance_paired_n\thclc_pearson_abundance_paired_r\thclc_pearson_abundance_paired_p\thclc_pearson_hc_lc_n\thclc_pearson_hc_lc_r\thclc_pearson_hc_lc_p\tmst_rooted_isotype_svg_hex\tmst_rooted_light_chain_svg_hex\tmst_rooted_hc_depth_svg_hex\tmst_rooted_lc_depth_svg_hex\tmst_rooted_paired_depth_svg_hex"
+        "source\tcell\tbd_cell_id\tfamily\tlc_clone\tclone_membership\thc_recombination_id\tlc_recombination_id\thc_c_call\thc_mutation_count\tlc_mutation_count\ttotal_mutation_count\thc_distance\tlc_distance\ttotal_distance\tfamily_pearson_abundance_hc_n\tfamily_pearson_abundance_hc_r\tfamily_pearson_abundance_hc_p\tfamily_pearson_abundance_lc_n\tfamily_pearson_abundance_lc_r\tfamily_pearson_abundance_lc_p\tfamily_pearson_abundance_paired_n\tfamily_pearson_abundance_paired_r\tfamily_pearson_abundance_paired_p\tfamily_pearson_hc_lc_n\tfamily_pearson_hc_lc_r\tfamily_pearson_hc_lc_p\thclc_pearson_abundance_hc_n\thclc_pearson_abundance_hc_r\thclc_pearson_abundance_hc_p\thclc_pearson_abundance_lc_n\thclc_pearson_abundance_lc_r\thclc_pearson_abundance_lc_p\thclc_pearson_abundance_paired_n\thclc_pearson_abundance_paired_r\thclc_pearson_abundance_paired_p\thclc_pearson_hc_lc_n\thclc_pearson_hc_lc_r\thclc_pearson_hc_lc_p\tmst_rooted_isotype_svg_hex\tmst_rooted_light_chain_svg_hex\tmst_rooted_hc_depth_svg_hex\tmst_rooted_lc_depth_svg_hex\tmst_rooted_paired_depth_svg_hex"
     )?;
     for family in families {
         let a = family_plot_analysis(family);
@@ -1883,12 +2147,15 @@ fn write_cell_report(
                 let bd_cell_id = bd_cell_id_for_seq(cell, cell_id_detectors);
                 writeln!(
                     w,
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     source,
                     cell,
                     bd_cell_id,
                     family.name,
                     lc.name,
+                    "paired",
+                    hm.cell.hc.id,
+                    lm.receptor.id,
                     hm.cell.hc.c,
                     hc_count,
                     lc_count,
@@ -1936,13 +2203,21 @@ fn write_cell_report(
             let hc_dist = mutation_distance(&hm.hc_mutations);
             let (source, cell) = split_scoped_cell_id(&hm.cell.cell_id);
             let bd_cell_id = bd_cell_id_for_seq(cell, cell_id_detectors);
+            let (lc_clone, membership) = match family.light_clones.as_slice() {
+                [lc] => (lc.name.as_str(), "hc_only"),
+                [] => ("unresolved", "hc_only_unresolved"),
+                _ => ("ambiguous", "hc_only_ambiguous"),
+            };
             writeln!(
                 w,
-                "{}\t{}\t{}\t{}\tunpaired\t{}\t{}\tNA\t{}\t{}\tNA\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\tNA\t{}\t{}\tNA\t{}\t{}\tNA\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t{}\t{}\t{}\t{}\t{}",
                 source,
                 cell,
                 bd_cell_id,
                 family.name,
+                lc_clone,
+                membership,
+                hm.cell.hc.id,
                 hm.cell.hc.c,
                 hc_count,
                 hc_count,
@@ -1966,6 +2241,161 @@ fn write_cell_report(
                 color_for(&a.lc_depth_hex, &hm.cell.cell_id),
                 color_for(&a.paired_depth_hex, &hm.cell.cell_id)
             )?;
+        }
+    }
+    for assignment in light_only {
+        for observation in &assignment.cells {
+            let (source, cell) = split_scoped_cell_id(&observation.cell);
+            let bd_cell_id = bd_cell_id_for_seq(cell, cell_id_detectors);
+            writeln!(
+                w,
+                "{}\t{}\t{}\t{}\t{}\tlc_only\tNA\t{}\tNA\tNA\tNA\tNA\tNA\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\t0\tNA\tNA\tNA\tNA\tNA\tNA\tNA",
+                source,
+                cell,
+                bd_cell_id,
+                assignment.family,
+                assignment.clone_id,
+                assignment.receptor.id,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+
+fn call_functional(row: &CallRow) -> bool {
+    row.productive && receptor_complete(&row.receptor)
+}
+
+fn call_rank(row: &CallRow) -> (bool, bool, std::cmp::Reverse<usize>, std::cmp::Reverse<usize>, String) {
+    (
+        !call_functional(row),
+        !row.productive,
+        std::cmp::Reverse(row.receptor.support_umis),
+        std::cmp::Reverse(row.receptor.evidence_reads),
+        row.receptor.id.clone(),
+    )
+}
+
+fn best_call<'a>(rows: &[&'a CallRow]) -> Option<&'a CallRow> {
+    rows.iter().copied().min_by_key(|r| call_rank(r))
+}
+
+fn receptor_fields(row: Option<&CallRow>) -> Vec<String> {
+    match row {
+        Some(r) => vec![
+            r.receptor.id.clone(), r.receptor.chain.clone(), r.receptor.v.clone(),
+            r.receptor.d.clone(), r.receptor.j.clone(), r.receptor.c.clone(),
+            r.receptor.cdr3_nt.clone(), r.productive.to_string(),
+            call_functional(r).to_string(), r.receptor.evidence_reads.to_string(),
+            r.receptor.support_umis.to_string(),
+        ],
+        None => vec!["NA".into(); 11],
+    }
+}
+
+/// Normalize the receptor-granular family report into the public cell contract.
+/// `cells.tsv` is exactly one row per scoped CellId. Competing receptor calls are
+/// retained in `potential_duplicates.tsv`; nothing is silently thrown away.
+fn write_unique_cells_and_duplicates(
+    receptor_rows_path: &Path,
+    cells_path: &Path,
+    duplicates_path: &Path,
+    calls: &[CallRow],
+    cell_id_detectors: &[PrimerDetector],
+) -> Result<()> {
+    let mut calls_by_cell: BTreeMap<String, Vec<&CallRow>> = BTreeMap::new();
+    for call in calls {
+        calls_by_cell.entry(call.cell.clone()).or_default().push(call);
+    }
+
+    let f = File::open(receptor_rows_path)?;
+    let mut lines = BufReader::new(f).lines();
+    let old_header = lines.next().context("empty temporary cell report")??;
+    let names: Vec<&str> = old_header.split('\t').collect();
+    let idx: HashMap<&str, usize> = names.iter().enumerate().map(|(i,n)| (*n,i)).collect();
+    let source_i = *idx.get("source").context("cell report missing source")?;
+    let cell_i = *idx.get("cell").context("cell report missing cell")?;
+    let hc_i = *idx.get("hc_recombination_id").context("cell report missing hc_recombination_id")?;
+    let lc_i = *idx.get("lc_recombination_id").context("cell report missing lc_recombination_id")?;
+    let membership_i = *idx.get("clone_membership").context("cell report missing clone_membership")?;
+
+    let mut report_by_cell: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
+    for line in lines {
+        let fields: Vec<String> = line?.split('\t').map(str::to_string).collect();
+        if fields.len() != names.len() { continue; }
+        let scoped = scoped_cell_id(&fields[source_i], &fields[cell_i]);
+        report_by_cell.entry(scoped).or_default().push(fields);
+    }
+
+    let extra_header = [
+        "hc_chain","hc_v_call","hc_d_call","hc_j_call","hc_c_call_selected","hc_cdr3_nt",
+        "hc_productive","hc_functional","hc_evidence_reads","hc_support_umis",
+        "lc_chain","lc_v_call","lc_d_call","lc_j_call","lc_c_call_selected","lc_cdr3_nt",
+        "lc_productive","lc_functional","lc_evidence_reads","lc_support_umis",
+        "hc_receptors","hc_functional_receptors","lc_receptors","lc_functional_receptors","has_potential_duplicates"
+    ];
+    let mut out = BufWriter::new(File::create(cells_path)?);
+    writeln!(out, "{}\t{}", old_header, extra_header.join("\t"))?;
+
+    let mut dup = BufWriter::new(File::create(duplicates_path)?);
+    writeln!(dup, "source\tcell\tbd_cell_id\tchain\trecombination_id\tv_call\td_call\tj_call\tc_call\tcdr3_nt\tproductive\tfunctional\tevidence_reads\tsupport_umis\tselected_in_cells_tsv")?;
+
+    for (scoped, cell_calls) in &calls_by_cell {
+        let hc: Vec<&CallRow> = cell_calls.iter().copied().filter(|r| r.receptor.chain == "IGH").collect();
+        let lc: Vec<&CallRow> = cell_calls.iter().copied().filter(|r| matches!(r.receptor.chain.as_str(), "IGK" | "IGL")).collect();
+        let best_hc = best_call(&hc);
+        let best_lc = best_call(&lc);
+        let hc_ids: BTreeSet<&str> = hc.iter().map(|r| r.receptor.id.as_str()).collect();
+        let lc_ids: BTreeSet<&str> = lc.iter().map(|r| r.receptor.id.as_str()).collect();
+        let hc_func = hc.iter().filter(|r| call_functional(r)).map(|r| r.receptor.id.as_str()).collect::<BTreeSet<_>>().len();
+        let lc_func = lc.iter().filter(|r| call_functional(r)).map(|r| r.receptor.id.as_str()).collect::<BTreeSet<_>>().len();
+        let has_dups = hc.len() > 1 || lc.len() > 1;
+
+        let chosen_report = report_by_cell.get(scoped).and_then(|rows| {
+            let hc_id = best_hc.map(|r| r.receptor.id.as_str());
+            let lc_id = best_lc.filter(|r| call_functional(r)).map(|r| r.receptor.id.as_str());
+            rows.iter().find(|r| {
+                hc_id.map_or(r[hc_i] == "NA", |id| r[hc_i] == id)
+                    && lc_id.map_or(true, |id| r[lc_i] == id)
+            }).or_else(|| rows.iter().find(|r| hc_id.map_or(true, |id| r[hc_i] == id)))
+              .or_else(|| rows.first())
+        });
+
+        let mut base = if let Some(row) = chosen_report { row.clone() } else {
+            let (source, cell) = split_scoped_cell_id(scoped);
+            let bd = bd_cell_id_for_seq(cell, cell_id_detectors);
+            let mut row = vec!["NA".to_string(); names.len()];
+            row[source_i] = source.to_string(); row[cell_i] = cell.to_string();
+            if let Some(i) = idx.get("bd_cell_id") { row[*i] = bd; }
+            row[membership_i] = "unresolved".into();
+            row
+        };
+        // The selected receptor columns are authoritative even when family inference
+        // intentionally left a cell unresolved.
+        if let Some(h) = best_hc { base[hc_i] = h.receptor.id.clone(); }
+        if let Some(l) = best_lc { base[lc_i] = l.receptor.id.clone(); }
+
+        let mut extras = receptor_fields(best_hc);
+        // receptor_fields includes id; the legacy table already owns recombination_id.
+        extras.remove(0);
+        let mut lfields = receptor_fields(best_lc); lfields.remove(0); extras.extend(lfields);
+        extras.extend([
+            hc_ids.len().to_string(), hc_func.to_string(), lc_ids.len().to_string(), lc_func.to_string(), has_dups.to_string()
+        ]);
+        writeln!(out, "{}\t{}", base.join("\t"), extras.join("\t"))?;
+
+        if has_dups {
+            let (source, cell) = split_scoped_cell_id(scoped);
+            let bd = bd_cell_id_for_seq(cell, cell_id_detectors);
+            for r in cell_calls {
+                let selected = best_hc.map_or(false, |x| std::ptr::eq(x, *r))
+                    || best_lc.map_or(false, |x| std::ptr::eq(x, *r));
+                writeln!(dup, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    source, cell, bd, r.receptor.chain, r.receptor.id, r.receptor.v, r.receptor.d,
+                    r.receptor.j, r.receptor.c, r.receptor.cdr3_nt, r.productive,
+                    call_functional(r), r.receptor.evidence_reads, r.receptor.support_umis, selected)?;
+            }
         }
     }
     Ok(())

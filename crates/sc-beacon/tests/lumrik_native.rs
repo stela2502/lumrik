@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use sc_beacon::GuideDataset;
 use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
 
@@ -54,7 +54,7 @@ impl FeatureIndex for SparseIdIndex {
 fn guide_dataset_uses_feature_index_order_not_dense_feature_ids() {
     let index = SparseIdIndex::new();
     let mut data = Scdata::new(1, MatrixValueType::Integer);
-    let mut report = MappingInfo::new(None, 0.0, 0);
+    let mut report = RunStats::new(None, 0.0, 0);
     let cell = 123_u64;
 
     data.try_insert_value(&cell, GeneUmiHash(42, 0), 3.0, &mut report);

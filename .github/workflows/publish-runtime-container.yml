@@ -27,12 +27,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            musl musl-dev musl-tools clang libc6-dev zlib1g-dev libbz2-dev
+            musl musl-dev musl-tools clang libc6-dev cmake zlib1g-dev libbz2-dev
 
       - name: Install Rust target
         run: rustup target add "$TARGET"
 
       - name: Build all Lumrik binaries
+        env:
+          CMAKE_CROSSCOMPILING_EMULATOR: /usr/bin/env
         run: |
           cargo build \
             --locked \

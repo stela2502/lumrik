@@ -141,7 +141,7 @@ Lumrik is a workspace, not a single monolithic implementation. The crate READMEs
 | [`clonomap`](crates/clonomap_family/README.md) | Mutation-aware receptor-family modelling and clone analysis |
 | [`sc-te`](crates/sc-te/README.md) | Single-cell transposable-element analysis and multimapper resolution |
 | [`read-tag-table`](crates/read-tag-table/README.md) | External read/cell/UMI tag tables |
-| [`mapping_info`](crates/mapping_info/README.md) | Shared counters, timings and reports |
+| [`run_stats`](crates/run_stats/README.md) | Shared counters, timings and reports |
 | [`onehot_dna`](crates/onehot_dna/README.md) | Compact fixed-length DNA matching |
 | [`int_to_dna`](crates/int_to_dna/README.md) | Compact sequence/integer identifier conversion |
 | [`lumrik-status`](crates/lumrik-status/README.md) | Live run-status HTTP server/dashboard |

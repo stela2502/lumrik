@@ -6,7 +6,7 @@ use crate::gtf_logics::MatchType;
 
 use scdata::Scdata;
 use scdata::IndexedGenes;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use int_to_str::int_to_str::IntToStr;
 
 
@@ -36,7 +36,7 @@ pub trait FeatureMatcher: Sync + Send  + std::fmt::Display {
         exp_idx: &mut IndexedGenes,
         mut_gex: &mut Scdata,
         mut_idx: &mut IndexedGenes,
-        mapping_info: &mut MappingInfo,
+        run_stats: &mut RunStats,
         match_type: &MatchType,
     )
     where
@@ -46,7 +46,7 @@ pub trait FeatureMatcher: Sync + Send  + std::fmt::Display {
         &self,
         read_result: &Option<Vec<ReadResult>>,
         data: &ReadData,
-        mapping_info: &mut MappingInfo,
+        run_stats: &mut RunStats,
     ) -> Vec<String>;
 
     fn parse_cell_id(cell_id_str: &str) -> Result<u64, String> {
@@ -67,7 +67,7 @@ pub trait FeatureMatcher: Sync + Send  + std::fmt::Display {
         exp_idx: &mut IndexedGenes,
         mut_gex: &mut Scdata,
         mut_idx: &mut IndexedGenes,
-        mapping_info: &mut MappingInfo,
+        run_stats: &mut RunStats,
         match_type: &MatchType,
     );
 

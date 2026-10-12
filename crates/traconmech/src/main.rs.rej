@@ -1,0 +1,33 @@
+--- crates/traconmech/src/main.rs
++++ crates/traconmech/src/main.rs
+@@ -9,21 +9,11 @@
+ use std::io::{BufWriter, Write};
+ use std::path::PathBuf;
+ 
+-mod h5ad_info;
+-
+ 
+ #[derive(Debug, Parser)]
+ #[command(name = "traconmech")]
+ #[command(about = "Trace biological context to candidate mechanisms")]
+ struct Cli {
+-    /// Inspect input H5AD metadata without selecting a cell grouping.
+-    #[arg(long)]
+-    inspect: bool,
+-
+-    /// Biological input modality (currently expression only).
+-    #[arg(long, default_value = "expression", value_parser = ["expression", "atac"])]
+-    modality: String,
+-
+     /// Inspect an H5AD expression analysis and exit (no AI inference).
+     #[arg(long)]
+     inspect_h5ad: Option<PathBuf>,
+@@ -132,7 +122,7 @@
+ fn main() -> Result<()> {
+     let cli = Cli::parse();
+     if cli.modality != "expression" {
+-        anyhow::bail!("modality {:?} is not implemented; only expression is supported", cli.modality);
++        anyhow::bail!("modality {:?} is reserved but not yet supported; currently only expression is implemented", cli.modality);
+     }
+     if cli.inspect {
+         let path = cli.data.as_ref().context("--inspect requires --data FILE.h5ad")?;

@@ -15,7 +15,7 @@ use crate::read_data::ReadData;
 use scdata::{Scdata, IndexedGenes };
 use scdata::scdata::MatrixValueType;
 
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 //use rustody::int_to_str::IntToStr;
 //use rustody::analysis::bam_flag::BamFlag;
 //use rustody::genes_mapper::cigar::CigarEnum;
@@ -150,7 +150,7 @@ pub fn create_ref_id_to_name_hashmap(header_view: &Header ) -> HashMap<i32, Stri
 // Function to process data
 pub fn process_data<T: FeatureMatcher + std::fmt::Debug>(
     bam_file: &str,
-    mapping_info: &mut MappingInfo,
+    run_stats: &mut RunStats,
     gtf: &T,
     cell_tag: [u8; 2],
     umi_tag: [u8; 2],
@@ -240,7 +240,7 @@ pub fn process_data<T: FeatureMatcher + std::fmt::Debug>(
                 }
             }
             Err(err) => {
-                mapping_info.report(err);
+                run_stats.report(err);
             }
         }
         
@@ -255,7 +255,7 @@ pub fn process_data<T: FeatureMatcher + std::fmt::Debug>(
                 &mut expr_idx,
                 &mut mut_gex,
                 &mut mut_idx,
-                mapping_info,
+                run_stats,
                 gtf,
                 mutations,
                 match_type,
@@ -275,7 +275,7 @@ pub fn process_data<T: FeatureMatcher + std::fmt::Debug>(
             &mut expr_idx,
             &mut mut_gex,
             &mut mut_idx,
-            mapping_info,
+            run_stats,
             gtf,
             mutations,
             match_type,
@@ -290,7 +290,7 @@ pub fn process_data<T: FeatureMatcher + std::fmt::Debug>(
 // Function to process data
 pub fn process_data_bowtie2<T: FeatureMatcher + std::fmt::Debug>(
     bam_file: &str,
-    mapping_info: &mut MappingInfo,
+    run_stats: &mut RunStats,
     gtf: &T,
     num_threads: usize,
     mutations: &Option<MutationProcessor>,
@@ -386,7 +386,7 @@ pub fn process_data_bowtie2<T: FeatureMatcher + std::fmt::Debug>(
                 }
             }
             Err(err) => {
-                mapping_info.report(err);
+                run_stats.report(err);
             }
         }
         
@@ -394,7 +394,7 @@ pub fn process_data_bowtie2<T: FeatureMatcher + std::fmt::Debug>(
         // Process buffer when it reaches the split size
         if buffer.len() >= split {
             pb.set_message(format!("{} million reads - processing", lines / BUFFER_SIZE));
-            mapping_info.write_to_log(format!("{} million reads - processing", lines / BUFFER_SIZE));
+            run_stats.write_to_log(format!("{} million reads - processing", lines / BUFFER_SIZE));
             process_buffer(
                 &buffer,
                 num_threads,
@@ -402,13 +402,13 @@ pub fn process_data_bowtie2<T: FeatureMatcher + std::fmt::Debug>(
                 &mut expr_idx,
                 &mut mut_gex,
                 &mut mut_idx,
-                mapping_info,
+                run_stats,
                 gtf,
                 mutations,
                 match_type,
             );
             pb.set_message(format!("{} million reads - processing finished", lines / BUFFER_SIZE));
-            mapping_info.write_to_log(format!("{} million reads - processing finished", lines / BUFFER_SIZE));
+            run_stats.write_to_log(format!("{} million reads - processing finished", lines / BUFFER_SIZE));
             buffer.clear();
         }
     }
@@ -423,7 +423,7 @@ pub fn process_data_bowtie2<T: FeatureMatcher + std::fmt::Debug>(
             &mut expr_idx,
             &mut mut_gex,
             &mut mut_idx,
-            mapping_info,
+            run_stats,
             gtf,
             mutations,
             match_type,
@@ -444,13 +444,13 @@ fn process_buffer<T: FeatureMatcher + Sync + std::fmt::Debug>(
     expt_idx: &mut IndexedGenes,
     mut_gex: &mut Scdata,
     mut_idx: &mut IndexedGenes,
-    mapping_info: &mut MappingInfo,
+    run_stats: &mut RunStats,
     gtf: &T,
     mutations: &Option<MutationProcessor>,
     match_type: &MatchType,
 ) {
     // everything outside this function is file io
-    mapping_info.stop_file_io_time();
+    run_stats.stop_file_io_time();
     let chunk_size = (buffer.len() / num_threads).max(1);
 
     let results: Vec<_> = buffer
@@ -459,7 +459,7 @@ fn process_buffer<T: FeatureMatcher + Sync + std::fmt::Debug>(
         .collect();
 
     // only the above is the multiprocessor step
-    mapping_info.stop_multi_processor_time();
+    run_stats.stop_multi_processor_time();
 
     for (gex_results, mut_results, local_report) in results {
 
@@ -472,11 +472,11 @@ fn process_buffer<T: FeatureMatcher + Sync + std::fmt::Debug>(
         mut_gex.merge_re_id_genes( mut_results.0, &mut_trans);
         
         // fill in the report
-        mapping_info.merge(&local_report);
+        run_stats.merge(&local_report);
     }
     
     // and that is the main single processor part
-    mapping_info.stop_single_processor_time();
+    run_stats.stop_single_processor_time();
 
 }
 
@@ -488,7 +488,7 @@ fn process_chunk<T: FeatureMatcher + std::fmt::Debug>(
     match_type: &MatchType, ) -> (
         ( Scdata, IndexedGenes),  
         ( Scdata, IndexedGenes), 
-        MappingInfo 
+        RunStats 
     ) {
     let mut local_iterator = ExonIterator::new("part");
     // for the expression data
@@ -498,7 +498,7 @@ fn process_chunk<T: FeatureMatcher + std::fmt::Debug>(
     let mut mut_gex = Scdata::new(1, MatrixValueType::Integer);
     let mut mut_idx = IndexedGenes::empty(Some(0)) ;
 
-    let mut local_report = MappingInfo::new(None, 3.0, 0 );
+    let mut local_report = RunStats::new(None, 3.0, 0 );
     let mut last_chr = "unset";
     //     0        1    2      3      4    5                  6    7 
     //for (data.0, umi, start, cigar, chr, is_reverse_strand, seq, qual ) in chunk {

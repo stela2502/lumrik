@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use lumrik_status::{
     ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status, snapshot_html,
 };
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 #[derive(Debug)]
 pub struct RunProgress {
@@ -23,14 +23,14 @@ pub struct RunProgress {
     state: Arc<RwLock<RunStatus>>,
     log: Option<Mutex<File>>,
     metrics: Option<Mutex<File>>,
-    mapping_info: MappingInfo,
+    run_stats: RunStats,
 }
 
 /// Cheap periodically-updated snapshot for the health server.
 ///
-/// MappingInfo stays local to the hot processing path.  Only these few values
+/// RunStats stays local to the hot processing path.  Only these few values
 /// are copied when a normalizer finishes a chunk, so the server never needs to
-/// lock MappingInfo itself.
+/// lock RunStats itself.
 #[derive(Debug, Clone)]
 pub struct RunStatus {
     pub started_unix_ms: u128,
@@ -165,30 +165,30 @@ impl RunProgress {
             state: Arc::new(RwLock::new(status)),
             log: None,
             metrics: None,
-            mapping_info: MappingInfo::new(None, 0.0, 0),
+            run_stats: RunStats::new(None, 0.0, 0),
         }
     }
 
     pub fn start_timer(&mut self, name: impl Into<String>) {
-        self.mapping_info.start_timer(name);
+        self.run_stats.start_timer(name);
     }
 
     pub fn stop_timer(&mut self, name: &str) {
-        self.mapping_info.stop_timer(name);
+        self.run_stats.stop_timer(name);
     }
 
-    pub fn mapping_info(&self) -> &MappingInfo {
-        &self.mapping_info
+    pub fn run_stats(&self) -> &RunStats {
+        &self.run_stats
     }
 
-    pub fn mapping_info_mut(&mut self) -> &mut MappingInfo {
-        &mut self.mapping_info
+    pub fn run_stats_mut(&mut self) -> &mut RunStats {
+        &mut self.run_stats
     }
 
     /// Copy the few live counters needed by the health server from a normalizer
-    /// MappingInfo snapshot.  This is called once per processed chunk, not once
+    /// RunStats snapshot.  This is called once per processed chunk, not once
     /// per read.
-    pub fn update_from_mapping_info(&mut self, info: &MappingInfo) {
+    pub fn update_from_run_stats(&mut self, info: &RunStats) {
         let reads = info.get_issue_count("reads_processed");
         let no_cell_umi = info.get_issue_count("no_cell_umi");
         let duplicates = info.get_issue_count("duplicate");
@@ -287,7 +287,7 @@ impl RunProgress {
 
     /// Print the accumulated broad Nelrune timings to stderr and nelrune.log.
     pub fn report_timings(&self) {
-        self.report_block("Nelrune timings", &self.mapping_info);
+        self.report_block("Nelrune timings", &self.run_stats);
     }
 
     pub fn open_log(&mut self, path: impl AsRef<Path>) -> Result<()> {
@@ -381,7 +381,7 @@ impl RunProgress {
     pub fn update_quantification_live(
         &self,
         data: &scdata::QuantData,
-        report: &MappingInfo,
+        report: &RunStats,
     ) {
         let memory = memory_status();
         if let Ok(mut state) = self.state.write() {

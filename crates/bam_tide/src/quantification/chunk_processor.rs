@@ -3,7 +3,7 @@ use anyhow::Result;
 use gtf_splice_index::{MatchClass, MatchOptions, QuantClass, SpliceIndex};
 use rayon::prelude::*;
 use scdata::cell_data::GeneUmiHash;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 use crate::quantification::job::Job;
 use crate::quantification::processor_options::ProcessorOptions;
@@ -37,7 +37,7 @@ impl<'a> ChunkProcessor<'a> {
         &self,
         jobs: &[Job],
         merged: &mut QuantData,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
     ) -> Result<()> {
         if jobs.is_empty() {
             return Ok(());
@@ -49,7 +49,7 @@ impl<'a> ChunkProcessor<'a> {
         report.start_counter();
         report.start_timer("bam_tide/multi_cpu/quantify_chunk");
 
-        let partials: Vec<(QuantData, MappingInfo)> = jobs
+        let partials: Vec<(QuantData, RunStats)> = jobs
             .par_chunks(chunk_size)
             .map(|chunk| self.process_partial(chunk))
             .collect();
@@ -69,9 +69,9 @@ impl<'a> ChunkProcessor<'a> {
         Ok(())
     }
 
-    fn process_partial(&self, jobs: &[Job]) -> (QuantData, MappingInfo) {
+    fn process_partial(&self, jobs: &[Job]) -> (QuantData, RunStats) {
         let mut out = QuantData::standard();
-        let mut report = MappingInfo::new(None, 0.0, jobs.len());
+        let mut report = RunStats::new(None, 0.0, jobs.len());
 
         for job in jobs {
             self.add_hit(job, &mut out, &mut report);
@@ -86,7 +86,7 @@ impl<'a> ChunkProcessor<'a> {
         &self,
         job: &Job,
         transcript: &gtf_splice_index::Transcript,
-        report: &mut MappingInfo,
+        report: &mut RunStats,
     ) {
         const MAX_REPORTED_OFFSET_BP: i32 = 50;
         for (donor, acceptor) in transcript
@@ -113,7 +113,7 @@ impl<'a> ChunkProcessor<'a> {
         }
     }
 
-    fn add_hit(&self, job: &Job, out: &mut QuantData, report: &mut MappingInfo) {
+    fn add_hit(&self, job: &Job, out: &mut QuantData, report: &mut RunStats) {
         let hits = self.idx.match_features(&job.spliced, self.match_opts);
 
         if hits.is_empty() {
@@ -140,12 +140,12 @@ impl<'a> ChunkProcessor<'a> {
             out.try_insert(split_name, &job.cell, feature_umi, 1.0, report);
             // Canonical expression contains every gene-associated molecule,
             // independent of whether its evidence is exonic or intronic.
-            let mut exprs_report = MappingInfo::new(None, 0.0, 0);
+            let mut exprs_report = RunStats::new(None, 0.0, 0);
             out.try_insert(QuantData::EXPRS, &job.cell, feature_umi, 1.0, &mut exprs_report);
         }
     }
 
-    fn add_snp_hits(&self, job: &Job, out: &mut QuantData, report: &mut MappingInfo) {
+    fn add_snp_hits(&self, job: &Job, out: &mut QuantData, report: &mut RunStats) {
         let Some(snp) = self.snp else {
             return;
         };
@@ -219,7 +219,7 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         );
 
         let mut merged = QuantData::standard();
-        let mut report = MappingInfo::new(None, 0.0, 1);
+        let mut report = RunStats::new(None, 0.0, 1);
 
         processor
             .process_into(&[job], &mut merged, &mut report)
@@ -265,7 +265,7 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         );
 
         let mut merged = QuantData::standard();
-        let mut report = MappingInfo::new(None, 0.0, 1);
+        let mut report = RunStats::new(None, 0.0, 1);
 
         processor
             .process_into(&[job], &mut merged, &mut report)

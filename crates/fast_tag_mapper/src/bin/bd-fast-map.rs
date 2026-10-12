@@ -6,7 +6,7 @@ use std::{
 
 use clap::Parser;
 use fast_tag_mapper::FastMapperCli;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Map sequences to fast-tag feature ids")]
@@ -29,7 +29,7 @@ fn main() {
         }
     };
 
-    let mut info = MappingInfo::new(None, 0.0, 0);
+    let mut info = RunStats::new(None, 0.0, 0);
 
     match cli.input {
         Some(path) => {
@@ -59,7 +59,7 @@ fn main() {
 fn run<R: BufRead>(
     reader: R,
     mapper: &fast_tag_mapper::FastTagMapper,
-    info: &mut MappingInfo,
+    info: &mut RunStats,
 ) -> std::io::Result<()> {
     for line in reader.lines() {
         let seq = line?;

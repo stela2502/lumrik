@@ -17,7 +17,7 @@ plotters = {
     features = ["svg_backend", "line_series", "point_series"]
 }
 
-mapping_info = { path = "../mapping_info" }
+run_stats = { path = "../run_stats" }
 scdata = { path = "../scdata" }
 int-to-dna = { path = "../int_to_dna" }
 

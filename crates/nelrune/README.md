@@ -46,7 +46,7 @@ V(D)J reconstruction is implemented in the separate [`sc-vdj`](../sc-vdj/README.
 
 ## Library use
 
-Nelrune is primarily an integration binary. Its orchestration code is also the reference implementation for composing [`sc_primer`](../sc_primer/README.md), [`bam_tide`](../bam_tide/README.md), [`sc-mapper`](../sc-mapper/README.md), [`scdata`](../scdata/README.md), `mapping_info` and `lumrik-status`.
+Nelrune is primarily an integration binary. Its orchestration code is also the reference implementation for composing [`sc_primer`](../sc_primer/README.md), [`bam_tide`](../bam_tide/README.md), [`sc-mapper`](../sc-mapper/README.md), [`scdata`](../scdata/README.md), `run_stats` and `lumrik-status`.
 
 ## Detailed documentation
 
@@ -113,7 +113,7 @@ On clusters where the compute-node hostname used by your browser differs from
 
 ## Output
 
-- `nelrune.log` — stage/progress log plus the original normalizer and quantifier `MappingInfo` reports
+- `nelrune.log` — stage/progress log plus the original normalizer and quantifier `RunStats` reports
 - `nelrune-report.txt` — final quantification report, including permanent cell-calling/accounting diagnostics
 - `exonic/`, `intronic/`, and optional SNP output directories — **filtered canonical-cell matrices**
 - `raw/exonic/`, `raw/intronic/`, and optional SNP directories — **all observed barcode evidence (>=1 UMI) before canonical cell calling**
@@ -137,5 +137,5 @@ method/cutoff, retained cells, and cells not called.
 ## Deliberate minimalism
 
 This version does not add a second summary hierarchy. `RunProgress` owns only
-live orchestration state; `MappingInfo` remains the source of truth for
+live orchestration state; `RunStats` remains the source of truth for
 normalization/quantification counters and report strings.

@@ -161,7 +161,7 @@ dependencies = [
  "indicatif",
  "int_to_str",
  "lazy_static",
- "mapping_info",
+ "run_stats",
  "num_cpus",
  "openssl",
  "rayon",
@@ -1131,9 +1131,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "mapping_info"
+name = "run_stats"
 version = "0.1.0"
-source = "git+https://github.com/stela2502/mapping_info#d5d2185e477b30e603cb9ad3776ff7d070afadec"
+source = "git+https://github.com/stela2502/run_stats#d5d2185e477b30e603cb9ad3776ff7d070afadec"
 dependencies = [
  "atty",
  "chrono",
@@ -1563,7 +1563,7 @@ source = "git+https://github.com/stela2502/scdata#8543120596421892e999a5875f5f8f
 dependencies = [
  "flate2",
  "int_to_str",
- "mapping_info",
+ "run_stats",
  "rayon",
  "regex",
 ]

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 use scdata::{FeatureIndex, GeneUmiHash, MatrixValueType, Scdata};
 
 use crate::model::fit_mixture;
@@ -52,7 +52,7 @@ where
     // Native posterior matrix: same cell ids and real feature ids as the input
     // Scdata. Missing cell/feature combinations are implicit zeros.
     let mut posteriors = Scdata::new(rayon::current_num_threads().max(1), MatrixValueType::Real);
-    let mut report = MappingInfo::new(None, 0.0, 0);
+    let mut report = RunStats::new(None, 0.0, 0);
 
     for call in &calls.flat {
         if call.posterior.probability <= 0.0 {

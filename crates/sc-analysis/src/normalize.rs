@@ -1,4 +1,4 @@
-use crate::data::{CellAnnotations, SingleCellData};
+use crate::data::SingleCellData;
 use crate::qc::QcMetrics;
 use anyhow::Result;
 use sprs::{CsMat, TriMat};
@@ -31,7 +31,6 @@ pub(crate) fn normalize_surviving(
         }
     }
     let matrix: CsMat<f32> = tri.to_csr();
-    let annotations =
-        CellAnnotations::from_columns(vec![("cell", raw.cells.clone())], raw.n_cells())?;
+    let annotations = raw.annotations.clone();
     SingleCellData::new(matrix, features, raw.cells.clone(), annotations)
 }

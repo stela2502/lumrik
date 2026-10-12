@@ -30,7 +30,7 @@ The original use case is BD Rhapsody sample-tag detection inside `bam_tide`, but
 The hot-path API is intentionally simple:
 
 ```rust
-mapper.map_feature_id(seq, &mut mapping_info) -> Option<u64>
+mapper.map_feature_id(seq, &mut run_stats) -> Option<u64>
 ```
 
 `Some(feature_id)` is ready to use as a `Scdata` feature id. `None` means no unique, strong enough hit.
@@ -73,7 +73,7 @@ Add the crate and its ecosystem dependencies to your `Cargo.toml`.
 ```toml
 [dependencies]
 fast_tag_mapper = { git = "https://github.com/stela2502/lumrik" }
-mapping_info = { git = "https://github.com/stela2502/lumrik" }
+run_stats = { git = "https://github.com/stela2502/lumrik" }
 scdata = { git = "https://github.com/stela2502/lumrik" }
 ```
 
@@ -91,10 +91,10 @@ The crate includes the 12 human and 12 mouse BD sample tags.
 
 ```rust
 use fast_tag_mapper::FastTagMapper;
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
 let mapper = FastTagMapper::mouse_samples().with_min_hits(4);
-let mut info = MappingInfo::new(None, 0.0, 0);
+let mut info = RunStats::new(None, 0.0, 0);
 
 let read = b"GTTGTCAAGATGCTACCGTTCAGAGACCGGAGGCGTGTGTACGTGCGTTTCGAATTCCTGTAAGCCCACC";
 
@@ -143,19 +143,19 @@ The best threshold depends on how much sequencing error and truncation you expec
 pub fn map_feature_id(
     &self,
     seq: &[u8],
-    mapping: &mut MappingInfo,
+    mapping: &mut RunStats,
 ) -> Option<u64>
 ```
 
 Example:
 
 ```rust
-if let Some(feature_id) = mapper.map_feature_id(record.seq(), &mut mapping_info) {
+if let Some(feature_id) = mapper.map_feature_id(record.seq(), &mut run_stats) {
     // feature_id can be used directly in Scdata
 }
 ```
 
-The mapper updates `MappingInfo` internally with hit/no-hit/tie counters and timing.
+The mapper updates `RunStats` internally with hit/no-hit/tie counters and timing.
 
 ### Debug mapping status
 
@@ -165,7 +165,7 @@ For debugging, use:
 pub fn map_status(
     &self,
     seq: &[u8],
-    mapping: &mut MappingInfo,
+    mapping: &mut RunStats,
 ) -> MapStatus
 ```
 
@@ -174,7 +174,7 @@ Example:
 ```rust
 use fast_tag_mapper::MapStatus;
 
-match mapper.map_status(read, &mut mapping_info) {
+match mapper.map_status(read, &mut run_stats) {
     MapStatus::Hit {
         feature_id,
         feature_index,
@@ -260,7 +260,7 @@ Most users should use `map_feature_id(seq, mapping)`.
 If you already encoded read windows elsewhere, use the encoded-position API:
 
 ```rust
-mapper.map_encoded_positions_feature_id(encoded_positions, &mut mapping_info)
+mapper.map_encoded_positions_feature_id(encoded_positions, &mut run_stats)
 ```
 
 Important: encoded positions must be physical base-pair positions in the query read.
@@ -287,10 +287,10 @@ The most important tests are not synthetic "does the function run" tests. They s
 
 ```rust
 use fast_tag_mapper::{FastTagMapper, HUMAN_SAMPLE_TAGS, MOUSE_SAMPLE_TAGS};
-use mapping_info::MappingInfo;
+use run_stats::RunStats;
 
-fn info() -> MappingInfo {
-    MappingInfo::new(None, 0.0, 0)
+fn info() -> RunStats {
+    RunStats::new(None, 0.0, 0)
 }
 
 #[test]
@@ -354,7 +354,7 @@ fn human_mapper_accepts_human_and_rejects_mouse() {
 #[test]
 fn real_mouse_sample_read_maps_to_sampletag07() {
     let mapper = FastTagMapper::mouse_samples().with_min_hits(4);
-    let mut mi = MappingInfo::new(None, 0.0, 0);
+    let mut mi = RunStats::new(None, 0.0, 0);
 
     let read = b"GTTGTCAAGATGCTACCGTTCAGAGACCGGAGGCGTGTGTACGTGCGTTTCGAATTCCTGTAAGCCCACC";
 

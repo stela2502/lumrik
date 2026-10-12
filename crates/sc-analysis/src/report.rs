@@ -4,8 +4,11 @@ use crate::norn::{BeaconBlock, ClonomapBlock};
 use crate::qc::QcMetrics;
 use crate::stats::{bh_adjust, mann_whitney};
 use anyhow::Result;
+use rayon::prelude::*;
 use flate2::{Compression, write::GzEncoder};
 use ndarray::Array2;
+use sc_anndata::{AnnData, Column, Matrix, Table};
+use std::collections::BTreeMap;
 use plotters::prelude::*;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -35,8 +38,68 @@ pub(crate) fn write_all(
     write_beacon_summary(out, labels, beacon)?;
     write_qc_summary(out, qc)?;
     write_pca(out, norm, pca, variance)?;
+    write_h5ad(out, norm, qc, labels, initial, holdout, pca, umap, beacon, clonomap)?;
     write_history(out, history)?;
-    write_stats(&out.join("stats"), norm, labels, pseudo_groups)?;
+    write_stats(&out.join("stats"), norm, labels, pseudo_groups, Some(initial))?;
+    Ok(())
+}
+
+fn write_h5ad(
+    out: &Path,
+    d: &SingleCellData,
+    q: &QcMetrics,
+    labels: &[usize],
+    initial: &[usize],
+    holdout: &[bool],
+    pca: &Array2<f32>,
+    umap: &Array2<f32>,
+    beacon: &[BeaconBlock],
+    clonomap: Option<&ClonomapBlock>,
+) -> Result<()> {
+    // sc-analysis stores feature x cell CSR. AnnData's invariant is
+    // observation(cell) x variable(feature), so transpose exactly once here.
+    let x = d.matrix.transpose_view().to_csr();
+    let mut obs = Table::new("_index", d.cells.clone());
+    // Preserve source sample/condition annotations, without overriding generated columns.
+    let generated = ["total_umi", "detected_genes", "mitochondrial_umi", "ribosomal_umi", "vdj_umi", "surviving_umi", "overcluster", "cluster", "tech"];
+    for name in d.annotations.headers() {
+        if name == "cell" || generated.contains(&name.as_str()) { continue; }
+        if let Some(values) = d.annotations.column(name) {
+            obs.add_column(name.clone(), Column::String(values.to_vec()))?;
+        }
+    }
+    obs.add_column("total_umi", Column::F64(q.total.clone()))?;
+    obs.add_column("detected_genes", Column::I64(q.detected.iter().map(|&x| x as i64).collect()))?;
+    obs.add_column("mitochondrial_umi", Column::F64(q.mito.clone()))?;
+    obs.add_column("ribosomal_umi", Column::F64(q.ribo.clone()))?;
+    obs.add_column("vdj_umi", Column::F64(q.vdj.clone()))?;
+    obs.add_column("surviving_umi", Column::F64(q.surviving.clone()))?;
+    obs.add_column("overcluster", Column::I64(initial.iter().map(|&x| x as i64).collect()))?;
+    obs.add_column("cluster", Column::String(labels.iter().map(|x| format!("cluster_{x:03}")).collect()))?;
+    obs.add_column("tech", Column::String(holdout.iter().map(|&x| if x { "pseudo_deep" } else { "training" }.to_string()).collect()))?;
+    for b in beacon {
+        obs.add_column(format!("{}_assignment", b.name), Column::String(b.assignment.clone()))?;
+        obs.add_column(format!("{}_called_features", b.name), Column::String(b.called_features.clone()))?;
+        obs.add_column(format!("{}_n_called", b.name), Column::String(b.n_called.clone()))?;
+        obs.add_column(format!("{}_best_feature", b.name), Column::String(b.best_feature.clone()))?;
+        obs.add_column(format!("{}_best_log_odds", b.name), Column::String(b.best_log_odds.clone()))?;
+    }
+    if let Some(c) = clonomap {
+        for (header, values) in c.headers.iter().zip(&c.columns) {
+            obs.add_column(header.clone(), Column::String(values.clone()))?;
+        }
+    }
+    let var = Table::new("_index", d.features.clone());
+    let mut obsm = BTreeMap::new();
+    obsm.insert("X_pca".to_string(), Matrix::DenseF32(pca.clone()));
+    obsm.insert("X_umap".to_string(), Matrix::DenseF32(umap.clone()));
+    AnnData {
+        x: Matrix::CsrF32(x),
+        obs,
+        var,
+        obsm,
+        layers: BTreeMap::new(),
+    }.write_h5ad(out.join("analysis.h5ad"))?;
     Ok(())
 }
 
@@ -269,32 +332,60 @@ fn write_history(out: &Path, h: &[MergeStep]) -> Result<()> {
     }
     Ok(())
 }
-fn pseudo_samples(d: &SingleCellData, cells: &[usize], n: usize) -> Vec<Vec<f64>> {
-    let k = n.max(2).min(cells.len().max(1));
-    let mut out = vec![vec![0.0; d.n_features()]; k];
-    let mut cnt = vec![0usize; k];
+/// Mean-expression pseudo-bulks. Spatial seeds are never mixed across merged clusters.
+/// When spatial labels are unavailable (external H5AD), use deterministic
+/// round-robin grouping until PCA coordinates can be supplied explicitly.
+fn pseudo_samples(d: &SingleCellData, cells: &[usize], n: usize, spatial: Option<&[usize]>) -> Vec<Vec<f64>> {
+    use std::collections::BTreeMap;
+    if cells.is_empty() { return Vec::new(); }
+    let groups: Vec<Vec<usize>> = if let Some(patches) = spatial {
+        let mut by = BTreeMap::<usize, Vec<usize>>::new();
+        for &cell in cells { by.entry(patches[cell]).or_default().push(cell); }
+        by.into_values().collect()
+    } else {
+        let k = n.max(2).min(cells.len());
+        let mut by = vec![Vec::new(); k];
+        for (i, &cell) in cells.iter().enumerate() { by[i % k].push(cell); }
+        by
+    };
     let mut slot = vec![usize::MAX; d.n_cells()];
-    for (i, &c) in cells.iter().enumerate() {
-        slot[c] = i % k;
-        cnt[i % k] += 1;
+    for (i, cells) in groups.iter().enumerate() {
+        for &cell in cells { slot[cell] = i; }
     }
+    let mut out = vec![vec![0.0; d.n_features()]; groups.len()];
     for (g, row) in d.matrix.outer_iterator().enumerate() {
-        for (c, v) in row.iter() {
-            let s = slot[c];
-            if s != usize::MAX {
-                out[s][g] += *v as f64;
-            }
+        for (c, value) in row.iter() {
+            let i = slot[c];
+            if i != usize::MAX { out[i][g] += *value as f64; }
         }
     }
-    for s in 0..k {
-        let z = cnt[s].max(1) as f64;
-        for x in &mut out[s] {
-            *x /= z;
-        }
+    for (profile, cells) in out.iter_mut().zip(&groups) {
+        let denom = cells.len() as f64;
+        for value in profile { *value /= denom; }
     }
     out
 }
-fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize) -> Result<()> {
+/// Run the standard sc-analysis marker statistics for existing cell annotations,
+/// without reclustering. The output schema is identical to the standard run.
+pub fn write_group_stats(dir: &Path, data: &SingleCellData, grouping: &str, pseudo_groups: usize) -> Result<()> {
+    let groups = data.annotations.groups(grouping)?;
+    anyhow::ensure!(groups.len() >= 2, "marker statistics require at least two populations");
+    let mut labels = vec![usize::MAX; data.n_cells()];
+    let mut names = Vec::new();
+    for (idx, (name, cells)) in groups.iter().enumerate() {
+        names.push(name.clone());
+        for &cell in cells { labels[cell] = idx; }
+    }
+    anyhow::ensure!(labels.iter().all(|&x| x != usize::MAX), "missing cluster assignment");
+    fs::create_dir_all(dir)?;
+    write_stats(dir, data, &labels, pseudo_groups, None)?;
+    let mut mapping = BufWriter::new(File::create(dir.join("cluster_labels.tsv"))?);
+    writeln!(mapping, "cluster\t{grouping}")?;
+    for (idx, name) in names.iter().enumerate() { writeln!(mapping, "cluster_{idx:03}\t{name}")?; }
+    Ok(())
+}
+fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize, spatial: Option<&[usize]>) -> Result<()> {
+    if let Some(patches) = spatial { anyhow::ensure!(patches.len() == d.n_cells(), "PCA patch/cell count mismatch"); }
     let k = l.iter().copied().max().unwrap_or(0) + 1;
     let mut top = BufWriter::new(File::create(dir.join("top20_up_down.tsv"))?);
     let mut summary = BufWriter::new(File::create(dir.join("marker_summary.tsv"))?);
@@ -312,28 +403,32 @@ fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize) -> Re
         if inside.is_empty() || outside.is_empty() {
             continue;
         }
-        let a = pseudo_samples(d, &inside, groups);
-        let b = pseudo_samples(d, &outside, groups);
-        let mut raw = Vec::with_capacity(d.n_features());
-        for g in 0..d.n_features() {
+        eprintln!("  marker stats: cluster {}/{} ({} cells)", cl + 1, k, inside.len());
+        let a = pseudo_samples(d, &inside, groups, spatial);
+        let b = pseudo_samples(d, &outside, groups, spatial);
+        // One sparse row traversal per gene; avoid O(cells) random CSR lookups.
+        let mut membership = vec![false; d.n_cells()];
+        for &cell in &inside { membership[cell] = true; }
+        let raw: Vec<_> = (0..d.n_features()).into_par_iter().map(|g| {
             let av = a.iter().map(|x| x[g]).collect::<Vec<_>>();
             let bv = b.iter().map(|x| x[g]).collect::<Vec<_>>();
             let ma = av.iter().sum::<f64>() / av.len() as f64;
             let mb = bv.iter().sum::<f64>() / bv.len() as f64;
             let (u, p) = mann_whitney(&av, &bv);
-            let da = inside
-                .iter()
-                .filter(|&&c| d.matrix.get(g, c).copied().unwrap_or(0.0) > 0.0)
-                .count() as f64
-                / inside.len() as f64;
-            let db = outside
-                .iter()
-                .filter(|&&c| d.matrix.get(g, c).copied().unwrap_or(0.0) > 0.0)
-                .count() as f64
-                / outside.len() as f64;
+            let mut in_detected = 0usize;
+            let mut out_detected = 0usize;
+            if let Some(row) = d.matrix.outer_view(g) {
+                for (cell, value) in row.iter() {
+                    if *value > 0.0 {
+                        if membership[cell] { in_detected += 1; } else { out_detected += 1; }
+                    }
+                }
+            }
+            let da = in_detected as f64 / inside.len() as f64;
+            let db = out_detected as f64 / outside.len() as f64;
             let fc = ((ma + 1e-6) / (mb + 1e-6)).log2();
-            raw.push((g, ma, mb, da, db, fc, u, p));
-        }
+            (g, ma, mb, da, db, fc, u, p)
+        }).collect();
         let adj = bh_adjust(&raw.iter().map(|x| x.7).collect::<Vec<_>>());
         let mut rows = raw
             .into_iter()
