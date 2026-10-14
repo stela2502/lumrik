@@ -18,7 +18,7 @@ use bam_tide::ont_normalizer::OntNormalizer;
 use bam_tide::ont_normalizer::normalizer::OntNormalizerConfig;
 use bam_tide::quantification::bam_collector::BamCollector;
 
-use gtf_splice_index::{QuantClass, SpliceIndex};
+use gtf_splice_index::SpliceIndex;
 use scdata::QuantData;
 use sc_mapper::{MappingCall, StreamingMapper};
 

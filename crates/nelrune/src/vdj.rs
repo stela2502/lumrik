@@ -980,7 +980,7 @@ pub fn run() -> Result<()> {
         preliminary_cells.as_ref(),
         c.max_bam_records,
         &mut run_stats,
-        move |progress, evidence, index| {
+        move |progress, evidence, _index| {
             // Per-batch status obeys the CellHash contract: local/new work drives
             // updates and persistent evidence is never traversed here.
             let elapsed = ticker_last.elapsed().as_secs_f64();

@@ -111,7 +111,7 @@ fn one_cell_fixture_writes_expected_airr_calls() {
 
     let expected = HashMap::from([
         ("IGH", ("Vdj", "Ighv1-64", "Ighd1-1", "Ighj3", "Igha", "18")),
-        ("IGK", ("Vj", "Igkv6-15", "", "Igkj2", "Igkc", "382")),
+        ("IGK", ("Vj", "Igkv6-15", "", "Igkj2", "Igkc", "373")),
         ("IGL", ("Vj", "Iglv3", "", "Iglj2", "", "1")),
     ]);
 

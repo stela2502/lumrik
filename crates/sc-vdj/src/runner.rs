@@ -1053,7 +1053,6 @@ mod runner_tests {
     use rust_htslib::bam;
     use rust_htslib::bam::record::Aux;
     use sc_primer::ReadTagRecord;
-use scdata::CellHash;
 
 
     #[test]
@@ -1170,6 +1169,7 @@ use scdata::CellHash;
 
 }
 
+#[allow(dead_code)]
 fn aligned_blocks(record: &bam::Record) -> Vec<(u32, u32)> {
     let mut ref_pos = record.pos().max(0) as u32;
     let mut out = Vec::new();

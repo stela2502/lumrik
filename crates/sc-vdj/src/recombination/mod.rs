@@ -460,6 +460,7 @@ pub(crate) fn refresh_recombination_from_observed(
     true
 }
 
+#[allow(dead_code)]
 const ANCHOR_GAP_RUN: usize = 6;
 
 /// Recover the V/J geometry already established while assembling this receptor.
@@ -469,6 +470,7 @@ const ANCHOR_GAP_RUN: usize = 6;
 /// OneHot evidence, a second dynamic-programming alignment is redundant.  Six
 /// consecutive informative incompatible positions are treated as evidence for
 /// an indel/coordinate break and force the existing gapped-aligner fallback.
+#[allow(dead_code)]
 fn anchored_vj(
     observed: &[u8],
     index: &VdjIndex,
@@ -480,6 +482,7 @@ fn anchored_vj(
     Some((v_id, v_aln, j_id, j_aln, v_aln.score + j_aln.score))
 }
 
+#[allow(dead_code)]
 fn best_anchored_segment(
     observed: &[u8],
     index: &VdjIndex,
@@ -511,6 +514,7 @@ fn best_anchored_segment(
         .map(|(id, aln, _)| (id, aln))
 }
 
+#[allow(dead_code)]
 fn direct_anchor_alignment(
     observed_len: usize,
     summary: &ReceptorSequenceEvidence,

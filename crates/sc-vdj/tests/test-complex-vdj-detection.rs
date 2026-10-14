@@ -1,3 +1,4 @@
+#![allow(unused_imports, dead_code)]
 use rust_htslib::bam;
 use rust_htslib::bam::header::HeaderRecord;
 use rust_htslib::bam::record::{Aux, Cigar, CigarString};

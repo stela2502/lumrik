@@ -1617,6 +1617,7 @@ fn ratio_usize(num: usize, den: usize) -> f64 {
     }
 }
 
+#[allow(dead_code)]
 fn print_topology_info(label: &str, evaluation: &TopologyEvaluation) {
     println!("    {label}:");
     for (feature, e) in TopologyState::BIOLOGICAL.iter().zip(&evaluation.states) {

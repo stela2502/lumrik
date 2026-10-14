@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use bam_tide::core::ref_block::record_to_blocks;
 use clap::Parser;
-use gtf_splice_index::{MatchClass, MatchOptions, RefBlock, SpliceIndex, SplicedRead, Strand};
+use gtf_splice_index::{MatchClass, MatchOptions, SpliceIndex, SplicedRead, Strand};
 use rayon::prelude::*;
 use ommverse::{Ommverse, plot::{GeneTranscriptPlotOptions, plot_gene_transcripts_with_options}};
 use rust_htslib::bam::{self, Read};
@@ -99,6 +99,7 @@ struct SampleEstimate {
     unique_fragments: usize,
     splice_informative: usize,
     exon_only: usize,
+    #[allow(dead_code)]
     total_fragments: usize,
 }
 
@@ -361,7 +362,7 @@ fn svg_header(w: f64, h: f64) -> String {
     format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}"><rect width="100%" height="100%" fill="white"/><style>text{{font-family:Arial,sans-serif;fill:#222}} .small{{font-size:11px}} .label{{font-size:12px}} .title{{font-size:18px;font-weight:bold}} .grid{{stroke:#ddd;stroke-width:1}} </style>"#)
 }
 
-fn write_bootstrap_svg(path: &Path, args: &Cli, idx: &SpliceIndex, rows: &[SampleEstimate], _assigned: &HashMap<String,usize>, groups: &[GroupSpec;2], group_samples: &[Vec<String>;2], plotted: &[usize]) -> Result<()> {
+fn write_bootstrap_svg(path: &Path, args: &Cli, idx: &SpliceIndex, rows: &[SampleEstimate], _assigned: &HashMap<String,usize>, _groups: &[GroupSpec;2], group_samples: &[Vec<String>;2], plotted: &[usize]) -> Result<()> {
     let w=1180.0; let left=250.0; let right=270.0; let top=80.0; let row_h=78.0; let bottom=75.0;
     let h=top+row_h*plotted.len() as f64+bottom;
     let maxv=plotted.iter().flat_map(|&tx| rows.iter().filter(move |r| r.tx_id==tx).map(|r| r.bootstrap.ci975.max(r.identifiability.p975).max(r.fraction))).fold(0.0,f64::max).max(0.01)*1.08;
@@ -400,7 +401,7 @@ fn write_bootstrap_svg(path: &Path, args: &Cli, idx: &SpliceIndex, rows: &[Sampl
     s.push_str("</svg>"); std::fs::write(path,s)?; Ok(())
 }
 
-fn write_shift_svg(path: &Path, args: &Cli, idx: &SpliceIndex, rows: &[SampleEstimate], assigned: &HashMap<String,usize>, groups: &[GroupSpec;2], group_samples: &[Vec<String>;2], plotted: &[usize]) -> Result<()> {
+fn write_shift_svg(path: &Path, args: &Cli, idx: &SpliceIndex, rows: &[SampleEstimate], assigned: &HashMap<String,usize>, _groups: &[GroupSpec;2], group_samples: &[Vec<String>;2], plotted: &[usize]) -> Result<()> {
     let w=1180.0; let left=210.0; let right=280.0; let top=80.0; let row_h=42.0; let bottom=75.0; let h=top+row_h*plotted.len() as f64+bottom;
     let maxv=plotted.iter().flat_map(|&tx|rows.iter().filter(move|r|r.tx_id==tx).map(|r|r.fraction)).fold(0.0,f64::max).max(0.01)*1.12;
     let plot_w=w-left-right; let x=|v:f64| left+plot_w*(v/maxv);
@@ -469,7 +470,7 @@ fn write_structure_svg(
     plot_gene_transcripts_with_options(omm, &args.gene, path, &options)
 }
 
-fn write_report(path:&Path,args:&Cli,idx:&SpliceIndex,rows:&[SampleEstimate],assigned:&HashMap<String,usize>,groups:&[GroupSpec;2],group_samples:&[Vec<String>;2],plotted:&[usize],table:&Path,boot:&Path,shift:&Path,structure:Option<&Path>)->Result<()> {
+fn write_report(path:&Path,args:&Cli,idx:&SpliceIndex,_rows:&[SampleEstimate],_assigned:&HashMap<String,usize>,groups:&[GroupSpec;2],group_samples:&[Vec<String>;2],plotted:&[usize],table:&Path,boot:&Path,shift:&Path,structure:Option<&Path>)->Result<()> {
     let mut w=BufWriter::new(File::create(path)?);
     writeln!(w,"# {} transcript-usage comparison\n",args.gene)?;
     writeln!(w,"## Question\n\nDoes relative transcript usage within **{}** differ between **{}** and **{}**? This analysis compares exactly two sample groups by design.\n",args.gene,groups[0].label,groups[1].label)?;

@@ -3,7 +3,6 @@ use crate::index::{Chain, SegmentId, VdjIndex};
 use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
 use run_stats::RunStats;
-use std::collections::HashMap;
 
 /// Compact germline-aware sequence summary for one connected receptor fragment.
 ///
@@ -1456,6 +1455,7 @@ fn known_offset_is_compatible_packed(
     informative >= min_overlap && informative.saturating_sub(compatible) <= max_mismatches
 }
 
+#[allow(dead_code)]
 fn overlap_is_compatible_packed(
     a: &OneHotSequence,
     b: &OneHotSequence,

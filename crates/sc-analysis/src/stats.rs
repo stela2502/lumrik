@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub(crate) fn pearson(a: &[f64], b: &[f64]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -19,6 +20,7 @@ pub(crate) fn pearson(a: &[f64], b: &[f64]) -> f64 {
     if d == 0.0 { 0.0 } else { xy / d }
 }
 
+#[allow(dead_code)]
 pub(crate) fn pearson_f32(a: &[f32], b: &[f32]) -> f64 {
     let aa = a.iter().map(|&x| x as f64).collect::<Vec<_>>();
     let bb = b.iter().map(|&x| x as f64).collect::<Vec<_>>();

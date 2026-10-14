@@ -2,7 +2,7 @@
 use anyhow::{ensure, Context, Result};
 use sc_analysis::SingleCellData;
 use serde::{Deserialize, Serialize};
-use std::{collections::{BTreeMap,HashMap},fs::File,io::{BufWriter,Write},path::{Path,PathBuf}};
+use std::{collections::{BTreeMap,HashMap},fs::File,io::{BufWriter,Write},path::Path};
 
 #[derive(Serialize,Deserialize)]
 struct Model { format: String, version: u32, gene: String, grouping: String, features: Vec<String>, clusters: Vec<Centroid>, #[serde(default)] modules: BTreeMap<String, usize> }

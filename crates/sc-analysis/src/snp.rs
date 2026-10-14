@@ -183,11 +183,11 @@ fn enrich_h5ad(input:&Path, output:&Path, snps:&[String], observed:&BTreeMap<Str
         let index=index_values(&obs,&index_name)?;
         let keys=index.iter().map(|s|normalize(s)).collect::<Vec<_>>();
         let names=std::cell::RefCell::new(Vec::<String>::new());
-        let mut add_s=|name:String, vals:Vec<String>| -> Result<()> {
+        let add_s=|name:String, vals:Vec<String>| -> Result<()> {
             if obs.link_exists(&name) { bail!("existing obs column {name:?}; refusing overwrite"); }
             add_str(&obs,&name,vals)?; names.borrow_mut().push(name); Ok(())
         };
-        let mut add_i=|name:String, vals:Vec<i64>| -> Result<()> {
+        let add_i=|name:String, vals:Vec<i64>| -> Result<()> {
             if obs.link_exists(&name) { bail!("existing obs column {name:?}; refusing overwrite"); }
             add_int(&obs,&name,vals)?; names.borrow_mut().push(name); Ok(())
         };

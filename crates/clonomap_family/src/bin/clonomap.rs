@@ -2582,6 +2582,7 @@ fn write_unassigned(path: &Path, rows: &[UnassignedCell]) -> Result<()> {
 struct CloneSequenceAudit {
     family_id: String,
     lc_clone_id: String,
+    #[allow(dead_code)]
     chain: String,
     representative_recombination_id: String,
     naive_aa: String,

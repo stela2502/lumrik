@@ -210,8 +210,8 @@ struct Cli {
     #[arg(long, default_value_t = 30)]
     analysis_pcs: usize,
 
-    /// Deliberately excessive initial k-means cluster count.
-    #[arg(long, default_value_t = 30)]
+    /// Target final cluster count (0 = automatic spatial clustering).
+    #[arg(long, default_value_t = 0)]
     analysis_overclusters: usize,
 
     /// Merge over-clusters iteratively when mean-expression Pearson correlation reaches this value.
@@ -536,15 +536,13 @@ fn main() -> Result<()> {
             umap_neighbors: 15,
             exclude_vdj_before_normalization: false,
             min_umi_count: Some(400),
-            umap_components: 2,
             umap_epochs: 200,
-            overclusters: cli.analysis_overclusters,
-            kmeans_iterations: 50,
+            target_clusters: (cli.analysis_overclusters > 0).then_some(cli.analysis_overclusters),
             merge_pearson: cli.analysis_merge_pearson,
             holdout_fraction: cli.analysis_holdout_fraction,
-            normalization_scale: 10_000.0,
             pseudo_samples: 5,
             output_dir: cli.analysis_output.clone(),
+            ..AnalysisConfig::default()
         };
         println!(
             "sc-analysis: crude raw-matrix analysis of {}",
@@ -554,8 +552,8 @@ fn main() -> Result<()> {
             "  QC: mitochondrial/ribosomal counts retained as covariates and excluded before normalization"
         );
         println!(
-            "  normalization: log1p(10,000 * count / surviving cell total); PCA={} dims; k-means in PCA space k={}",
-            config.pca_components, config.overclusters
+            "  normalization: log1p(10,000 * count / surviving cell total); PCA={} dims; spatial clustering target={}",
+            config.pca_components, config.target_clusters.map_or("auto".to_string(), |n| n.to_string())
         );
         println!(
             "  iterative mean-expression Pearson merge >= {:.3}; top {:.1}% surviving UMI/cluster held out",
