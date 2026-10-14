@@ -1,4 +1,4 @@
-//! Lightweight, opinionated single-cell analysis primitives used by Lumrik tools.
+mod multiplet;
 pub mod cli;
 pub mod snp;
 mod bioinformatics;

@@ -20,3 +20,4 @@ mex_compare
 MEIS2.*
 AUTS*
 ETV*
+scripts/__pycache__/

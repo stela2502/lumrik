@@ -18,6 +18,7 @@ members = [
     "crates/hmm", 
     "crates/ommverse",
     "crates/traconmech",
+    "crates/ai_llm_con",
     "crates/sc-analysis",
     "crates/nelrune", 
     "crates/sc-vdj",

@@ -3,6 +3,7 @@
 use anyhow::Result;
 use sc_analysis::SingleCellData;
 use std::collections::BTreeMap;
+use std::fs;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -33,10 +34,10 @@ pub fn write_module_plots(
     groups: &BTreeMap<String, (Vec<usize>, Vec<usize>)>,
     actual_groups: &BTreeMap<String, (Vec<usize>, Vec<usize>)>,
     reference_clusters: &BTreeMap<String, String>,
-    case_label: &str, control_label: &str,
+    case_label: &str, control_label: &str, label_angle: Option<f64>, count_label_layout: &str,
 ) -> Result<()> {
     write_module_plots_named(out, data, modules, ordered, groups, actual_groups,
-        reference_clusters, case_label, control_label, "")
+        reference_clusters, case_label, control_label, "", label_angle, count_label_layout)
 }
 
 pub fn write_module_plots_named(
@@ -46,7 +47,16 @@ pub fn write_module_plots_named(
     actual_groups: &BTreeMap<String, (Vec<usize>, Vec<usize>)>,
     reference_clusters: &BTreeMap<String, String>,
     case_label: &str, control_label: &str, suffix: &str,
+    label_angle: Option<f64>, count_label_layout: &str,
 ) -> Result<()> {
+    let mut cell_types = BTreeMap::<String, String>::new();
+    let annotation_path = out.join("cluster_ai_annotations.tsv");
+    if annotation_path.is_file() {
+        for line in fs::read_to_string(&annotation_path)?.lines().skip(1) {
+            let fields: Vec<_> = line.split('\t').collect();
+            if fields.len() >= 2 { cell_types.insert(fields[0].to_owned(), fields[1].to_owned()); }
+        }
+    }
     let mut by_module: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
     for (gene, module) in modules { by_module.entry(*module).or_default().push(gene); }
     let mut tsv = BufWriter::new(File::create(out.join(format!("module_trajectories{suffix}.tsv")))?);
@@ -90,7 +100,15 @@ pub fn write_module_plots_named(
             }
         }
         let width = (ordered.len().max(2) as f64 * 115.0 + 190.0).max(660.0);
-        let height = 432.0;
+        // Long population names need vertical space below the plot. Rotate
+        // only when necessary so short Leiden/Louvain IDs stay horizontal.
+        let angle = label_angle.unwrap_or_else(|| if ordered.iter().any(|name| name.chars().count() > 14) { 55.0 } else { 0.0 });
+        anyhow::ensure!(angle.is_finite() && (0.0..=85.0).contains(&angle), "--label-angle must be in 0..=85");
+        anyhow::ensure!(matches!(count_label_layout, "horizontal" | "rotated"), "invalid --count-label-layout");
+        let rotate_labels = angle > 0.0;
+        let longest = ordered.iter().map(|s| s.chars().count()).max().unwrap_or(0) as f64;
+        let label_space = if rotate_labels { (longest * 7.0 * angle.to_radians().sin() + 35.0).ceil() } else { 55.0 };
+        let height = (315.0 + label_space + 115.0).max(472.0);
         let (left, right, top, bottom) = (85.0, width - 40.0, 75.0, 315.0);
         let x = |i: usize| left + (right-left) * (i as f64 + 0.5) / ordered.len() as f64;
         let ymin = bands.iter().flat_map(|a| a.iter().map(|v| v.0)).fold(0.0, f64::min) - 0.15;
@@ -113,11 +131,29 @@ pub fn write_module_plots_named(
             let source = reference_clusters.get(cluster);
             let substituted = source.is_some_and(|reference| reference != cluster);
             let marker = if substituted { "*" } else { "" };
-            writeln!(svg, "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"11\">{}{}</text>",
-                x(i), bottom+20.0, escape(cluster), marker)?;
-            // Separate colored counts remain legible even for 4-digit values.
-            writeln!(svg, "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"10\"><tspan fill=\"#2563eb\">{wt_n}</tspan><tspan fill=\"#555\"> / </tspan><tspan fill=\"#dc2626\">{case_n}</tspan></text>",
-                x(i), bottom+35.0)?;
+            // Each count is anchored to its own cluster label, never to the SVG bottom.
+            let label_y = bottom + 43.0;
+            let count_y = bottom + 18.0;
+            if count_label_layout == "rotated" && rotate_labels {
+                writeln!(svg, "<g transform=\"translate({:.1},{:.1}) rotate(-{angle:.1})\" text-anchor=\"end\" font-family=\"sans-serif\">", x(i), label_y)?;
+                writeln!(svg, "<text x=\"0\" y=\"-14\" font-size=\"10\"><tspan fill=\"#2563eb\">{wt_n}</tspan><tspan fill=\"#555\"> / </tspan><tspan fill=\"#dc2626\">{case_n}</tspan></text>")?;
+                writeln!(svg, "<text x=\"0\" y=\"0\" font-size=\"11\">{}{}</text></g>", escape(cluster), marker)?;
+            } else {
+                writeln!(svg, "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"10\"><tspan fill=\"#2563eb\">{wt_n}</tspan><tspan fill=\"#555\"> / </tspan><tspan fill=\"#dc2626\">{case_n}</tspan></text>", x(i), count_y)?;
+                if rotate_labels {
+                    writeln!(svg, "<text transform=\"translate({:.1},{:.1}) rotate(-{angle:.1})\" text-anchor=\"end\" font-family=\"sans-serif\" font-size=\"11\">{}{}</text>", x(i), label_y, escape(cluster), marker)?;
+                } else {
+                    writeln!(svg, "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"11\">{}{}</text>", x(i), label_y, escape(cluster), marker)?;
+                }
+            }
+            if let Some(cell_type) = cell_types.get(cluster) {
+                // SVG title retains the full label even when the visible label
+                // needs truncation to avoid colliding with adjacent clusters.
+                let short: String = cell_type.chars().take(19).collect();
+                let short = if cell_type.chars().count() > 19 { format!("{short}…") } else { short };
+                writeln!(svg, "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"9\" fill=\"#444\"><title>{}</title>{}</text>",
+                    x(i), if rotate_labels { bottom+label_space+44.0 } else { bottom+60.0 }, escape(cell_type), escape(&short))?;
+            }
         }
         for (j, color, label) in [(0, "#2563eb", control_label), (1, "#dc2626", case_label)] {
             let upper: Vec<_> = bands.iter().enumerate().map(|(i,v)| (x(i),y(v[j].2))).collect();

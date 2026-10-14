@@ -4,13 +4,13 @@ use ndarray::Array2;
 ///
 /// These labels are only seeds for the existing mean-expression merge.  They
 /// deliberately carry no biological meaning by themselves.
-pub(crate) fn spatial_patches(pca: &Array2<f32>, explained: &[f64]) -> Vec<usize> {
+pub(crate) fn spatial_patches(pca: &Array2<f32>, explained: &[f64], min_cells: usize, fraction: f64) -> Vec<usize> {
     let n = pca.nrows();
     if n == 0 {
         return Vec::new();
     }
 
-    let max_patch_cells = 50usize.max((n + 99) / 100); // ceil(1% of retained cells)
+    let max_patch_cells = min_cells.max((n as f64 * fraction).ceil() as usize).max(1);
     let dims = informative_dimensions(pca.ncols(), explained);
     let mut leaves = Vec::<Vec<usize>>::new();
     split_patch(pca, (0..n).collect(), &dims, max_patch_cells, &mut leaves);
@@ -107,7 +107,7 @@ mod tests {
             pca[(i, 0)] = i as f32;
             pca[(i, 1)] = (i % 17) as f32;
         }
-        let labels = spatial_patches(&pca, &[0.6, 0.3, 0.1]);
+        let labels = spatial_patches(&pca, &[0.6, 0.3, 0.1], 50, 0.01);
         let k = labels.iter().copied().max().unwrap() + 1;
         let mut counts = vec![0usize; k];
         for label in labels {
@@ -123,7 +123,7 @@ mod tests {
         for i in 0..n {
             pca[(i, 0)] = i as f32;
         }
-        let labels = spatial_patches(&pca, &[0.9, 0.1]);
+        let labels = spatial_patches(&pca, &[0.9, 0.1], 50, 0.01);
         let k = labels.iter().copied().max().unwrap() + 1;
         let mut counts = vec![0usize; k];
         for label in labels {
@@ -131,4 +131,16 @@ mod tests {
         }
         assert!(counts.iter().all(|&n| n <= 100));
     }
+    #[test]
+    fn patch_size_can_be_controlled_externally() {
+        let mut pca = Array2::<f32>::zeros((1000, 2));
+        for i in 0..1000 { pca[(i, 0)] = i as f32; }
+        let labels = spatial_patches(&pca, &[0.9, 0.1], 100, 0.0);
+        let k = labels.iter().copied().max().unwrap() + 1;
+        assert_eq!(k, 16);
+        let mut sizes = vec![0; k];
+        for label in labels { sizes[label] += 1; }
+        assert!(sizes.iter().all(|&n| n <= 100));
+    }
+
 }

@@ -10,6 +10,7 @@ use std::path::Path;
 pub struct CellAnnotations {
     headers: Vec<String>,
     columns: HashMap<String, Vec<String>>,
+    categorical_levels: HashMap<String, Vec<String>>,
 }
 
 impl CellAnnotations {
@@ -19,13 +20,18 @@ impl CellAnnotations {
     pub fn column(&self, name: &str) -> Option<&[String]> {
         self.columns.get(name).map(Vec::as_slice)
     }
+    pub fn categorical_levels(&self, name: &str) -> Option<&[String]> {
+        self.categorical_levels.get(name).map(Vec::as_slice)
+    }
     pub(crate) fn subset(&self, keep: &[usize]) -> Result<Self> {
         let mut columns = Vec::with_capacity(self.headers.len());
         for name in &self.headers {
             let values = self.columns.get(name).expect("annotation header has values");
             columns.push((name.as_str(), keep.iter().map(|&i| values[i].clone()).collect()));
         }
-        Self::from_columns(columns, keep.len())
+        let mut subset = Self::from_columns(columns, keep.len())?;
+        subset.categorical_levels = self.categorical_levels.clone();
+        Ok(subset)
     }
     pub fn groups(&self, name: &str) -> Result<BTreeMap<String, Vec<usize>>> {
         let values = self
@@ -53,6 +59,7 @@ impl CellAnnotations {
         Ok(Self {
             headers,
             columns: map,
+            categorical_levels: HashMap::new(),
         })
     }
 }
@@ -135,16 +142,35 @@ impl SingleCellData {
         };
         let n_cells = data.obs.index.len();
         let mut columns = Vec::with_capacity(data.obs.columns.len());
+        let mut categorical_levels = HashMap::new();
         for (name, column) in &data.obs.columns {
+            if let Column::Categorical { categories, .. } = column {
+                categorical_levels.insert(name.clone(), categories.clone());
+            }
             let values = match column {
                 Column::String(values) => values.clone(),
                 Column::F64(values) => values.iter().map(ToString::to_string).collect(),
                 Column::I64(values) => values.iter().map(ToString::to_string).collect(),
                 Column::Bool(values) => values.iter().map(ToString::to_string).collect(),
+                Column::Categorical { categories, codes, .. } => codes
+                    .iter()
+                    .map(|&code| {
+                        if code == -1 {
+                            Ok("NA".to_string())
+                        } else {
+                            let idx = usize::try_from(code)
+                                .with_context(|| format!("negative categorical code {code}"))?;
+                            categories.get(idx).cloned().with_context(|| {
+                                format!("categorical code {code} exceeds {} levels", categories.len())
+                            })
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?,
             };
             columns.push((name.as_str(), values));
         }
-        let annotations = CellAnnotations::from_columns(columns, n_cells)?;
+        let mut annotations = CellAnnotations::from_columns(columns, n_cells)?;
+        annotations.categorical_levels = categorical_levels;
         Self::new(matrix, data.var.index, data.obs.index, annotations)
     }
 
@@ -191,10 +217,14 @@ impl SingleCellData {
                     .push(record.get(idx).unwrap_or_default().to_owned());
             }
         }
-        Ok((cell_ids, CellAnnotations { headers, columns }))
+        Ok((cell_ids, CellAnnotations {
+            headers,
+            columns,
+            categorical_levels: HashMap::new(),
+        }))
     }
 
-    fn read_matrix_market(path: &Path) -> Result<CsMat<f32>> {
+    pub(crate) fn read_matrix_market(path: &Path) -> Result<CsMat<f32>> {
         let mut lines = Self::open_reader(path)?.lines();
         let banner = lines.next().context("empty Matrix Market file")??;
         if !banner.starts_with("%%MatrixMarket matrix coordinate") {

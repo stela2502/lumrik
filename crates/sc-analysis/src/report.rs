@@ -5,11 +5,12 @@ use crate::qc::QcMetrics;
 use crate::stats::{bh_adjust, mann_whitney};
 use anyhow::Result;
 use rayon::prelude::*;
-use flate2::{Compression, write::GzEncoder};
 use ndarray::Array2;
 use sc_anndata::{AnnData, Column, Matrix, Table};
 use std::collections::BTreeMap;
 use plotters::prelude::*;
+use plotters::style::text_anchor::{HPos, Pos, VPos};
+use plotters::style::TextStyle;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -17,6 +18,7 @@ use std::path::Path;
 pub(crate) fn write_all(
     out: &Path,
     norm: &SingleCellData,
+    sampled: &SingleCellData,
     qc: &QcMetrics,
     labels: &[usize],
     initial: &[usize],
@@ -28,25 +30,26 @@ pub(crate) fn write_all(
     beacon: &[BeaconBlock],
     clonomap: Option<&ClonomapBlock>,
     pseudo_groups: usize,
+    multiplet_fits: &[crate::multiplet::Fit],
 ) -> Result<()> {
     fs::create_dir_all(out)?;
-    fs::create_dir_all(out.join("normalized"))?;
     fs::create_dir_all(out.join("stats"))?;
-    write_mex(&out.join("normalized"), norm)?;
     write_cells(out, norm, qc, labels, initial, holdout, umap, beacon, clonomap)?;
     write_clusters(out, labels, holdout)?;
     write_beacon_summary(out, labels, beacon)?;
     write_qc_summary(out, qc)?;
     write_pca(out, norm, pca, variance)?;
-    write_h5ad(out, norm, qc, labels, initial, holdout, pca, umap, beacon, clonomap)?;
     write_history(out, history)?;
-    write_stats(&out.join("stats"), norm, labels, pseudo_groups, Some(initial))?;
+    // Publish marker summaries before the potentially slow H5AD export.
+    write_stats(&out.join("stats"), norm, labels, pseudo_groups, Some(initial), Some(out))?;
+    write_h5ad(out, norm, sampled, qc, labels, initial, holdout, pca, umap, beacon, clonomap, multiplet_fits)?;
     Ok(())
 }
 
 fn write_h5ad(
     out: &Path,
     d: &SingleCellData,
+    sampled: &SingleCellData,
     q: &QcMetrics,
     labels: &[usize],
     initial: &[usize],
@@ -55,7 +58,10 @@ fn write_h5ad(
     umap: &Array2<f32>,
     beacon: &[BeaconBlock],
     clonomap: Option<&ClonomapBlock>,
+    multiplet_fits: &[crate::multiplet::Fit],
 ) -> Result<()> {
+    anyhow::ensure!(d.features == sampled.features && d.cells == sampled.cells, "H5AD layers have different cell/gene ordering");
+    anyhow::ensure!(multiplet_fits.len() == d.n_cells(), "multiplet annotation length mismatch");
     // sc-analysis stores feature x cell CSR. AnnData's invariant is
     // observation(cell) x variable(feature), so transpose exactly once here.
     let x = d.matrix.transpose_view().to_csr();
@@ -76,6 +82,7 @@ fn write_h5ad(
     obs.add_column("surviving_umi", Column::F64(q.surviving.clone()))?;
     obs.add_column("overcluster", Column::I64(initial.iter().map(|&x| x as i64).collect()))?;
     obs.add_column("cluster", Column::String(labels.iter().map(|x| format!("cluster_{x:03}")).collect()))?;
+    obs.add_column("multiplet_explanation", Column::String(multiplet_fits.iter().map(|f| f.explanation.clone()).collect()))?;
     obs.add_column("tech", Column::String(holdout.iter().map(|&x| if x { "pseudo_deep" } else { "training" }.to_string()).collect()))?;
     for b in beacon {
         obs.add_column(format!("{}_assignment", b.name), Column::String(b.assignment.clone()))?;
@@ -93,12 +100,14 @@ fn write_h5ad(
     let mut obsm = BTreeMap::new();
     obsm.insert("X_pca".to_string(), Matrix::DenseF32(pca.clone()));
     obsm.insert("X_umap".to_string(), Matrix::DenseF32(umap.clone()));
+    let mut layers = BTreeMap::new();
+    layers.insert("resampled_umi".to_string(), Matrix::CsrF32(sampled.matrix.transpose_view().to_csr()));
     AnnData {
         x: Matrix::CsrF32(x),
         obs,
         var,
         obsm,
-        layers: BTreeMap::new(),
+        layers,
     }.write_h5ad(out.join("analysis.h5ad"))?;
     Ok(())
 }
@@ -115,32 +124,6 @@ pub(crate) fn write_plots(
     let dir = out.join("plots");
     fs::create_dir_all(&dir)?;
     plots(&dir, norm, qc, labels, variance, umap, beacon)
-}
-fn gz(path: &Path) -> Result<GzEncoder<File>> {
-    Ok(GzEncoder::new(File::create(path)?, Compression::default()))
-}
-fn write_mex(dir: &Path, d: &SingleCellData) -> Result<()> {
-    let mut m = gz(&dir.join("matrix.mtx.gz"))?;
-    writeln!(m, "%%MatrixMarket matrix coordinate real general")?;
-    writeln!(m, "{} {} {}", d.n_features(), d.n_cells(), d.matrix.nnz())?;
-    let csc = d.matrix.to_csc();
-    for (c, col) in csc.outer_iterator().enumerate() {
-        for (r, v) in col.iter() {
-            writeln!(m, "{} {} {:.8}", r + 1, c + 1, v)?;
-        }
-    }
-    m.finish()?;
-    let mut f = gz(&dir.join("features.tsv.gz"))?;
-    for x in &d.features {
-        writeln!(f, "{0}\t{0}\tGene Expression", x)?;
-    }
-    f.finish()?;
-    let mut b = gz(&dir.join("barcodes.tsv.gz"))?;
-    for x in &d.cells {
-        writeln!(b, "{x}")?;
-    }
-    b.finish()?;
-    Ok(())
 }
 fn frac(a: f64, b: f64) -> f64 {
     if b > 0.0 { a / b } else { 0.0 }
@@ -321,13 +304,14 @@ fn write_history(out: &Path, h: &[MergeStep]) -> Result<()> {
     let mut w = BufWriter::new(File::create(out.join("cluster_merge_history.tsv"))?);
     writeln!(
         w,
-        "step\tfrom\tinto\tpearson\tfrom_cells\tinto_cells\tmerged_cells"
+        "step\tfrom\tinto\tpearson\tfrom_cells\tinto_cells\tmerged_cells\tward_delta_sse"
     )?;
     for x in h {
         writeln!(
             w,
-            "{}\t{}\t{}\t{:.8}\t{}\t{}\t{}",
-            x.step, x.from, x.into, x.correlation, x.from_cells, x.into_cells, x.merged_cells
+            "{}\t{}\t{}\t{:.8}\t{}\t{}\t{}\t{}",
+            x.step, x.from, x.into, x.correlation, x.from_cells, x.into_cells, x.merged_cells,
+            x.ward_delta_sse.map(|v| format!("{v:.8}")).unwrap_or_default()
         )?;
     }
     Ok(())
@@ -378,17 +362,21 @@ pub fn write_group_stats(dir: &Path, data: &SingleCellData, grouping: &str, pseu
     }
     anyhow::ensure!(labels.iter().all(|&x| x != usize::MAX), "missing cluster assignment");
     fs::create_dir_all(dir)?;
-    write_stats(dir, data, &labels, pseudo_groups, None)?;
+    write_stats(dir, data, &labels, pseudo_groups, None, None)?;
     let mut mapping = BufWriter::new(File::create(dir.join("cluster_labels.tsv"))?);
     writeln!(mapping, "cluster\t{grouping}")?;
     for (idx, name) in names.iter().enumerate() { writeln!(mapping, "cluster_{idx:03}\t{name}")?; }
     Ok(())
 }
-fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize, spatial: Option<&[usize]>) -> Result<()> {
+fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize, spatial: Option<&[usize]>, summary_root: Option<&Path>) -> Result<()> {
     if let Some(patches) = spatial { anyhow::ensure!(patches.len() == d.n_cells(), "PCA patch/cell count mismatch"); }
     let k = l.iter().copied().max().unwrap_or(0) + 1;
     let mut top = BufWriter::new(File::create(dir.join("top20_up_down.tsv"))?);
     let mut summary = BufWriter::new(File::create(dir.join("marker_summary.tsv"))?);
+    // Create the discoverable root-level summary immediately, not after all stats.
+    let mut root_summary = summary_root
+        .map(|root| File::create(root.join("marker_summary.tsv")))
+        .transpose()?;
     writeln!(
         top,
         "cluster\tdirection\trank\tgene\tmean_cluster\tmean_rest\tpct_cluster\tpct_rest\tlog2_fold_change\twilcoxon_u\tp_value\tp_adj"
@@ -397,6 +385,11 @@ fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize, spati
         summary,
         "cluster\tn_cells\tfraction_cells\ttop20_up\ttop20_down"
     )?;
+    summary.flush()?;
+    if let Some(root) = root_summary.as_mut() {
+        writeln!(root, "cluster\tn_cells\tfraction_cells\ttop20_up\ttop20_down")?;
+        root.flush()?;
+    }
     for cl in 0..k {
         let inside = (0..d.n_cells()).filter(|&i| l[i] == cl).collect::<Vec<_>>();
         let outside = (0..d.n_cells()).filter(|&i| l[i] != cl).collect::<Vec<_>>();
@@ -437,6 +430,7 @@ fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize, spati
             .collect::<Vec<_>>();
         rows.sort_by(|a, b| {
             a.8.total_cmp(&b.8)
+                .then_with(|| a.7.total_cmp(&b.7))
                 .then_with(|| b.5.abs().total_cmp(&a.5.abs()))
                 .then_with(|| d.features[a.0].cmp(&d.features[b.0]))
         });
@@ -499,12 +493,17 @@ fn write_stats(dir: &Path, d: &SingleCellData, l: &[usize], groups: usize, spati
             .map(|r| d.features[r.0].as_str())
             .collect::<Vec<_>>()
             .join(",");
-        writeln!(
-            summary,
+        let summary_line = format!(
             "cluster_{cl:03}\t{}\t{:.8}\t{up_names}\t{down_names}",
             inside.len(),
             inside.len() as f64 / d.n_cells().max(1) as f64
-        )?;
+        );
+        writeln!(summary, "{summary_line}")?;
+        summary.flush()?;
+        if let Some(root) = root_summary.as_mut() {
+            writeln!(root, "{summary_line}")?;
+            root.flush()?;
+        }
     }
     Ok(())
 }
@@ -629,7 +628,8 @@ fn scatter_cat(path: &Path, title: &str, u: &Array2<f32>, v: &[usize]) -> Result
         counts[cl] += 1;
     }
 
-    let root = SVGBackend::new(path, (1250, 900)).into_drawing_area();
+    let legend_height = 70u32 + (k as u32).saturating_mul(30) + 20;
+    let root = SVGBackend::new(path, (1250, 900u32.max(legend_height))).into_drawing_area();
     root.fill(&WHITE)?;
     let (plot, legend) = root.split_horizontally(1000);
     let (x0, x1) = range(u, 0);
@@ -655,8 +655,9 @@ fn scatter_cat(path: &Path, title: &str, u: &Array2<f32>, v: &[usize]) -> Result
                 counts[cl],
                 100.0 * counts[cl] as f64 / v.len().max(1) as f64
             ),
-            (35, y + 5),
-            ("sans-serif", 16).into_font(),
+            (35, y),
+            TextStyle::from(("sans-serif", 16).into_font())
+                .pos(Pos::new(HPos::Left, VPos::Center)),
         ))?;
     }
 

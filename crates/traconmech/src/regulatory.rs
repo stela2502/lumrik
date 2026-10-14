@@ -19,12 +19,15 @@ pub struct Config<'a> {
     pub cases: &'a str,
     pub controls: &'a str,
     pub effect_cluster: bool,
+    pub label_angle: Option<f64>,
+    pub count_label_layout: &'a str,
     pub co_variant: &'a [String],
     pub min_score: u32,
     pub min_wt_cells: usize,
     pub ai_development: bool,
     pub ai_model: &'a str,
     pub ai_url: &'a str,
+    pub ai_primer: Option<&'a str>,
 }
 
 fn lines(path: &Path) -> Result<Box<dyn BufRead>> {
@@ -312,6 +315,37 @@ pub fn run(c: Config<'_>) -> Result<()> {
     } else {
         c.co_variant.to_vec()
     };
+    // Native AnnData categorical levels are authoritative for plotting order.
+    // For plain string labels, retain the existing deterministic ordering.
+    let mut ordered = ordered;
+    if c.co_variant.is_empty() {
+        if let Some(levels) = c.data.annotations.categorical_levels(c.cluster) {
+            let rank: HashMap<&str, usize> = levels.iter().enumerate()
+                .map(|(i, level)| (level.as_str(), i)).collect();
+            ordered.sort_by_key(|label| rank.get(label.as_str()).copied().unwrap_or(usize::MAX));
+        } else if c.cluster == "cell_type" {
+            // Numeric developmental_order can also provide ordering for cell_type.
+            if let (Some(names), Some(orders)) = (
+                c.data.annotations.column(c.cluster),
+                c.data.annotations.column("developmental_order"),
+            ) {
+                let mut rank: HashMap<&str, f64> = HashMap::new();
+                for (name, order) in names.iter().zip(orders) {
+                    if let Ok(value) = order.parse::<f64>() {
+                        if value.is_finite() {
+                            rank.entry(name.as_str()).and_modify(|v| *v = v.min(value))
+                                .or_insert(value);
+                        }
+                    }
+                }
+                ordered.sort_by(|a, b| {
+                    let x = rank.get(a.as_str()).copied().unwrap_or(f64::INFINITY);
+                    let y = rank.get(b.as_str()).copied().unwrap_or(f64::INFINITY);
+                    x.total_cmp(&y).then_with(|| a.cmp(b))
+                });
+            }
+        }
+    }
     let mut signatures = BTreeMap::<String,Vec<f64>>::new();
     for gene in targets.keys() {
         let mut effects = Vec::with_capacity(ordered.len());
@@ -412,12 +446,17 @@ pub fn run(c: Config<'_>) -> Result<()> {
         }
         summary.flush()?;
         stable.flush()?;
-        crate::module_plots::write_module_plots(c.out, c.data, &modules, &ordered, &groups, &actual_groups, &reference_clusters, c.cases, c.controls)?;
-        if c.ai_development {
-            let ai_order = crate::ai::developmental_order(c.out, c.ai_model, c.ai_url, &ordered)?;
+        // Annotation must precede SVG generation so both plot variants have
+        // cell-type labels. Reuse saved AI results when rerunning the analysis.
+        let ai_order = if c.ai_development {
+            eprintln!("[traconmech] developmental AI: loading cached annotation or contacting Ollama ({})", c.ai_model);
+            Some(crate::ai::developmental_order_cached(c.out, c.ai_model, c.ai_url, &ordered, c.ai_primer)?)
+        } else { None };
+        crate::module_plots::write_module_plots(c.out, c.data, &modules, &ordered, &groups, &actual_groups, &reference_clusters, c.cases, c.controls, c.label_angle, c.count_label_layout)?;
+        if let Some(ai_order) = ai_order {
             crate::module_plots::write_module_plots_named(c.out, c.data, &modules,
                 &ai_order, &groups, &actual_groups, &reference_clusters,
-                c.cases, c.controls, "_developmental")?;
+                c.cases, c.controls, "_developmental", c.label_angle, c.count_label_layout)?;
         }
 
         eprintln!("[traconmech] effect clustering: {} modules (0 = flat trajectory); order: {}",

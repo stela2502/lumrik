@@ -8,6 +8,7 @@ description = "Trace biological context to candidate mechanisms"
 
 [dependencies]
 anyhow = "1"
+ai_llm_con = { path = "../ai_llm_con" }
 clap = { workspace = true }
 ommverse = { path = "../ommverse" }
 sc-analysis = { path = "../sc-analysis" }

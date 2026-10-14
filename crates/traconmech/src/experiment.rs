@@ -83,11 +83,11 @@ pub fn resolve(data: &SingleCellData, out: &Path, population: &str, condition: &
             .with_context(|| format!("invalid {}", file.display()))?)
     } else { None };
     if let Some(previous) = &old {
-        anyhow::ensure!(previous.version == 1, "unsupported experiment.yaml version");
+        anyhow::ensure!(previous.version == 1, "unsupported experiment.yaml version in {} (found {}, expected 1)", file.display(), previous.version);
         anyhow::ensure!(previous.condition_column == condition && previous.population_column == population,
-            "experiment.yaml metadata columns changed; review the file before rerunning");
+            "experiment metadata columns changed in {}: saved population={:?}, condition={:?}; current population={:?}, condition={:?}. Review this file before rerunning", file.display(), previous.population_column, previous.condition_column, population, condition);
         anyhow::ensure!(previous.observed_conditions == observed,
-            "experiment.yaml sample labels or cell counts changed; review the file before rerunning");
+            "experiment sample labels or cell counts changed in {}\nSaved: {:?}\nCurrent: {:?}\nReview this file before rerunning", file.display(), previous.observed_conditions, observed);
     }
     // Explicit CLI choices override saved selections. Otherwise reuse the
     // scientist-approved experiment.yaml; prompt only for a new experiment.

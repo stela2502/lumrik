@@ -1,3 +1,4 @@
+mod gene_model;
 mod experiment;
 mod regulatory;
 mod module_plots;
@@ -31,6 +32,8 @@ enum Mode {
     Analysis(AnalysisCli),
     /// TP53 -> STRING -> MSigDB regulatory analysis with per-cluster WT fallback.
     Investigate(Cli),
+    /// Full investigation with portable gene-model training or fixed-model projection.
+    GeneModel(GeneModelCli),
     /// Compare a case Louvain population to an adequate WT reference.
     MatchWt(Cli),
     /// Export population expression summaries and correlation tables.
@@ -47,6 +50,19 @@ enum Mode {
     Contracts(Cli),
     /// Print the current experimental scope.
     Scope(Cli),
+}
+
+#[derive(Debug, Args)]
+struct GeneModelCli {
+    #[command(subcommand)]
+    action: GeneModelAction,
+}
+#[derive(Debug, Subcommand)]
+enum GeneModelAction {
+    /// Investigate training data and save a reusable model.
+    Create(Cli),
+    /// Investigate external data and project a frozen model (no refitting).
+    Apply(Cli),
 }
 
 #[derive(Debug, Args)]
@@ -106,6 +122,12 @@ struct Cli {
     /// Cluster gene targets by their shared MSigDB set membership.
     #[arg(long)]
     effect_cluster: bool,
+    /// X-axis label rotation in degrees (0-85); auto for long names.
+    #[arg(long)]
+    label_angle: Option<f64>,
+    /// Cell-count placement: horizontal above labels, or rotated with labels.
+    #[arg(long, default_value = "horizontal", value_parser = ["horizontal", "rotated"])]
+    count_label_layout: String,
     /// Biological cluster IDs to compare the WT/DBA effect profiles across.
     #[arg(long, num_args = 1..)]
     co_variant_clusters: Vec<String>,
@@ -122,9 +144,13 @@ struct Cli {
     #[arg(long)]
     ask: Option<String>,
 
-    /// Start an interactive Ollama investigation.
+    /// Start an interactive Ollama investigation (or explicitly request it for investigate).
     #[arg(long)]
     ai: bool,
+
+    /// Skip automatic developmental AI annotation during effect-cluster investigation.
+    #[arg(long)]
+    no_developmental_ai: bool,
 
     /// Investigation directory (conversation.md, evidence.jsonl, error.log).
     #[arg(long, default_value = "investigation")]
@@ -133,6 +159,14 @@ struct Cli {
     /// Ollama model used for evidence-driven investigation.
     #[arg(long, default_value = "gpt-oss:20b")]
     model: String,
+
+    /// Experimental context for developmental cell-type annotation.
+    #[arg(long)]
+    ai_primer: Option<String>,
+
+    /// AI backend: ollama (local) or openai (cloud API).
+    #[arg(long, value_parser = ["ollama", "openai"], default_value = "ollama")]
+    ai_provider: String,
 
     /// Local Ollama API endpoint.
     #[arg(long, default_value = "http://localhost:11434")]
@@ -250,6 +284,61 @@ fn main() -> Result<()> {
         }
         Mode::InspectResults(args) => {
             return inspect_results(&args);
+        }
+        Mode::GeneModel(args) => {
+            let (mut cli, create) = match args.action {
+                GeneModelAction::Create(cli) => (cli, true),
+                GeneModelAction::Apply(cli) => (cli, false),
+            };
+            anyhow::ensure!(cli.investigate_gene.is_some(), "gene-model requires --gene");
+            anyhow::ensure!(cli.data.is_some() && cli.ommverse.is_some(), "gene-model requires --data and --ommverse");
+            anyhow::ensure!(cli.string_info.is_some() && cli.string_links.is_some(), "gene-model requires STRING info and links");
+            // In gene-model mode, --model names the portable file, not the AI backend.
+            let model_path = PathBuf::from(&cli.model);
+            anyhow::ensure!(cli.model != "gpt-oss:20b", "gene-model requires --model PATH");
+            let input = cli.data.as_ref().unwrap();
+            let data = if input.is_dir() { SingleCellData::from_mtx_dir(input)? }
+                else { SingleCellData::from_h5ad(input)? };
+            if !create { gene_model::validate(&model_path, cli.investigate_gene.as_deref().unwrap(), &data)?; }
+            // The existing investigate path still produces the full reference plots.
+            // Apply does not re-fit effect modules: frozen model projection is separate.
+            if !create { cli.effect_cluster = false; }
+            cli.model = "gpt-oss:20b".to_owned();
+            cli.match_wt_clusters = false;
+            cli.profile_clusters = false;
+            let design = experiment::resolve(&data, &cli.out,
+                cli.cluster.as_deref().unwrap_or(&cli.group), &cli.condition,
+                cli.case.as_deref(), cli.control.as_deref(), cli.min_wt_cells,
+                cli.non_interactive)?;
+            regulatory::run(regulatory::Config {
+                gene: cli.investigate_gene.as_deref().unwrap(),
+                index: cli.ommverse.as_deref().unwrap(), data: &data, out: &cli.out,
+                string_info: cli.string_info.as_deref().unwrap(),
+                string_links: cli.string_links.as_deref().unwrap(),
+                cluster: cli.cluster.as_deref().unwrap_or(&cli.group),
+                condition: &cli.condition,
+                cases: &design.cases.join(","), controls: &design.controls.join(","),
+                effect_cluster: cli.effect_cluster, label_angle: cli.label_angle,
+                count_label_layout: &cli.count_label_layout,
+                co_variant: &cli.co_variant_clusters, min_score: cli.string_min_score,
+                min_wt_cells: cli.min_wt_cells,
+                ai_development: !cli.no_developmental_ai,
+                ai_model: &cli.model,
+                ai_url: if cli.ai_provider == "openai" { "openai" } else { &cli.ollama_url },
+                ai_primer: cli.ai_primer.as_deref(),
+            })?;
+            experiment::record_references(&cli.out)?;
+            if create {
+                gene_model::create(&data, cli.cluster.as_deref().unwrap_or(&cli.group),
+                    cli.investigate_gene.as_deref().unwrap(), &model_path, &cli.out)?;
+            } else {
+                gene_model::apply(&data, &model_path, &cli.condition, &cli.out)?;
+                gene_model::plot_frozen_modules(&data, &model_path,
+                    cli.cluster.as_deref().unwrap_or(&cli.group), &cli.condition,
+                    &design.cases.join(","), &design.controls.join(","), &cli.out,
+                    cli.label_angle, &cli.count_label_layout)?;
+            }
+            return Ok(());
         }
         Mode::Investigate(mut cli) => {
             // --gene is the preferred spelling; --investigate-gene remains an alias.
@@ -389,10 +478,12 @@ fn main() -> Result<()> {
             cases: &design.cases.join(","),
             controls: &design.controls.join(","),
             effect_cluster: cli.effect_cluster,
+            label_angle: cli.label_angle,
+            count_label_layout: &cli.count_label_layout,
             co_variant: &cli.co_variant_clusters,
             min_score: cli.string_min_score,
             min_wt_cells: cli.min_wt_cells,
-            ai_development: cli.ai, ai_model: &cli.model, ai_url: &cli.ollama_url,
+            ai_development: !cli.no_developmental_ai, ai_model: &cli.model, ai_url: if cli.ai_provider == "openai" { "openai" } else { &cli.ollama_url }, ai_primer: cli.ai_primer.as_deref(),
         });
         result?;
         experiment::record_references(&cli.out)?;
@@ -409,7 +500,7 @@ fn main() -> Result<()> {
             }.with_context(|| format!("loading {}", data_path.display()))?;
             // Validate the reference path here; expression tools do not yet use its contents.
             anyhow::ensure!(ommverse_path.exists(), "Ommverse reference not found: {}", ommverse_path.display());
-            return ai::investigate(&data, &cli.group, &cli.out, &cli.model, &cli.ollama_url, cli.ask.as_deref());
+            return ai::investigate(&data, &cli.group, &cli.out, &cli.model, if cli.ai_provider == "openai" { "openai" } else { &cli.ollama_url }, cli.ask.as_deref());
         }
 
         let data = if data_path.is_dir() {

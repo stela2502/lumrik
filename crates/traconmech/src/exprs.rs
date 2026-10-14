@@ -37,6 +37,10 @@ pub fn summarize(data: &AnnData, grouping: &str, warnings: Vec<String>) -> Resul
         format!("grouping {grouping:?} missing; available: {:?}", data.obs.columns.keys().collect::<Vec<_>>()))?;
     let mut groups = BTreeMap::new();
     match column {
+        Column::Categorical { categories, codes, .. } => for &code in codes {
+            let label = if code == -1 { "NA" } else { categories.get(code as usize).map(String::as_str).unwrap_or("NA") };
+            *groups.entry(label.to_owned()).or_insert(0) += 1;
+        },
         Column::String(values) => for value in values { *groups.entry(value.clone()).or_insert(0) += 1; },
         Column::I64(values) => for value in values { *groups.entry(value.to_string()).or_insert(0) += 1; },
         Column::Bool(values) => for value in values { *groups.entry(value.to_string()).or_insert(0) += 1; },
@@ -63,5 +67,27 @@ mod tests {
         assert_eq!(result.groups["erythroid"], 2);
         assert_eq!(result.groups["myeloid"], 1);
         assert!(summarize(&data, "missing", vec![]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod categorical_integration_tests {
+    use super::*;
+    use sc_anndata::{Matrix, Table};
+    #[test]
+    fn native_celltype_factor_is_groupable() -> Result<()> {
+        let mut obs = Table::new("_index", vec!["c1".into(), "c2".into(), "c3".into()]);
+        obs.add_column("cell_type", Column::Categorical {
+            categories: vec!["HSC".into(), "MEP".into(), "Erythroid".into()],
+            codes: vec![2, 0, -1], ordered: true,
+        })?;
+        let data = AnnData { x: Matrix::DenseF32(ndarray::Array2::zeros((3, 1))),
+            obs, var: Table::new("_index", vec!["TP53".into()]),
+            obsm: Default::default(), layers: Default::default() };
+        let result = summarize(&data, "cell_type", vec![])?;
+        assert_eq!(result.groups["Erythroid"], 1);
+        assert_eq!(result.groups["HSC"], 1);
+        assert_eq!(result.groups["NA"], 1);
+        Ok(())
     }
 }

@@ -18,6 +18,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai_llm_con"
+version = "0.8.2"
+dependencies = [
+ "anyhow",
+ "serde_json",
+]
+
+[[package]]
 name = "alga"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3744,6 +3752,7 @@ dependencies = [
 name = "traconmech"
 version = "0.8.2"
 dependencies = [
+ "ai_llm_con",
  "anyhow",
  "clap",
  "flate2",

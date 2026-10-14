@@ -32,6 +32,8 @@ pub enum Column {
     F64(Vec<f64>),
     I64(Vec<i64>),
     Bool(Vec<bool>),
+    /// Native AnnData categorical: codes are zero-based; -1 means missing.
+    Categorical { categories: Vec<String>, codes: Vec<i64>, ordered: bool },
 }
 
 impl Column {
@@ -39,6 +41,7 @@ impl Column {
         match self {
             Self::String(x) => x.len(), Self::F64(x) => x.len(),
             Self::I64(x) => x.len(), Self::Bool(x) => x.len(),
+            Self::Categorical { codes, .. } => codes.len(),
         }
     }
 }
@@ -64,6 +67,24 @@ impl Table {
         self.declared_columns.insert(name.clone(), "decoded".into());
         self.columns.insert(name, column);
         Ok(())
+    }
+    /// Decode categorical values into the existing data_table::Factor representation.
+    /// AnnData -1 becomes Factor's NaN; category ordering is preserved.
+    pub fn factor(&self, name: &str) -> Result<Option<(data_table::Factor, Vec<f64>, bool)>> {
+        let Some(Column::Categorical { categories, codes, ordered }) = self.columns.get(name) else { return Ok(None) };
+        let mut factor = data_table::Factor::new(name, false);
+        for category in categories {
+            if category.is_empty() || category.eq_ignore_ascii_case("NA") {
+                bail!("factor {name:?}: category {category:?} conflicts with data_table missing-value convention");
+            }
+            factor.level_to_index(category);
+        }
+        let values = codes.iter().map(|&code| {
+            if code == -1 { Ok(f64::NAN) }
+            else if code >= 0 && (code as usize) < categories.len() { Ok(code as f64) }
+            else { bail!("factor {name:?}: invalid categorical code {code}") }
+        }).collect::<Result<Vec<_>>>()?;
+        Ok(Some((factor, values, *ordered)))
     }
     pub fn len(&self) -> usize { self.index.len() }
     pub fn is_empty(&self) -> bool { self.index.is_empty() }
@@ -203,6 +224,14 @@ fn summarize_columns(table: &Table, max_categories: usize) -> Vec<AnnotationSumm
                 for value in values { *counts.entry(value.to_string()).or_insert(0) += 1; }
                 ("integer", Some(counts))
             }
+            Column::Categorical { categories, codes, .. } => {
+                let mut counts = BTreeMap::new();
+                for &code in codes {
+                    let label = if code == -1 { "NA" } else { categories.get(code as usize).map(String::as_str).unwrap_or("NA") };
+                    *counts.entry(label.to_string()).or_insert(0) += 1;
+                }
+                ("factor", Some(counts))
+            }
             Column::F64(_) => ("float", None),
         };
         let distinct_values = counts.as_ref().map(BTreeMap::len);
@@ -246,6 +275,17 @@ fn write_table(file: &File, name: &str, table: &Table) -> Result<()> {
     for (name, col) in &table.columns {
         match col {
             Column::String(x) => write_strings(&g, name, x)?,
+            Column::Categorical { categories, codes, ordered } => {
+                if codes.iter().any(|&code| code < -1 || (code >= 0 && code as usize >= categories.len())) {
+                    bail!("/{}/{}: categorical code out of range", g.name(), name);
+                }
+                let cat = g.create_group(name)?;
+                attr_str(&cat, "encoding-type", "categorical")?;
+                attr_str(&cat, "encoding-version", "0.2.0")?;
+                cat.new_attr::<u8>().create("ordered")?.write_scalar(&u8::from(*ordered))?;
+                write_strings(&cat, "categories", categories)?;
+                cat.new_dataset_builder().with_data(codes).create("codes")?;
+            },
             Column::F64(x) => { let ds=g.new_dataset::<f64>().shape(x.len()).create(name.as_str())?; ds.write(x)?; attr_str(&ds,"encoding-type","array")?; attr_str(&ds,"encoding-version","0.2.0")?; },
             Column::I64(x) => { let ds=g.new_dataset::<i64>().shape(x.len()).create(name.as_str())?; ds.write(x)?; attr_str(&ds,"encoding-type","array")?; attr_str(&ds,"encoding-version","0.2.0")?; },
             Column::Bool(x) => { let vals:Vec<u8>=x.iter().map(|v|u8::from(*v)).collect(); let ds=g.new_dataset::<u8>().shape(vals.len()).create(name.as_str())?; ds.write(&vals)?; attr_str(&ds,"encoding-type","array")?; attr_str(&ds,"encoding-version","0.2.0")?; },
@@ -331,18 +371,15 @@ fn read_codes(ds: &hdf5::Dataset) -> Result<Option<Vec<i64>>> {
     Ok(None)
 }
 
-fn decode_categorical(codes: &hdf5::Dataset, categories: &hdf5::Dataset) -> Result<Option<Column>> {
+fn decode_categorical(codes: &hdf5::Dataset, categories: &hdf5::Dataset, ordered: bool) -> Result<Option<Column>> {
     let Some(codes) = read_codes(codes)? else { return Ok(None) };
     let Some(categories) = read_strings(categories)? else { return Ok(None) };
-    let mut values = Vec::with_capacity(codes.len());
-    for code in codes {
-        if code == -1 { values.push(String::new()); }
-        else {
-            let index = usize::try_from(code).context("negative categorical code other than -1")?;
-            values.push(categories.get(index).context("categorical code out of range")?.clone());
+    for &code in &codes {
+        if code < -1 || (code >= 0 && code as usize >= categories.len()) {
+            bail!("categorical code {code} out of range for {} categories", categories.len());
         }
     }
-    Ok(Some(Column::String(values)))
+    Ok(Some(Column::Categorical { categories, codes, ordered }))
 }
 
 fn read_table(file:&File,name:&str,warnings:&mut Vec<ReadWarning>)->Result<Option<Table>> {
@@ -369,11 +406,12 @@ fn read_table(file:&File,name:&str,warnings:&mut Vec<ReadWarning>)->Result<Optio
             else if ds.dtype()?.is::<i64>() {Some(Column::I64(ds.read_raw()?))}
             else if ds.dtype()?.is::<f32>() {Some(Column::F64(ds.read_raw::<f32>()?.into_iter().map(|x|x as f64).collect()))}
             else if let Some(cats)=g.group("__categories").ok().and_then(|c|c.dataset(&member).ok()) {
-                decode_categorical(&ds,&cats)?
+                decode_categorical(&ds,&cats,false)?
             } else {None}
         } else if let Ok(group)=g.group(&member) {
             if group.link_exists("codes") && group.link_exists("categories") {
-                decode_categorical(&group.dataset("codes")?,&group.dataset("categories")?)?
+                decode_categorical(&group.dataset("codes")?,&group.dataset("categories")?,
+                    group.attr("ordered").ok().and_then(|a| a.read_scalar::<u8>().ok()).unwrap_or(0) != 0)?
             } else {None}
         } else {None};
         if let Some(col)=col {
@@ -443,5 +481,32 @@ mod tests {
         let var=Table::new("_index",vec!["g1".into(),"g2".into(),"g3".into()]);
         let a=AnnData{x:Matrix::CsrF32(x),obs,var,obsm:BTreeMap::new(),layers:BTreeMap::new()};
         let p=std::env::temp_dir().join(format!("sc_anndata_{}.h5ad",std::process::id())); a.write_h5ad(&p)?; let b=AnnData::read_h5ad(&p)?; assert_eq!(b.data.x.shape(),(2,3)); std::fs::remove_file(p)?; Ok(())
+    }
+}
+
+#[cfg(test)]
+mod categorical_roundtrip_tests {
+    use super::*;
+    #[test]
+    fn categorical_roundtrip_preserves_order_and_missing() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("lumrik_factor_{}.h5ad", std::process::id()));
+        let mut obs = Table::new("_index", vec!["c1".into(), "c2".into(), "c3".into()]);
+        obs.add_column("cell_type", Column::Categorical {
+            categories: vec!["HSC".into(), "MEP".into(), "Erythroid".into()],
+            codes: vec![2, 0, -1], ordered: true,
+        })?;
+        let var = Table::new("_index", vec!["TP53".into()]);
+        let data = AnnData { x: Matrix::DenseF32(Array2::zeros((3, 1))), obs, var,
+            obsm: BTreeMap::new(), layers: BTreeMap::new() };
+        data.write_h5ad(&path)?;
+        let read = AnnData::read_h5ad(&path)?;
+        let (factor, values, ordered) = read.data.obs.factor("cell_type")?.expect("factor");
+        assert!(ordered);
+        assert_eq!(factor.get_levels(), &["HSC", "MEP", "Erythroid"]);
+        assert_eq!(values[0], 2.0);
+        assert_eq!(values[1], 0.0);
+        assert!(values[2].is_nan());
+        std::fs::remove_file(path)?;
+        Ok(())
     }
 }

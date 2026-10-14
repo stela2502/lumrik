@@ -6,7 +6,6 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::collections::BTreeMap;
-use std::process::{Command, Stdio};
 
 const MAX_TOOL_ROUNDS: usize = 8;
 
@@ -22,25 +21,7 @@ fn failure(out: &Path, stage: &str, raw: &str, error: &str) {
     let _ = append(&out.join("error.log"),
         &format!("\n[{stage}] {error}\nRaw response/request:\n{raw}\n"));
 }
-fn chat(url: &str, payload: &Value) -> Result<(Value, String)> {
-    // Curl provides HTTP status validation and timeouts without a second networking stack.
-    let mut child = Command::new("curl")
-        .args(["--fail-with-body", "--silent", "--show-error", "--max-time", "300",
-               "-H", "Content-Type: application/json", "-X", "POST",
-               "--data-binary", "@-", &format!("{}/api/chat", url.trim_end_matches('/'))])
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn().context("starting curl for Ollama")?;
-    child.stdin.take().context("curl stdin")?
-        .write_all(serde_json::to_string(payload)?.as_bytes())?;
-    let output = child.wait_with_output().context("waiting for Ollama")?;
-    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.status.success() {
-        bail!("Ollama HTTP request failed: {} (body: {})",
-            String::from_utf8_lossy(&output.stderr), raw);
-    }
-    let parsed = serde_json::from_str(&raw).context("invalid Ollama JSON")?;
-    Ok((parsed, raw))
-}
+
 fn read_cluster_summary(out: &Path, group: &str) -> Result<Value> {
     let dir = out.join("stats");
     let labels = fs::read_to_string(dir.join("cluster_labels.tsv"))?;
@@ -183,7 +164,7 @@ pub fn investigate(data: &SingleCellData, group: &str, out: &Path,
         for round in 0..MAX_TOOL_ROUNDS {
             let payload = json!({"model":model,"stream":false,"messages":messages,
                                  "tools":tool_specs()});
-            let (response, raw) = match chat(url, &payload) {
+            let (response, raw) = match ai_llm_con::chat(out, url, &payload) {
                 Ok(value) => value,
                 Err(e) => {
                     failure(out,"ollama_http_or_json",&payload.to_string(),&e.to_string());
@@ -250,7 +231,13 @@ pub fn investigate(data: &SingleCellData, group: &str, out: &Path,
                 };
                 json_line(&evidence_log,&json!({"round":round,"tool":name,"arguments":args,"result":result}))?;
                 append(&conversation,&format!("\n### Evidence: {name}\n\nArguments: `{args}`\n\nSee `evidence.jsonl` for measured results.\n"))?;
-                messages.push(json!({"role":"tool","tool_name":name,"content":result.to_string()}));
+                if url == "openai" {
+                    let id = call.get("id").and_then(Value::as_str)
+                        .context("OpenAI tool call missing id")?;
+                    messages.push(json!({"role":"tool","tool_call_id":id,"content":result.to_string()}));
+                } else {
+                    messages.push(json!({"role":"tool","tool_name":name,"content":result.to_string()}));
+                }
             }
         }
         if !answered {
@@ -262,18 +249,56 @@ pub fn investigate(data: &SingleCellData, group: &str, out: &Path,
     Ok(())
 }
 
+/// Reuse complete validated annotations; otherwise call the existing Ollama client.
+/// Do not silently accept an incomplete or stale developmental order.
+pub fn developmental_order_cached(out: &Path, model: &str, url: &str,
+                                  allowed: &[String], primer: Option<&str>) -> Result<Vec<String>> {
+    let annotations = out.join("cluster_ai_annotations.tsv");
+    let primer_path = out.join("developmental_ai_primer.txt");
+    let requested_primer = primer.unwrap_or("");
+    let same_primer = fs::read_to_string(&primer_path).ok().as_deref() == Some(requested_primer);
+    let backend_identity = format!("{url}\n{model}");
+    let same_backend = fs::read_to_string(out.join("developmental_ai_backend.txt"))
+        .ok().as_deref() == Some(backend_identity.as_str());
+    let order_file = out.join("developmental_display_order.tsv");
+    if annotations.is_file() && order_file.is_file() && same_primer && same_backend {
+        let lines = fs::read_to_string(&order_file)?;
+        let mut order = Vec::new();
+        for line in lines.lines().skip(1) {
+            let parts: Vec<_> = line.split('\t').collect();
+            anyhow::ensure!(parts.len() == 2, "invalid developmental order row");
+            order.push(parts[1].to_owned());
+        }
+        let expected: std::collections::BTreeSet<_> = allowed.iter().collect();
+        let unique: std::collections::BTreeSet<_> = order.iter().collect();
+        let text = fs::read_to_string(&annotations)?;
+        let annotated: std::collections::BTreeSet<_> = text.lines().skip(1)
+            .filter_map(|line| line.split('\t').next()).collect();
+        let expected_names: std::collections::BTreeSet<_> = allowed.iter().map(String::as_str).collect();
+        if order.len() == allowed.len() && unique == expected && annotated == expected_names {
+            eprintln!("[traconmech] developmental AI: reusing {}", annotations.display());
+            return Ok(order);
+        }
+        eprintln!("[traconmech] developmental AI: cached clusters differ; querying Ollama");
+    }
+    eprintln!("[traconmech] developmental AI: requesting cluster identities and order from Ollama");
+    developmental_order(out, model, url, allowed, primer)
+}
+
 /// Reuse the existing Ollama transport and sc-analysis marker evidence.
 /// AI proposes annotations and a *linear display order*; it never changes
 /// measured cluster identities, module membership or reference matching.
 pub fn developmental_order(out: &Path, model: &str, url: &str,
-                           allowed: &[String]) -> Result<Vec<String>> {
+                           allowed: &[String], primer: Option<&str>) -> Result<Vec<String>> {
     let signatures = read_cluster_summary_from_markers(&out.join("cluster_markers"))?;
+    let context = primer.filter(|p| !p.trim().is_empty()).unwrap_or("No experiment description supplied.");
+    eprintln!("[traconmech] developmental AI: sending request to Ollama (timeout: 1200 seconds)");
     let prompt = json!({"role":"user","content":format!(
-        "Using ONLY these sc-analysis cluster markers, propose tentative cell identities and a developmental display order.\n\n{}\n\nAllowed cluster IDs: {}\n\nReturn ONLY a JSON object with keys 'annotations' (array of objects each with cluster, cell_type, lineage, confidence, rationale) and 'order' (array of cluster ID strings). Include each allowed cluster exactly once in order. Group related lineages; do NOT imply that distinct lineages form a single differentiation path. Label stress/cycling states as states, not stages. Do not fabricate certainty.",
-        serde_json::to_string(&signatures)?, serde_json::to_string(allowed)?) });
+        "Experiment background (context, not marker evidence):\n{}\n\nUsing ONLY these sc-analysis cluster markers, propose tentative cell identities and a developmental display order.\n\n{}\n\nAllowed cluster IDs: {}\n\nReturn ONLY a JSON object with keys 'annotations' (array of objects each with cluster, cell_type, lineage, confidence, rationale) and 'order' (array of cluster ID strings). Include each allowed cluster exactly once in order. Group related lineages; do NOT imply that distinct lineages form a single differentiation path. Label stress/cycling states as states, not stages. Do not fabricate certainty.",
+        context, serde_json::to_string(&signatures)?, serde_json::to_string(allowed)?) });
     let payload = json!({"model":model,"stream":false,"format":"json","messages":[
         {"role":"system","content":"You are an evidence-driven hematopoiesis cell annotation assistant. Return strictly valid JSON. Developmental order is a tentative display arrangement, not measured pseudotime or lineage tracing."},prompt]});
-    let (response, raw) = chat(url, &payload)?;
+    let (response, raw) = ai_llm_con::chat(out, url, &payload)?;
     fs::write(out.join("developmental_ai_response.json"), &raw)?;
     let content = response.get("message").and_then(|m| m.get("content"))
         .and_then(Value::as_str).context("Ollama missing developmental annotation content")?;
@@ -306,6 +331,8 @@ pub fn developmental_order(out: &Path, model: &str, url: &str,
         tsv.push_str(&format!("{}\t{}\n", cluster, values.join("\t")));
     }
     fs::write(out.join("cluster_ai_annotations.tsv"), tsv)?;
+    fs::write(out.join("developmental_ai_primer.txt"), primer.unwrap_or(""))?;
+    fs::write(out.join("developmental_ai_backend.txt"), format!("{url}\n{model}"))?;
     fs::write(out.join("developmental_display_order.tsv"),
         format!("display_rank\tcluster\n{}", order.iter().enumerate()
             .map(|(i,c)| format!("{}\t{}\n", i+1,c)).collect::<String>()))?;
