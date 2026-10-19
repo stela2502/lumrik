@@ -74,7 +74,11 @@ impl SourceManifest {
 
     pub fn load_optional(path: impl AsRef<Path>) -> Result<Option<Self>> {
         let path = path.as_ref();
-        if path.is_file() { Ok(Some(Self::load(path)?)) } else { Ok(None) }
+        if path.is_file() {
+            Ok(Some(Self::load(path)?))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -115,14 +119,22 @@ fn builtin(assembly: &str) -> Result<SourceManifest> {
 }
 
 fn download(url: &str, path: &Path) -> Result<()> {
-    if path.is_file() { return Ok(()); }
-    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    if path.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     eprintln!("[ommverse] fetch {url}");
     let status = Command::new("wget")
         .args(["--continue", "--output-document"])
-        .arg(path).arg(url).status()
+        .arg(path)
+        .arg(url)
+        .status()
         .with_context(|| format!("starting wget for {url}"))?;
-    if !status.success() { bail!("wget failed for {url}"); }
+    if !status.success() {
+        bail!("wget failed for {url}");
+    }
     Ok(())
 }
 
@@ -130,12 +142,25 @@ fn resolved(provider: String, url: String, path: Option<&Path>) -> ResolvedSourc
     let bytes = path.and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
     let sha256 = path.and_then(|p| {
         let out = Command::new("sha256sum").arg(p).output().ok()?;
-        if !out.status.success() { return None; }
-        String::from_utf8_lossy(&out.stdout).split_whitespace().next().map(str::to_owned)
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .next()
+            .map(str::to_owned)
     });
     let retrieved_unix_seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs());
-    ResolvedSource { provider, url, bytes, sha256, retrieved_unix_seconds }
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs());
+    ResolvedSource {
+        provider,
+        url,
+        bytes,
+        sha256,
+        retrieved_unix_seconds,
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -146,10 +171,17 @@ pub struct AnnotationOptions {
     pub explicit_gtf: Option<PathBuf>,
 }
 
-pub fn fetch_assembly_with_annotation(assembly: &str, cache_root: &Path, annotation: &AnnotationOptions) -> Result<PathBuf> {
+pub fn fetch_assembly_with_annotation(
+    assembly: &str,
+    cache_root: &Path,
+    annotation: &AnnotationOptions,
+) -> Result<PathBuf> {
     let mut manifest = builtin(assembly)?;
     if manifest.reference.name != assembly {
-        bail!("source manifest names {} but {assembly} was requested", manifest.reference.name);
+        bail!(
+            "source manifest names {} but {assembly} was requested",
+            manifest.reference.name
+        );
     }
     let root = cache_root.join(assembly);
     std::fs::create_dir_all(&root)?;
@@ -158,7 +190,9 @@ pub fn fetch_assembly_with_annotation(assembly: &str, cache_root: &Path, annotat
     for resource in &mut manifest.resources {
         let mut providers = resource.providers.clone();
         providers.sort_by_key(|p| p.priority);
-        let provider = providers.first().with_context(|| format!("{} has no provider", resource.kind))?;
+        let provider = providers
+            .first()
+            .with_context(|| format!("{} has no provider", resource.kind))?;
         let provider_name = provider.name.clone();
         let provider_url = provider.url.clone();
         let provider_adapter = provider.adapter.clone();
@@ -176,13 +210,17 @@ pub fn fetch_assembly_with_annotation(assembly: &str, cache_root: &Path, annotat
             resource.resolved = Some(resolved(provider_name, provider_url, None));
             continue;
         }
-        let Some(rel) = &resource.file else { continue; };
+        let Some(rel) = &resource.file else {
+            continue;
+        };
         let path = root.join(rel);
         download(&provider_url, &path)?;
         resource.resolved = Some(resolved(provider_name, provider_url, Some(&path)));
     }
     if let Some(gtf) = &annotation.explicit_gtf {
-        let canonical = gtf.canonicalize().with_context(|| format!("GTF {}", gtf.display()))?;
+        let canonical = gtf
+            .canonicalize()
+            .with_context(|| format!("GTF {}", gtf.display()))?;
         manifest.resources.push(ResourceSpec {
             kind: "gene_annotation".to_owned(),
             source: "user".to_owned(),
@@ -190,13 +228,26 @@ pub fn fetch_assembly_with_annotation(assembly: &str, cache_root: &Path, annotat
             format: Some("gtf".to_owned()),
             file: Some(canonical.clone()),
             providers: Vec::new(),
-            resolved: Some(resolved("user".to_owned(), canonical.display().to_string(), Some(&canonical))),
+            resolved: Some(resolved(
+                "user".to_owned(),
+                canonical.display().to_string(),
+                Some(&canonical),
+            )),
         });
-    } else if let Some(series) = match assembly { "hg38" => Some("GENCODE human"), "mm39" => Some("GENCODE mouse"), _ => None } {
+    } else if let Some(series) = match assembly {
+        "hg38" => Some("GENCODE human"),
+        "mm39" => Some("GENCODE mouse"),
+        _ => None,
+    } {
         manifest.resources.push(ResourceSpec {
             kind: "gene_annotation".to_owned(),
             source: series.to_owned(),
-            release: Some(annotation.gencode_release.clone().unwrap_or_else(|| "latest".to_owned())),
+            release: Some(
+                annotation
+                    .gencode_release
+                    .clone()
+                    .unwrap_or_else(|| "latest".to_owned()),
+            ),
             format: Some("gtf.gz".to_owned()),
             file: None,
             providers: Vec::new(),

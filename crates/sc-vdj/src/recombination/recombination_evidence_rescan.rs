@@ -9,8 +9,8 @@ use fast_tag_mapper::{FastLocusMapper, FeatureEntry, MapStatus};
 use int_to_dna::IntToDna;
 use onehot_dna::OneHotSequence;
 use rayon::prelude::*;
-use rust_htslib::bam::{self, Read};
 use rust_htslib::bam::record::Cigar;
+use rust_htslib::bam::{self, Read};
 use scdata::CellHash;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -91,8 +91,9 @@ impl RescanBamInput {
                 done: false,
             }),
             Err(_) => Ok(Self::Sequential(
-                bam::Reader::from_path(path)
-                    .with_context(|| format!("opening {} for VDJ evidence rescan", path.display()))?,
+                bam::Reader::from_path(path).with_context(|| {
+                    format!("opening {} for VDJ evidence rescan", path.display())
+                })?,
             )),
         }
     }
@@ -114,7 +115,9 @@ impl RescanBamInput {
 
     fn next_record(&mut self, record: &mut bam::Record) -> Option<Result<()>> {
         match self {
-            Self::Sequential(reader) => reader.read(record).map(|result| result.map_err(Into::into)),
+            Self::Sequential(reader) => {
+                reader.read(record).map(|result| result.map_err(Into::into))
+            }
             Self::Indexed {
                 reader,
                 regions,

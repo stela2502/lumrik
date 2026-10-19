@@ -2,8 +2,8 @@
 use anyhow::Result;
 use gtf_splice_index::{MatchClass, MatchOptions, QuantClass, SpliceIndex};
 use rayon::prelude::*;
-use scdata::cell_data::GeneUmiHash;
 use run_stats::RunStats;
+use scdata::cell_data::GeneUmiHash;
 
 use crate::quantification::job::Job;
 use crate::quantification::processor_options::ProcessorOptions;
@@ -141,7 +141,13 @@ impl<'a> ChunkProcessor<'a> {
             // Canonical expression contains every gene-associated molecule,
             // independent of whether its evidence is exonic or intronic.
             let mut exprs_report = RunStats::new(None, 0.0, 0);
-            out.try_insert(QuantData::EXPRS, &job.cell, feature_umi, 1.0, &mut exprs_report);
+            out.try_insert(
+                QuantData::EXPRS,
+                &job.cell,
+                feature_umi,
+                1.0,
+                &mut exprs_report,
+            );
         }
     }
 
@@ -150,13 +156,7 @@ impl<'a> ChunkProcessor<'a> {
             return;
         };
 
-        snp.add_hits(
-            job.aligned.as_ref(),
-            job.cell,
-            job.umi,
-            out,
-            report,
-        );
+        snp.add_hits(job.aligned.as_ref(), job.cell, job.umi, out, report);
     }
 }
 

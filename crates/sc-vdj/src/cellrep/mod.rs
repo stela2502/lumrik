@@ -5,9 +5,9 @@
 //! summaries and linkage counters, then drops the raw sequence, qualities and
 //! mapper geometry before reading the next batch.
 
-use run_stats::RunStats;
 use crate::index::{Chain, SegmentId, SegmentKind, VdjIndex};
 use rayon::prelude::*;
+use run_stats::RunStats;
 use rust_htslib::bam::record::Cigar;
 use scdata::CellHash;
 use std::collections::{HashMap, HashSet};
@@ -67,7 +67,6 @@ pub struct MapperEvidence {
     pub alignment: AlignmentGeometry,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawBamFeatureEvidence {
     pub id: EvidenceId,
@@ -124,7 +123,9 @@ impl UmiRegionState {
     }
 
     fn absorb_read(&mut self, read: &RawBamFeatureEvidence) {
-        let Some(umi) = read.umi.as_ref() else { return; };
+        let Some(umi) = read.umi.as_ref() else {
+            return;
+        };
         let (start, end) = Self::read_span(read);
         Self::add_span(self.regions.entry(umi.clone()).or_default(), start, end);
     }
@@ -254,16 +255,17 @@ impl CellEvidenceVdj {
         // Persistent state is read-only here. Each worker clones only the tiny
         // region list for a UMI on first touch, then mutates that local copy.
         let umi_reduce_started = Instant::now();
-        let reduced_batch = batch.par_map_owned_with(&self.umi_regions, |raw_bucket, region_bucket| {
-            let mut reduced_bucket = HashMap::with_capacity(raw_bucket.len());
-            for (cell_id, mut raw_cell) in raw_bucket {
-                raw_cell.retain_umi_region_extensions(region_bucket.get(&cell_id));
-                if !raw_cell.records.is_empty() {
-                    reduced_bucket.insert(cell_id, raw_cell);
+        let reduced_batch =
+            batch.par_map_owned_with(&self.umi_regions, |raw_bucket, region_bucket| {
+                let mut reduced_bucket = HashMap::with_capacity(raw_bucket.len());
+                for (cell_id, mut raw_cell) in raw_bucket {
+                    raw_cell.retain_umi_region_extensions(region_bucket.get(&cell_id));
+                    if !raw_cell.records.is_empty() {
+                        reduced_bucket.insert(cell_id, raw_cell);
+                    }
                 }
-            }
-            reduced_bucket
-        });
+                reduced_bucket
+            });
 
         let umi_reduce_elapsed = umi_reduce_started.elapsed();
         let reduced_records: usize = reduced_batch
@@ -299,48 +301,49 @@ impl CellEvidenceVdj {
         let (batch_models, mut batch_stats) = reduced_batch.par_map_owned_with_stats(
             &empty_context,
             |raw_bucket, _unused_bucket, local_stats| {
-            let mut model_bucket = HashMap::with_capacity(raw_bucket.len());
-            for (cell_id, raw_cell) in raw_bucket {
-                let features: Vec<BamFeatureEvidence> = raw_cell
-                    .records
-                    .into_iter()
-                    .filter_map(|raw| interpret_raw_feature(raw, contig_names, index))
-                    .collect();
-                if features.is_empty() {
-                    continue;
-                }
-
-                let feature_refs: Vec<_> = features.iter().collect();
-                let mut cell = CellEvidence::default();
-                cell.consume_compact_metadata(&feature_refs, index);
-
-                for chain in Chain::ALL {
-                    let chain_features: Vec<_> = feature_refs
-                        .iter()
-                        .copied()
-                        .filter(|feature| {
-                            feature_has_rearrangement_segment(feature, index, chain)
-                        })
+                let mut model_bucket = HashMap::with_capacity(raw_bucket.len());
+                for (cell_id, raw_cell) in raw_bucket {
+                    let features: Vec<BamFeatureEvidence> = raw_cell
+                        .records
+                        .into_iter()
+                        .filter_map(|raw| interpret_raw_feature(raw, contig_names, index))
                         .collect();
-                    if chain_features.is_empty() {
+                    if features.is_empty() {
                         continue;
                     }
-                    let summaries = ChainSummaryWork {
-                        features: &chain_features,
-                        index,
-                        chain,
-                        min_overlap,
-                    }
-                    .summarize(local_stats);
-                    if !summaries.is_empty() {
-                        cell.summaries.insert(chain, summaries);
-                    }
-                }
 
-                model_bucket.insert(cell_id, cell);
-            }
-            model_bucket
-        });
+                    let feature_refs: Vec<_> = features.iter().collect();
+                    let mut cell = CellEvidence::default();
+                    cell.consume_compact_metadata(&feature_refs, index);
+
+                    for chain in Chain::ALL {
+                        let chain_features: Vec<_> = feature_refs
+                            .iter()
+                            .copied()
+                            .filter(|feature| {
+                                feature_has_rearrangement_segment(feature, index, chain)
+                            })
+                            .collect();
+                        if chain_features.is_empty() {
+                            continue;
+                        }
+                        let summaries = ChainSummaryWork {
+                            features: &chain_features,
+                            index,
+                            chain,
+                            min_overlap,
+                        }
+                        .summarize(local_stats);
+                        if !summaries.is_empty() {
+                            cell.summaries.insert(chain, summaries);
+                        }
+                    }
+
+                    model_bucket.insert(cell_id, cell);
+                }
+                model_bucket
+            },
+        );
 
         let model_build_elapsed = model_build_started.elapsed();
         let batch_model_count: usize = batch_models
@@ -397,10 +400,10 @@ impl CellEvidenceVdj {
             .saturating_sub(models_removed);
         batch_stats.merge(&merge_mapping);
 
-
-        batch_stats
-            .reads_log
-            .insert("vdj.umi_region.contained_skips".to_string(), umi_contained_skips);
+        batch_stats.reads_log.insert(
+            "vdj.umi_region.contained_skips".to_string(),
+            umi_contained_skips,
+        );
         batch_stats.add_timer_duration("vdj.batch.umi_reduce", umi_reduce_elapsed);
         batch_stats.add_timer_duration("vdj.batch.umi_persist", umi_merge_elapsed);
         batch_stats.add_timer_duration("vdj.batch.model_build", model_build_elapsed);
@@ -450,19 +453,33 @@ impl CellEvidenceVdj {
                     let mut delta = CellEvidence::default();
                     delta.consume_compact_metadata(&refs, index);
                     for chain in Chain::ALL {
-                        let chain_features: Vec<_> = refs.iter().copied()
-                            .filter(|feature| feature_has_rearrangement_segment(feature, index, chain))
+                        let chain_features: Vec<_> = refs
+                            .iter()
+                            .copied()
+                            .filter(|feature| {
+                                feature_has_rearrangement_segment(feature, index, chain)
+                            })
                             .collect();
-                        if chain_features.is_empty() { continue; }
+                        if chain_features.is_empty() {
+                            continue;
+                        }
                         let summaries = ChainSummaryWork {
-                            features: &chain_features, index, chain, min_overlap
-                        }.summarize(mapping);
-                        if !summaries.is_empty() { delta.summaries.insert(chain, summaries); }
+                            features: &chain_features,
+                            index,
+                            chain,
+                            min_overlap,
+                        }
+                        .summarize(mapping);
+                        if !summaries.is_empty() {
+                            delta.summaries.insert(chain, summaries);
+                        }
                     }
-                    mapping.ok_reads = mapping.ok_reads.saturating_add(delta.stats.accepted_records);
+                    mapping.ok_reads = mapping
+                        .ok_reads
+                        .saturating_add(delta.stats.accepted_records);
                     let cell = self_bucket.entry(cell_id).or_default();
                     let before = cell.summary_count();
-                    cell.merge_compact_delta(delta, index, min_overlap, mapping );
+                    cell.merge_compact_delta(delta, index, min_overlap, mapping);
                     let after = cell.summary_count();
                     if after >= before {
                         mapping.report_n("vdj.batch.models_added", after - before);
@@ -497,7 +514,11 @@ impl CellEvidenceVdj {
                 for cell in bucket.values_mut() {
                     for summaries in cell.summaries.values_mut() {
                         flush_refinement_buffers(
-                            summaries, index, min_overlap, true, &mut local_stats,
+                            summaries,
+                            index,
+                            min_overlap,
+                            true,
+                            &mut local_stats,
                         );
                     }
                 }
@@ -634,14 +655,7 @@ impl CellEvidence {
     ) {
         for (chain, batch_summaries) in delta.summaries.drain() {
             let summaries = self.summaries.entry(chain).or_default();
-            merge_completed_models(
-                summaries,
-                batch_summaries,
-                index,
-                min_overlap,
-                stats,
-                true,
-            );
+            merge_completed_models(summaries, batch_summaries, index, min_overlap, stats, true);
         }
 
         for (signature, count) in delta.fragment_link_support.drain() {
@@ -829,19 +843,35 @@ fn interpret_raw_feature(
     };
     let mappings = segment_ids
         .into_iter()
-        .filter(|segment_id| index.segment(*segment_id).is_some_and(|segment| {
-            segment.kind == SegmentKind::C || rearrangement_chains.contains(&segment.chain)
-        }))
-        .map(|segment_id| MapperEvidence { segment_id, alignment: geometry.clone() })
+        .filter(|segment_id| {
+            index.segment(*segment_id).is_some_and(|segment| {
+                segment.kind == SegmentKind::C || rearrangement_chains.contains(&segment.chain)
+            })
+        })
+        .map(|segment_id| MapperEvidence {
+            segment_id,
+            alignment: geometry.clone(),
+        })
         .collect();
 
     let mut sequence = BamFeatureSequenceParts::default();
     if !rearrangement_chains.is_empty() {
-        let part = SequencePart { bases: raw.bases, qualities: raw.qualities };
-        if raw.is_last_in_template { sequence.r2 = Some(part); } else { sequence.r1 = Some(part); }
+        let part = SequencePart {
+            bases: raw.bases,
+            qualities: raw.qualities,
+        };
+        if raw.is_last_in_template {
+            sequence.r2 = Some(part);
+        } else {
+            sequence.r1 = Some(part);
+        }
     }
     Some(BamFeatureEvidence {
-        id: raw.id, sequence, umi: raw.umi, mappings, intronic_constant_segments
+        id: raw.id,
+        sequence,
+        umi: raw.umi,
+        mappings,
+        intronic_constant_segments,
     })
 }
 
@@ -852,21 +882,33 @@ fn aligned_blocks_from_cigar(start: u32, cigar: &[Cigar]) -> Vec<(u32, u32)> {
     for c in cigar {
         match *c {
             Cigar::Match(n) | Cigar::Equal(n) | Cigar::Diff(n) => {
-                if block_start.is_none() { block_start = Some(ref_pos); }
+                if block_start.is_none() {
+                    block_start = Some(ref_pos);
+                }
                 ref_pos = ref_pos.saturating_add(n);
             }
             Cigar::Del(n) => {
-                if block_start.is_none() { block_start = Some(ref_pos); }
+                if block_start.is_none() {
+                    block_start = Some(ref_pos);
+                }
                 ref_pos = ref_pos.saturating_add(n);
             }
             Cigar::RefSkip(n) => {
-                if let Some(a) = block_start.take() { if a < ref_pos { out.push((a, ref_pos)); } }
+                if let Some(a) = block_start.take() {
+                    if a < ref_pos {
+                        out.push((a, ref_pos));
+                    }
+                }
                 ref_pos = ref_pos.saturating_add(n);
             }
             Cigar::Ins(_) | Cigar::SoftClip(_) | Cigar::HardClip(_) | Cigar::Pad(_) => {}
         }
     }
-    if let Some(a) = block_start { if a < ref_pos { out.push((a, ref_pos)); } }
+    if let Some(a) = block_start {
+        if a < ref_pos {
+            out.push((a, ref_pos));
+        }
+    }
     out
 }
 

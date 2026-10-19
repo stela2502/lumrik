@@ -14,7 +14,6 @@ use crate::{FeatureIndex, MatrixValueType, Scdata};
 
 use run_stats::RunStats;
 
-
 pub struct QuantData {
     data: HashMap<String, Scdata>,
 }
@@ -96,7 +95,12 @@ impl QuantData {
             exonic_umis_after_filter: self.data(Self::EXONIC).total_umis(),
             exonic_thresholds: THRESHOLDS
                 .into_iter()
-                .map(|threshold| (threshold, self.data(Self::EXONIC).cells_with_min_umis(threshold)))
+                .map(|threshold| {
+                    (
+                        threshold,
+                        self.data(Self::EXONIC).cells_with_min_umis(threshold),
+                    )
+                })
                 .collect(),
         }
     }
@@ -133,7 +137,9 @@ impl QuantData {
                 if data.is_empty() {
                     continue;
                 }
-                return Err(format!("missing feature index for QuantData dataset '{name}'"));
+                return Err(format!(
+                    "missing feature index for QuantData dataset '{name}'"
+                ));
             };
             data.finalize_for_cells(keep, index);
         }
@@ -227,7 +233,9 @@ impl QuantData {
                 if data.is_empty() {
                     continue;
                 }
-                return Err(format!("missing feature index for QuantData dataset '{name}'"));
+                return Err(format!(
+                    "missing feature index for QuantData dataset '{name}'"
+                ));
             };
             let out = base.join(name);
             match cell_barcode_len {
@@ -272,12 +280,14 @@ impl QuantData {
     }
 
     fn data(&self, name: &str) -> &Scdata {
-        self.data.get(name)
+        self.data
+            .get(name)
             .unwrap_or_else(|| panic!("QuantData has no dataset named '{name}'"))
     }
 
     fn data_mut(&mut self, name: &str) -> &mut Scdata {
-        self.data.get_mut(name)
+        self.data
+            .get_mut(name)
             .unwrap_or_else(|| panic!("QuantData has no dataset named '{name}'"))
     }
 
@@ -286,7 +296,9 @@ impl QuantData {
             panic!("cannot merge QuantData dataset '{source}' into itself");
         }
 
-        let source_data = self.data.remove(source)
+        let source_data = self
+            .data
+            .remove(source)
             .unwrap_or_else(|| panic!("QuantData has no dataset named '{source}'"));
         let merge = self.data_mut(target).merge(&source_data);
         self.data.insert(source.to_string(), source_data);
@@ -312,12 +324,24 @@ impl QuantData {
         state
     }
 
-    pub fn is_empty(&self, name: &str) -> bool { self.data(name).is_empty() }
-    pub fn cell_ids(&self, name: &str) -> HashSet<u64> { self.data(name).cell_ids() }
-    pub fn total_umis(&self, name: &str) -> usize { self.data(name).total_umis() }
-    pub fn cell_umi_counts(&self, name: &str) -> Vec<(u64, u32)> { self.data(name).cell_umi_counts() }
-    pub fn observed_feature_ids(&self, name: &str) -> HashSet<u64> { self.data(name).observed_feature_ids() }
-    pub fn dimensions(&self, name: &str) -> (usize, usize, usize) { self.data(name).dimensions() }
+    pub fn is_empty(&self, name: &str) -> bool {
+        self.data(name).is_empty()
+    }
+    pub fn cell_ids(&self, name: &str) -> HashSet<u64> {
+        self.data(name).cell_ids()
+    }
+    pub fn total_umis(&self, name: &str) -> usize {
+        self.data(name).total_umis()
+    }
+    pub fn cell_umi_counts(&self, name: &str) -> Vec<(u64, u32)> {
+        self.data(name).cell_umi_counts()
+    }
+    pub fn observed_feature_ids(&self, name: &str) -> HashSet<u64> {
+        self.data(name).observed_feature_ids()
+    }
+    pub fn dimensions(&self, name: &str) -> (usize, usize, usize) {
+        self.data(name).dimensions()
+    }
 
     /// Read truth matrices from a truth output directory.
     ///
@@ -336,14 +360,42 @@ impl QuantData {
         let base = base.as_ref();
 
         let mut data = HashMap::new();
-        data.insert(Self::EXONIC.to_string(), Scdata::read_matrix_market(base.join(Self::EXONIC), gene_index)
-            .map_err(|e| format!("failed to read exonic truth from {:?}: {e}", base.join(Self::EXONIC)))?);
-        data.insert(Self::INTRONIC.to_string(), Scdata::read_matrix_market(base.join(Self::INTRONIC), gene_index)
-            .map_err(|e| format!("failed to read intronic truth from {:?}: {e}", base.join(Self::INTRONIC)))?);
-        data.insert(Self::SNP_REF.to_string(), Scdata::read_matrix_market(base.join(Self::SNP_REF), snp_index)
-            .map_err(|e| format!("failed to read SNP ref truth from {:?}: {e}", base.join(Self::SNP_REF)))?);
-        data.insert(Self::SNP_ALT.to_string(), Scdata::read_matrix_market(base.join(Self::SNP_ALT), snp_index)
-            .map_err(|e| format!("failed to read SNP alt truth from {:?}: {e}", base.join(Self::SNP_ALT)))?);
+        data.insert(
+            Self::EXONIC.to_string(),
+            Scdata::read_matrix_market(base.join(Self::EXONIC), gene_index).map_err(|e| {
+                format!(
+                    "failed to read exonic truth from {:?}: {e}",
+                    base.join(Self::EXONIC)
+                )
+            })?,
+        );
+        data.insert(
+            Self::INTRONIC.to_string(),
+            Scdata::read_matrix_market(base.join(Self::INTRONIC), gene_index).map_err(|e| {
+                format!(
+                    "failed to read intronic truth from {:?}: {e}",
+                    base.join(Self::INTRONIC)
+                )
+            })?,
+        );
+        data.insert(
+            Self::SNP_REF.to_string(),
+            Scdata::read_matrix_market(base.join(Self::SNP_REF), snp_index).map_err(|e| {
+                format!(
+                    "failed to read SNP ref truth from {:?}: {e}",
+                    base.join(Self::SNP_REF)
+                )
+            })?,
+        );
+        data.insert(
+            Self::SNP_ALT.to_string(),
+            Scdata::read_matrix_market(base.join(Self::SNP_ALT), snp_index).map_err(|e| {
+                format!(
+                    "failed to read SNP alt truth from {:?}: {e}",
+                    base.join(Self::SNP_ALT)
+                )
+            })?,
+        );
         Ok(Self { data })
     }
 
@@ -357,8 +409,6 @@ impl QuantData {
         }
         report
     }
-
-
 }
 
 impl QuantData {

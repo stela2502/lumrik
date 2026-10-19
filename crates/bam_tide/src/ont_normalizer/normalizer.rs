@@ -10,8 +10,8 @@ use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 
 use anyhow::{Context, Result};
 use int_to_dna::IntToDna;
-use run_stats::RunStats;
 use rayon::prelude::*;
+use run_stats::RunStats;
 use rust_htslib::bam::{Read, Reader};
 use sc_primer::{Orientation, PrimerDetector};
 use scdata::{GeneUmiHash, ScdataInsertState};
@@ -115,9 +115,9 @@ impl OntNormalizerConfig {
 
             if let Some(id) = feature_tag_mapper.map_feature_id(&insert_record.seq, &mut out.stats)
             {
-                let state = out
-                    .feature_tag_table
-                    .try_insert(&cell_id, GeneUmiHash(id, umi_id), 1.0);
+                let state =
+                    out.feature_tag_table
+                        .try_insert(&cell_id, GeneUmiHash(id, umi_id), 1.0);
                 out.stats.report(state.as_str());
                 if state == ScdataInsertState::Inserted {
                     out.stats.report("unique_feature");

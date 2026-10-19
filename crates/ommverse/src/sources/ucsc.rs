@@ -52,7 +52,6 @@ fn hrefs(index: &str) -> impl Iterator<Item = &str> {
         .filter_map(|s| s.split('"').next())
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GencodeAnnotation {
     pub release: String,
@@ -71,17 +70,27 @@ fn gencode_series(assembly: &str) -> Option<(&'static str, &'static str)> {
 fn latest_gencode_release(root: &str, prefix: &str) -> Result<String> {
     let index = output(root)?;
     let mut releases = hrefs(&index)
-        .filter_map(|href| href.strip_prefix("release_").and_then(|x| x.strip_suffix('/')))
+        .filter_map(|href| {
+            href.strip_prefix("release_")
+                .and_then(|x| x.strip_suffix('/'))
+        })
         .filter(|release| {
             let numeric = release.strip_prefix(prefix).unwrap_or("");
-            release.starts_with(prefix) && !numeric.is_empty() && numeric.bytes().all(|b| b.is_ascii_digit())
+            release.starts_with(prefix)
+                && !numeric.is_empty()
+                && numeric.bytes().all(|b| b.is_ascii_digit())
         })
         .map(str::to_owned)
         .collect::<Vec<_>>();
     releases.sort_by_key(|release| {
-        release.strip_prefix(prefix).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0)
+        release
+            .strip_prefix(prefix)
+            .and_then(|x| x.parse::<u32>().ok())
+            .unwrap_or(0)
     });
-    releases.pop().with_context(|| format!("no GENCODE releases found under {root}"))
+    releases
+        .pop()
+        .with_context(|| format!("no GENCODE releases found under {root}"))
 }
 
 pub fn fetch_gencode_annotation(
@@ -91,7 +100,9 @@ pub fn fetch_gencode_annotation(
 ) -> Result<Option<GencodeAnnotation>> {
     let Some((series, prefix)) = gencode_series(assembly) else {
         if requested_release.is_some() {
-            bail!("GENCODE annotation is not configured for assembly {assembly}; use --gtf with an explicit annotation");
+            bail!(
+                "GENCODE annotation is not configured for assembly {assembly}; use --gtf with an explicit annotation"
+            );
         }
         return Ok(None);
     };
@@ -100,11 +111,19 @@ pub fn fetch_gencode_annotation(
         None | Some("latest") => latest_gencode_release(&root, prefix)?,
         Some(value) => {
             let value = value.trim();
-            if value.starts_with(prefix) { value.to_owned() } else { format!("{prefix}{value}") }
+            if value.starts_with(prefix) {
+                value.to_owned()
+            } else {
+                format!("{prefix}{value}")
+            }
         }
     };
     let version = release.strip_prefix(prefix).unwrap_or(&release);
-    let tag = if prefix.is_empty() { format!("v{version}") } else { format!("v{prefix}{version}") };
+    let tag = if prefix.is_empty() {
+        format!("v{version}")
+    } else {
+        format!("v{prefix}{version}")
+    };
     let name = format!("gencode.{tag}.annotation.gtf.gz");
     let url = format!("{root}/release_{release}/{name}");
     let path = genes_dir.join(&name);
@@ -112,7 +131,13 @@ pub fn fetch_gencode_annotation(
     Ok(Some(GencodeAnnotation { release, path, url }))
 }
 
-pub fn fetch_from_base_with_gencode(assembly: &str, cache_root: &Path, base_url: &str, gencode_release: Option<&str>, use_gencode: bool) -> Result<PathBuf> {
+pub fn fetch_from_base_with_gencode(
+    assembly: &str,
+    cache_root: &Path,
+    base_url: &str,
+    gencode_release: Option<&str>,
+    use_gencode: bool,
+) -> Result<PathBuf> {
     let root = cache_root.join(assembly);
     let genome_dir = root.join("Genome");
     let genes_dir = root.join("Genes");

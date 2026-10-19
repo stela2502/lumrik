@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use int_to_dna::int_to_dna::IntToDna;
-use run_stats::RunStats;
 use read_tag_table::ReadTagRecord;
+use run_stats::RunStats;
 use rust_htslib::bam::HeaderView;
 use sc_mapper::process::SamReadCluster;
 use scdata::{GeneUmiHash, MatrixValueType, Scdata};

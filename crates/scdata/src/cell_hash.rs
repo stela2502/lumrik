@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ops::{Deref, DerefMut};
 
-use run_stats::RunStats;
 use rayon::prelude::*;
+use run_stats::RunStats;
 
 /// Sparse cell-indexed storage split into 1024 buckets.
 ///
@@ -83,11 +83,7 @@ impl<T> CellHash<T> {
         U: Send,
         F: Fn(HashMap<u64, T>) -> HashMap<u64, U> + Sync + Send,
     {
-        let buckets: Vec<HashMap<u64, U>> = self
-            .data
-            .into_par_iter()
-            .map(map)
-            .collect();
+        let buckets: Vec<HashMap<u64, U>> = self.data.into_par_iter().map(map).collect();
         let data: [HashMap<u64, U>; CELL_HASH_BUCKETS] = buckets
             .try_into()
             .unwrap_or_else(|_| unreachable!("CellHash bucket count is invariant"));
@@ -127,9 +123,7 @@ impl<T> CellHash<T> {
         T: Send,
         U: Sync,
         V: Send,
-        F: Fn(HashMap<u64, T>, &HashMap<u64, U>, &mut RunStats) -> HashMap<u64, V>
-            + Sync
-            + Send,
+        F: Fn(HashMap<u64, T>, &HashMap<u64, U>, &mut RunStats) -> HashMap<u64, V> + Sync + Send,
     {
         let bucket_results: Vec<(HashMap<u64, V>, RunStats)> = self
             .data
@@ -162,11 +156,7 @@ impl<T> CellHash<T> {
     /// corresponding bucket in both stores. Callers therefore only define the
     /// per-cell merge semantics; the bucket-level Rayon fan-out and RunStats
     /// reduction live here once for every CellHash consumer.
-    pub fn par_merge_with_mapping<U, F>(
-        &mut self,
-        other: &CellHash<U>,
-        merge: F,
-    ) -> RunStats
+    pub fn par_merge_with_mapping<U, F>(&mut self, other: &CellHash<U>, merge: F) -> RunStats
     where
         T: Send,
         U: Sync,
@@ -194,11 +184,7 @@ impl<T> CellHash<T> {
     /// This is useful for compact batch deltas whose contents should be moved into
     /// persistent storage rather than cloned. Each source bucket is consumed by the
     /// Rayon worker that owns the corresponding mutable destination bucket.
-    pub fn par_merge_owned_with_mapping<U, F>(
-        &mut self,
-        other: CellHash<U>,
-        merge: F,
-    ) -> RunStats
+    pub fn par_merge_owned_with_mapping<U, F>(&mut self, other: CellHash<U>, merge: F) -> RunStats
     where
         T: Send,
         U: Send,

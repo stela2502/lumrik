@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/bam_tide",
     "crates/sc-beacon",
+    "crates/sc-regnet",
     "crates/sc_primer",
     "crates/sc-mapper",
     "crates/gtf_splice_index",

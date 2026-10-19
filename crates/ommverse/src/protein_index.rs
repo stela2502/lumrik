@@ -66,7 +66,9 @@ impl ProteinFeatureIndex {
         Self {
             bin_width,
             features: Vec::new(),
-            chr_buckets: (0..chromosome_count).map(|_| ChrBuckets::new(bin_width)).collect(),
+            chr_buckets: (0..chromosome_count)
+                .map(|_| ChrBuckets::new(bin_width))
+                .collect(),
             span_start: Vec::new(),
             span_end: Vec::new(),
             by_label: HashMap::new(),
@@ -130,7 +132,10 @@ impl ProteinFeatureIndex {
     /// separate features.
     pub fn collapse_same_label_loci(&mut self, labels: &std::collections::HashSet<String>) {
         fn bases(blocks: &[RefBlock]) -> u64 {
-            blocks.iter().map(|block| (block.end - block.start) as u64).sum()
+            blocks
+                .iter()
+                .map(|block| (block.end - block.start) as u64)
+                .sum()
         }
         fn overlap(a: &[RefBlock], b: &[RefBlock]) -> u64 {
             a.iter()
@@ -188,11 +193,16 @@ impl ProteinFeatureIndex {
         self.by_label.clear();
         for (id, feature) in self.features.iter_mut().enumerate() {
             feature.id = id;
-            let Some((start, end)) = feature.span() else { continue; };
+            let Some((start, end)) = feature.span() else {
+                continue;
+            };
             self.chr_buckets[feature.chr_id].add_span(id, start, end);
             self.span_start.push(start);
             self.span_end.push(end);
-            self.by_label.entry(feature.label.clone()).or_default().push(id);
+            self.by_label
+                .entry(feature.label.clone())
+                .or_default()
+                .push(id);
         }
     }
 
@@ -209,7 +219,12 @@ impl ProteinFeatureIndex {
 
     /// Candidate features whose genomic spans overlap `[start, end)`.
     /// Exact block/splice compatibility is intentionally a separate operation.
-    pub fn candidates_for_region(&self, chr_id: usize, start: u32, end: u32) -> Vec<ProteinFeatureId> {
+    pub fn candidates_for_region(
+        &self,
+        chr_id: usize,
+        start: u32,
+        end: u32,
+    ) -> Vec<ProteinFeatureId> {
         if start >= end {
             return Vec::new();
         }
@@ -254,11 +269,23 @@ mod tests {
 
         let mut idx = ProteinFeatureIndex::new(64, 1);
         let id = idx
-            .add_from_transcript(&tx, "P1", "IPR_TEST", ProteinFeatureKind::Domain, "test domain", "SIG_TEST", 2, 5)
+            .add_from_transcript(
+                &tx,
+                "P1",
+                "IPR_TEST",
+                ProteinFeatureKind::Domain,
+                "test domain",
+                "SIG_TEST",
+                2,
+                5,
+            )
             .expect("feature should project");
         idx.finalize();
 
-        assert_eq!(idx.features[id].blocks, vec![RefBlock::new(106, 109), RefBlock::new(200, 206)]);
+        assert_eq!(
+            idx.features[id].blocks,
+            vec![RefBlock::new(106, 109), RefBlock::new(200, 206)]
+        );
         assert_eq!(idx.ids_for_label("IPR_TEST"), &[id]);
         assert_eq!(idx.candidates_for_region(0, 108, 202), vec![id]);
         assert!(idx.candidates_for_region(0, 300, 400).is_empty());

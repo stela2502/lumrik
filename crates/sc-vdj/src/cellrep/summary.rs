@@ -39,13 +39,11 @@ pub struct GermlineAnchor {
     pub summary_start: isize,
 }
 
-
 const PACKED_BOOTSTRAP_READS: usize = 50;
 const PACKED_REFINEMENT_READS: usize = 20;
 const MODEL_MIN_EXTENSION: isize = 4;
 const PACKED_STAR_WINDOW_BASES: u32 = 16;
 const PACKED_STAR_WINDOW_MIN_READS: usize = 3;
-
 
 #[derive(Debug, Clone, PartialEq)]
 struct PendingPackedRead {
@@ -156,11 +154,7 @@ impl ReceptorSequenceEvidence {
     /// True when this BAM record identifies the same V/J combination as this
     /// receptor component.  Saturation is tested separately so all matching
     /// components can be considered together.
-    pub fn matches_vj_segments(
-        &self,
-        index: &VdjIndex,
-        segment_ids: &[SegmentId],
-    ) -> bool {
+    pub fn matches_vj_segments(&self, index: &VdjIndex, segment_ids: &[SegmentId]) -> bool {
         let record_has_matching_v = segment_ids.iter().any(|id| {
             index.segment(*id).is_some_and(|segment| {
                 segment.kind == crate::index::SegmentKind::V && self.segment_support(*id) > 0
@@ -173,7 +167,6 @@ impl ReceptorSequenceEvidence {
         });
         record_has_matching_v && record_has_matching_j
     }
-
 
     /// Packed mapping view of all observed nucleotide states.
     ///
@@ -363,7 +356,13 @@ impl ReceptorSequenceEvidence {
         false
     }
 
-    fn try_consume(&mut self, other: &mut Self, index: &VdjIndex, min_overlap: usize, stats: &mut RunStats) -> bool {
+    fn try_consume(
+        &mut self,
+        other: &mut Self,
+        index: &VdjIndex,
+        min_overlap: usize,
+        stats: &mut RunStats,
+    ) -> bool {
         stats.report("vdj.model_route.try_consume_calls");
         if self.has_hard_segment_conflict(other, index) {
             stats.report("vdj.model_route.hard_segment_conflicts");
@@ -411,7 +410,8 @@ impl ReceptorSequenceEvidence {
             stats.report("vdj.model_route.anchor_merges");
             trace_overlap_placement("packed", self, other, index, offset);
             self.merge_at(other, offset);
-            self.pending_refinement.append(&mut other.pending_refinement);
+            self.pending_refinement
+                .append(&mut other.pending_refinement);
             self.refresh_packed_consensus(index);
             return true;
         }
@@ -435,12 +435,15 @@ impl ReceptorSequenceEvidence {
             stats.report("vdj.model_route.nw_attempts");
             stats.report_n(
                 "vdj.model_route.nw_dp_cells",
-                ac.len().saturating_add(1).saturating_mul(bc.len().saturating_add(1)),
+                ac.len()
+                    .saturating_add(1)
+                    .saturating_mul(bc.len().saturating_add(1)),
             );
             if let Some(aln) = needleman_wunsch_overlap(&ac, &bc, min_overlap) {
                 stats.report("vdj.model_route.nw_merges");
                 self.merge_aligned(other, &aln.columns);
-                self.pending_refinement.append(&mut other.pending_refinement);
+                self.pending_refinement
+                    .append(&mut other.pending_refinement);
                 self.refresh_packed_consensus(index);
                 return true;
             }
@@ -567,12 +570,7 @@ impl ReceptorSequenceEvidence {
         eprintln!("[sc-vdj split-trace]   anchors: [{anchors}]");
     }
 
-    fn merge_packed_at(
-        &mut self,
-        other: &PendingPackedRead,
-        offset: isize,
-        index: &VdjIndex,
-    ) {
+    fn merge_packed_at(&mut self, other: &PendingPackedRead, offset: isize, index: &VdjIndex) {
         let prepend = (-offset).max(0) as usize;
         if prepend > 0 {
             for v in &mut self.base_counts {
@@ -606,8 +604,8 @@ impl ReceptorSequenceEvidence {
             let base = ((byte >> ((pos & 3) * 2)) & 0b11) as usize;
             let dst = start + pos;
             self.base_counts[base][dst] = self.base_counts[base][dst].saturating_add(1);
-            self.base_max_qual[base][dst] = self.base_max_qual[base][dst]
-                .max(other.qualities.get(pos).copied().unwrap_or(0));
+            self.base_max_qual[base][dst] =
+                self.base_max_qual[base][dst].max(other.qualities.get(pos).copied().unwrap_or(0));
         }
         for &id in &other.segment_ids {
             add_segment_support(&mut self.segment_support, id, 1);
@@ -716,13 +714,7 @@ impl ChainSummaryWork<'_> {
         // that still requires read-level interpretation may escape from here
         // into persistent state. Fold even partial refinement buffers now so
         // the later persistent merge is strictly model-to-model accumulation.
-        flush_refinement_buffers(
-            &mut summaries,
-            self.index,
-            self.min_overlap,
-            true,
-            stats,
-        );
+        flush_refinement_buffers(&mut summaries, self.index, self.min_overlap, true, stats);
 
         // Finish the cell locally: if two completed models can be joined by
         // the cheap completed-model compatibility rule, do it here while this
@@ -944,9 +936,16 @@ pub(crate) fn flush_refinement_buffers(
             {
                 continue;
             }
-            incoming.extend(summary.pending_refinement.drain(..).map(|read| read.into_summary(index)));
+            incoming.extend(
+                summary
+                    .pending_refinement
+                    .drain(..)
+                    .map(|read| read.into_summary(index)),
+            );
         }
-        if incoming.is_empty() { break; }
+        if incoming.is_empty() {
+            break;
+        }
         merge_summary_batch_core(summaries, incoming, index, min_overlap, stats);
     }
     summaries.sort_by_key(|s| std::cmp::Reverse(s.support_features));
@@ -1004,9 +1003,10 @@ fn consume_chain_features(
             offsets.sort_unstable();
             offsets.dedup();
 
-            if let Some(offset) = offsets.into_iter().find(|off| {
-                known_offset_is_compatible_packed(&a, &b, *off, min_overlap, 5)
-            }) {
+            if let Some(offset) = offsets
+                .into_iter()
+                .find(|off| known_offset_is_compatible_packed(&a, &b, *off, min_overlap, 5))
+            {
                 collector.merge_packed_at(&read, offset, index);
             } else {
                 unresolved.push(read);
@@ -1055,8 +1055,8 @@ fn consume_chain_features(
         if let (Some((window_tid, window_start)), Some((tid, start))) =
             (pending_star_window, feature_star_start)
         {
-            let outside_window = tid != window_tid
-                || start.saturating_sub(window_start) >= PACKED_STAR_WINDOW_BASES;
+            let outside_window =
+                tid != window_tid || start.saturating_sub(window_start) >= PACKED_STAR_WINDOW_BASES;
             if outside_window && pending.len() >= PACKED_STAR_WINDOW_MIN_READS {
                 flush_pending(&mut pending, summaries, stats);
                 pending_star_window = None;
@@ -1102,15 +1102,20 @@ fn consume_chain_features(
             if part.bases.is_empty() {
                 continue;
             }
-            if let Some(read) =
-                PendingPackedRead::from_part(part, &segment_ids, reverse, index, min_overlap, feature.umi.as_deref())
-            {
+            if let Some(read) = PendingPackedRead::from_part(
+                part,
+                &segment_ids,
+                reverse,
+                index,
+                min_overlap,
+                feature.umi.as_deref(),
+            ) {
                 // Discovery is deliberately unfiltered until an initial model
                 // exists.  Once models exist, route reads matching a known V/J
                 // component through a small model-specific refinement buffer.
-                let target = summaries.iter().position(|summary| {
-                    summary.matches_vj_segments(index, &segment_ids)
-                });
+                let target = summaries
+                    .iter()
+                    .position(|summary| summary.matches_vj_segments(index, &segment_ids));
 
                 if let Some(target) = target {
                     stats.report("vdj.model_route.known_model_reads");
@@ -1145,7 +1150,8 @@ fn consume_chain_features(
                             }
                             let read_end = offset + read.packed.size as isize;
                             useful_extension = offset <= -MODEL_MIN_EXTENSION
-                                || read_end >= summaries[target].len() as isize + MODEL_MIN_EXTENSION;
+                                || read_end
+                                    >= summaries[target].len() as isize + MODEL_MIN_EXTENSION;
                             if useful_extension {
                                 break;
                             }
@@ -1425,12 +1431,27 @@ fn trace_overlap_placement(
     }
 
     eprintln!("\\n[sc-vdj overlap-trace] method={method} offset={offset}");
-    eprintln!("[sc-vdj overlap-trace] A: {}", String::from_utf8_lossy(&a_seq));
-    eprintln!("[sc-vdj overlap-trace] B: {}", String::from_utf8_lossy(&b_seq));
+    eprintln!(
+        "[sc-vdj overlap-trace] A: {}",
+        String::from_utf8_lossy(&a_seq)
+    );
+    eprintln!(
+        "[sc-vdj overlap-trace] B: {}",
+        String::from_utf8_lossy(&b_seq)
+    );
     eprintln!("[sc-vdj overlap-trace] placed:");
-    eprintln!("[sc-vdj overlap-trace] A  {}", String::from_utf8_lossy(&a_line));
-    eprintln!("[sc-vdj overlap-trace]    {}", String::from_utf8_lossy(&marks));
-    eprintln!("[sc-vdj overlap-trace] B  {}", String::from_utf8_lossy(&b_line));
+    eprintln!(
+        "[sc-vdj overlap-trace] A  {}",
+        String::from_utf8_lossy(&a_line)
+    );
+    eprintln!(
+        "[sc-vdj overlap-trace]    {}",
+        String::from_utf8_lossy(&marks)
+    );
+    eprintln!(
+        "[sc-vdj overlap-trace] B  {}",
+        String::from_utf8_lossy(&b_line)
+    );
 }
 
 fn known_offset_is_compatible_packed(

@@ -22,3 +22,6 @@ linfa = "0.7"
 linfa-reduction = "0.7"
 manifolds-rs = "0.4.1"
 plotters = { version = "0.3", default-features = false, features = ["svg_backend", "line_series", "point_series"] }
+
+# Native Rust Leiden; no C++ dependency.
+leiden-rs = { version = "0.8.1", default-features = false, features = ["rayon"] }

@@ -1,19 +1,26 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use sc_analysis::cli::{AnalysisCli,run_analysis};
-use sc_analysis::snp::{SnpCli,run};
+use sc_analysis::cli::{AnalysisCli, run_analysis};
+use sc_analysis::snp::{SnpCli, run};
 
 #[derive(Parser)]
-#[command(name="sc-analyse",version)]
+#[command(name = "sc-analyse", version, about = "Lumrik single-cell analysis")]
 struct Cli {
-    #[command(subcommand)] command: Command,
+    #[command(subcommand)]
+    command: Command,
 }
+
 #[derive(Subcommand)]
-enum Command { Snp(SnpCli) }
+enum Command {
+    /// Analyze single-cell gene expression data.
+    Gex(AnalysisCli),
+    /// Analyze single-cell SNP evidence.
+    Snp(SnpCli),
+}
+
 fn main() -> Result<()> {
-    // Preserve the legacy `sc-analyse INPUT --out ...` interface.
-    if std::env::args_os().nth(1).is_some_and(|x|x!="snp" && x!="--help" && x!="-h" && x!="--version") {
-        return run_analysis(AnalysisCli::parse());
+    match Cli::parse().command {
+        Command::Gex(cli) => run_analysis(cli),
+        Command::Snp(cli) => run(cli),
     }
-    match Cli::parse().command {Command::Snp(cli)=>run(cli)}
 }

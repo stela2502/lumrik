@@ -11,7 +11,10 @@ pub mod model;
 pub mod placement;
 pub mod types;
 
-pub use index::{IdNameKeys, SPLICE_INDEX_FORMAT_VERSION, SpliceFeatureIndex, SpliceIndex, SpliceMatch, SpliceMatchMode};
+pub use index::{
+    IdNameKeys, SPLICE_INDEX_FORMAT_VERSION, SpliceFeatureIndex, SpliceIndex, SpliceMatch,
+    SpliceMatchMode,
+};
 
 pub use annotation::AnnotationBuilder;
 pub use capabilities::{Axis, Connected, Connection, CoordinateMapper, Identifiable, Plottable};
@@ -23,5 +26,5 @@ pub use model::transcript::Transcript;
 pub use model::types::{GeneId, TranscriptId};
 
 // Re-export shared model matching types at crate root.
-pub use model::{MatchClass, MatchOptions, OverhangClass, PlacementAudit};
 pub use model::types::QuantClass;
+pub use model::{MatchClass, MatchOptions, OverhangClass, PlacementAudit};

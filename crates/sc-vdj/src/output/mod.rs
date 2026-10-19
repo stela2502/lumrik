@@ -370,7 +370,11 @@ fn codon_aa(a: u8, b: u8, c: u8) -> u8 {
 }
 
 fn airr_bool(x: bool) -> String {
-    if x { "T".into() } else { "F".into() }
+    if x {
+        "T".into()
+    } else {
+        "F".into()
+    }
 }
 
 fn airr_tf(x: bool, unknown: bool) -> String {

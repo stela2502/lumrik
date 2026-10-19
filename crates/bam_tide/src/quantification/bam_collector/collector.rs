@@ -24,8 +24,8 @@ use sc_primer::Grammar;
 
 use gtf_splice_index::{MatchOptions, SpliceIndex};
 
-use snp_index::Genome;
 use run_stats::RunStats;
+use snp_index::Genome;
 
 const CHUNK: usize = 100_000;
 
@@ -361,8 +361,7 @@ impl BamCollector {
         bulk_cell_id: u64,
         progress: &mut dyn FnMut(&QuantData, &RunStats),
     ) -> Result<bool> {
-        report
-            .report_n("bam_records_seen", group.records().len());
+        report.report_n("bam_records_seen", group.records().len());
 
         let qname = std::str::from_utf8(group.qname())
             .context("BAM contains a non-UTF8 QNAME")?
@@ -378,12 +377,7 @@ impl BamCollector {
 
             for record in group.records() {
                 self.push_job(
-                    job_builder.build_with_identity(
-                        record,
-                        report,
-                        bulk_cell_id,
-                        molecule_id,
-                    )?,
+                    job_builder.build_with_identity(record, report, bulk_cell_id, molecule_id)?,
                     jobs,
                     n_seen,
                 );
@@ -404,12 +398,10 @@ impl BamCollector {
                 sc_primer::GrammarType::Vdj => "primer provenance VDJ",
                 sc_primer::GrammarType::Other => "primer provenance Other",
             };
-            report
-                .report_n(provenance_label, group.records().len());
+            report.report_n(provenance_label, group.records().len());
 
             if !self.config.grammar_type.accepts(read_tag.grammar_type) {
-                report
-                    .report_n("primer provenance filtered", group.records().len());
+                report.report_n("primer provenance filtered", group.records().len());
                 return Ok(false);
             }
 
@@ -437,15 +429,13 @@ impl BamCollector {
         // BAMs without Lumrik provenance predate GrammarType (or come from an
         // external CB/UB source). Preserve historical behaviour by treating
         // those records as GEX.
-        report
-            .report_n("primer provenance GEX (legacy)", group.records().len());
+        report.report_n("primer provenance GEX (legacy)", group.records().len());
         if !self
             .config
             .grammar_type
             .accepts(sc_primer::GrammarType::Gex)
         {
-            report
-                .report_n("primer provenance filtered", group.records().len());
+            report.report_n("primer provenance filtered", group.records().len());
             return Ok(false);
         }
 

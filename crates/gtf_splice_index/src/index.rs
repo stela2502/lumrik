@@ -13,8 +13,8 @@ use crate::types::{RefBlock, SplicedRead, Strand};
 // to serialize the data
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
-use serde::{Deserialize, Serialize};
 use scdata::FeatureIndex;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
@@ -60,10 +60,20 @@ impl Default for IdNameKeys {
         Self {
             // Common GTF + some common variants
             gene_id_keys: vec!["gene_id".into(), "gene".into(), "GeneID".into()],
-            gene_name_keys: vec!["gene_name".into(), "Name".into(), "gene".into(), "hgnc_id".into(), "havana_gene".into()],
+            gene_name_keys: vec![
+                "gene_name".into(),
+                "Name".into(),
+                "gene".into(),
+                "hgnc_id".into(),
+                "havana_gene".into(),
+            ],
 
             transcript_id_keys: vec!["transcript_id".into(), "transcript".into(), "ID".into()],
-            transcript_name_keys: vec!["transcript_name".into(), "Name".into(), "havana_transcript".into()],
+            transcript_name_keys: vec![
+                "transcript_name".into(),
+                "Name".into(),
+                "havana_transcript".into(),
+            ],
             protein_id_keys: vec!["protein_id".into()],
 
             parent_keys: vec!["Parent".into()],
@@ -95,10 +105,15 @@ impl FeatureIndex for SpliceFeatureIndex<'_> {
     fn feature_name(&self, feature_id: u64) -> &str {
         match self.idx.match_mode {
             SpliceMatchMode::Gene => self.idx.gene_name(feature_id as usize).unwrap_or("NA"),
-            SpliceMatchMode::Transcript => self.idx.transcript_name(feature_id as usize).unwrap_or("NA"),
+            SpliceMatchMode::Transcript => self
+                .idx
+                .transcript_name(feature_id as usize)
+                .unwrap_or("NA"),
         }
     }
-    fn feature_id(&self, name: &str) -> Option<u64> { self.name_to_id.get(name).copied() }
+    fn feature_id(&self, name: &str) -> Option<u64> {
+        self.name_to_id.get(name).copied()
+    }
     fn ordered_feature_ids(&self) -> Vec<u64> {
         let len = match self.idx.match_mode {
             SpliceMatchMode::Gene => self.idx.genes.len(),
@@ -291,15 +306,32 @@ impl SpliceIndex {
         self
     }
 
-    pub fn match_mode(&self) -> SpliceMatchMode { self.match_mode }
+    pub fn match_mode(&self) -> SpliceMatchMode {
+        self.match_mode
+    }
 
     pub fn feature_index(&self) -> SpliceFeatureIndex<'_> {
         let mut name_to_id = HashMap::new();
         match self.match_mode {
-            SpliceMatchMode::Gene => for gene in &self.genes { for name in &gene.names { name_to_id.entry(name.clone()).or_insert(gene.id as u64); } },
-            SpliceMatchMode::Transcript => for tx in &self.transcripts { for name in &tx.names { name_to_id.entry(name.clone()).or_insert(tx.id as u64); } },
+            SpliceMatchMode::Gene => {
+                for gene in &self.genes {
+                    for name in &gene.names {
+                        name_to_id.entry(name.clone()).or_insert(gene.id as u64);
+                    }
+                }
+            }
+            SpliceMatchMode::Transcript => {
+                for tx in &self.transcripts {
+                    for name in &tx.names {
+                        name_to_id.entry(name.clone()).or_insert(tx.id as u64);
+                    }
+                }
+            }
         }
-        SpliceFeatureIndex { idx: self, name_to_id }
+        SpliceFeatureIndex {
+            idx: self,
+            name_to_id,
+        }
     }
 
     /// get all gene names from the index (id == gene_id)
@@ -480,9 +512,12 @@ impl SpliceIndex {
     }
 
     pub fn gene_by_name(&self, gene_name: &str) -> Result<&Gene, String> {
-        let gene_id = self.gene_by_name.get(gene_name)
+        let gene_id = self
+            .gene_by_name
+            .get(gene_name)
             .ok_or_else(|| format!("unknown gene name {gene_name:?}"))?;
-        self.genes.get(*gene_id)
+        self.genes
+            .get(*gene_id)
             .ok_or_else(|| format!("gene id {gene_id} for {gene_name:?} is out of bounds"))
     }
 
@@ -553,7 +588,8 @@ impl SpliceIndex {
 
             // protein_id is commonly present on CDS records rather than exon records.
             // Capture it before feature filtering and attach it once the transcript exists.
-            if let Some(tx_key_raw) = rec.pick_first_attr(&keys.transcript_id_keys)
+            if let Some(tx_key_raw) = rec
+                .pick_first_attr(&keys.transcript_id_keys)
                 .or_else(|| rec.pick_first_attr(&keys.parent_keys))
             {
                 for tx_key in split_gff3_parent_list(&tx_key_raw) {
@@ -674,7 +710,9 @@ impl SpliceIndex {
         }
         for g in &mut self.genes {
             g.finalize();
-            for name in &g.names { gene_by_name.entry(name.clone()).or_insert(g.id); }
+            for name in &g.names {
+                gene_by_name.entry(name.clone()).or_insert(g.id);
+            }
         }
 
         // Build buckets
@@ -940,20 +978,35 @@ impl SpliceIndex {
     }
 
     /// Match using the runtime-selected feature identity.
-    pub fn match_features<'a>(&'a self, read: &SplicedRead, opts: MatchOptions) -> Vec<SpliceMatch<'a>> {
+    pub fn match_features<'a>(
+        &'a self,
+        read: &SplicedRead,
+        opts: MatchOptions,
+    ) -> Vec<SpliceMatch<'a>> {
         match self.match_mode {
-            SpliceMatchMode::Gene => self.match_genes(read, opts).into_iter().filter_map(|m| {
-                m.winning_transcripts.first().copied().map(|transcript| SpliceMatch {
-                    feature_id: m.gene_id as u64,
-                    transcript,
-                    hit: m.best_hit,
+            SpliceMatchMode::Gene => self
+                .match_genes(read, opts)
+                .into_iter()
+                .filter_map(|m| {
+                    m.winning_transcripts
+                        .first()
+                        .copied()
+                        .map(|transcript| SpliceMatch {
+                            feature_id: m.gene_id as u64,
+                            transcript,
+                            hit: m.best_hit,
+                        })
                 })
-            }).collect(),
-            SpliceMatchMode::Transcript => self.match_transcripts(read, opts).into_iter().map(|m| SpliceMatch {
-                feature_id: m.transcript_id as u64,
-                transcript: m.transcript,
-                hit: m.hit,
-            }).collect(),
+                .collect(),
+            SpliceMatchMode::Transcript => self
+                .match_transcripts(read, opts)
+                .into_iter()
+                .map(|m| SpliceMatch {
+                    feature_id: m.transcript_id as u64,
+                    transcript: m.transcript,
+                    hit: m.hit,
+                })
+                .collect(),
         }
     }
 
@@ -987,7 +1040,9 @@ impl SpliceIndex {
                 }
             }
             for k in keys.gene_id_keys.iter().chain(keys.gene_name_keys.iter()) {
-                if let Some(v) = rec.attr(k) { self.genes[gid].add_name(v); }
+                if let Some(v) = rec.attr(k) {
+                    self.genes[gid].add_name(v);
+                }
             }
             self.genes[gid].add_name(gene_key);
             return gid;
@@ -1005,7 +1060,9 @@ impl SpliceIndex {
         // Greedily retain every configured identifier/name plus normalized versions.
         self.genes[gid].add_name(gene_key);
         for k in keys.gene_id_keys.iter().chain(keys.gene_name_keys.iter()) {
-            if let Some(v) = rec.attr(k) { self.genes[gid].add_name(v); }
+            if let Some(v) = rec.attr(k) {
+                self.genes[gid].add_name(v);
+            }
         }
 
         gid
@@ -1022,11 +1079,19 @@ impl SpliceIndex {
     ) -> TranscriptId {
         if let Some(&tid) = tx_key_to_id.get(tx_key) {
             self.transcripts[tid].add_name(tx_key);
-            for k in keys.transcript_id_keys.iter().chain(keys.transcript_name_keys.iter()) {
-                if let Some(v) = rec.attr(k) { self.transcripts[tid].add_name(v); }
+            for k in keys
+                .transcript_id_keys
+                .iter()
+                .chain(keys.transcript_name_keys.iter())
+            {
+                if let Some(v) = rec.attr(k) {
+                    self.transcripts[tid].add_name(v);
+                }
             }
             for k in &keys.protein_id_keys {
-                if let Some(v) = rec.attr(k) { self.transcripts[tid].add_protein_name(v); }
+                if let Some(v) = rec.attr(k) {
+                    self.transcripts[tid].add_protein_name(v);
+                }
             }
             return tid;
         }
@@ -1041,11 +1106,19 @@ impl SpliceIndex {
         tx_key_to_id.insert(tx_key.to_string(), tid);
 
         self.transcripts[tid].add_name(tx_key);
-        for k in keys.transcript_id_keys.iter().chain(keys.transcript_name_keys.iter()) {
-            if let Some(v) = rec.attr(k) { self.transcripts[tid].add_name(v); }
+        for k in keys
+            .transcript_id_keys
+            .iter()
+            .chain(keys.transcript_name_keys.iter())
+        {
+            if let Some(v) = rec.attr(k) {
+                self.transcripts[tid].add_name(v);
+            }
         }
         for k in &keys.protein_id_keys {
-            if let Some(v) = rec.attr(k) { self.transcripts[tid].add_protein_name(v); }
+            if let Some(v) = rec.attr(k) {
+                self.transcripts[tid].add_protein_name(v);
+            }
         }
 
         tid

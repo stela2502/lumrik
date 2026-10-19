@@ -1,23 +1,30 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
-use clap::Parser;
+use crate::bioinformatics::analyze_sample_matrices;
 use crate::{AnalysisConfig, analyze_exon_matrix};
+use anyhow::Result;
+use clap::Args;
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "sc-analyse",
-    version,
-    about = "Run Lumrik's basic single-cell analysis pipeline on a Norn result, expression Matrix Market folder, or H5AD file"
-)]
+#[derive(Args, Debug)]
 pub struct AnalysisCli {
-    /// Norn sample/result folder, Nelrune output folder, expression Matrix Market folder, or H5AD file.
-    #[arg(value_name = "INPUT")]
-    matrix: PathBuf,
+    /// One or more MEX folders, Norn sample folders, or H5AD inputs.
+    #[arg(long, num_args = 1..)]
+    data: Vec<PathBuf>,
+
+    /// Sample names in the same order as --data.
+    #[arg(long, num_args = 1..)]
+    sample_names: Vec<String>,
 
     /// Output directory for normalized matrix, annotations, statistics, and plots.
     #[arg(short, long, default_value = "sc_analysis")]
     out: PathBuf,
+
+    /// FIRST gene filter: retain only genes listed in FILE (one gene symbol per line).
+    /// Applied before MT/ribosomal/optional IG/TR exclusion, cell QC, --min-umi-count,
+    /// resampling, normalization, PCA, UMAP, and clustering. The UMI threshold
+    /// therefore counts only surviving target-gene UMIs. Without this, no target filter.
+    #[arg(long, value_name = "FILE", verbatim_doc_comment)]
+    target_gene_list: Option<PathBuf>,
 
     /// Minimum surviving UMIs per cell, and exact fixed-depth resampling target.
     #[arg(long, default_value_t = 800)]
@@ -40,6 +47,14 @@ pub struct AnalysisCli {
     #[arg(long, default_value_t = 15)]
     umap_neighbors: usize,
 
+    /// Leiden community detection resolution (larger values generally yield more communities).
+    #[arg(long, default_value_t = 1.0)]
+    leiden_resolution: f64,
+
+    /// Number of PCA nearest neighbors used for Leiden (independent of UMAP).
+    #[arg(long, default_value_t = 15)]
+    leiden_neighbors: usize,
+
     /// Number of optimization epochs used by the 2-D UMAP visualisation.
     #[arg(long, default_value_t = 200)]
     umap_epochs: usize,
@@ -55,6 +70,10 @@ pub struct AnalysisCli {
     /// Merge clusters while their recomputed mean-expression Pearson correlation reaches this value.
     #[arg(long, default_value_t = 0.95)]
     merge_pearson: f64,
+
+    /// Ward veto for experimental merges: max fraction of merged SSE due to joining groups.
+    #[arg(long, default_value_t = 0.2)]
+    ward_fraction_max: f64,
 
     /// Maximum fraction of cells in a merged cluster (0 disables the limit).
     #[arg(long, default_value_t = 0.10)]
@@ -83,23 +102,54 @@ pub struct AnalysisCli {
 }
 
 pub fn run_analysis(cli: AnalysisCli) -> Result<()> {
-    anyhow::ensure!(cli.spatial_min_cells > 0, "--spatial-min-cells must be positive");
-    anyhow::ensure!(cli.spatial_fraction.is_finite() && (0.0..=1.0).contains(&cli.spatial_fraction), "--spatial-fraction must be between 0 and 1");
-    anyhow::ensure!(cli.max_cluster_fraction.is_finite() && (0.0..=1.0).contains(&cli.max_cluster_fraction), "--max-cluster-fraction must be between 0 and 1");
-    anyhow::ensure!(cli.target_clusters.is_none_or(|n| n > 0), "--target-clusters must be positive");
+    anyhow::ensure!(
+        cli.spatial_min_cells > 0,
+        "--spatial-min-cells must be positive"
+    );
+    anyhow::ensure!(
+        cli.spatial_fraction.is_finite() && (0.0..=1.0).contains(&cli.spatial_fraction),
+        "--spatial-fraction must be between 0 and 1"
+    );
+    anyhow::ensure!(
+        cli.max_cluster_fraction.is_finite() && (0.0..=1.0).contains(&cli.max_cluster_fraction),
+        "--max-cluster-fraction must be between 0 and 1"
+    );
+    anyhow::ensure!(
+        cli.target_clusters.is_none_or(|n| n > 0),
+        "--target-clusters must be positive"
+    );
     anyhow::ensure!(cli.min_umi_count > 0, "--min-umi-count must be positive");
-    anyhow::ensure!(cli.multiplet_min_parent_fraction.is_finite() && (0.0..=1.0).contains(&cli.multiplet_min_parent_fraction), "--multiplet-min-parent-fraction must be between 0 and 1");
-    anyhow::ensure!((0.0..1.0).contains(&cli.multiplet_min_improvement), "--multiplet-min-improvement must be in [0,1)");
+    anyhow::ensure!(
+        cli.leiden_resolution.is_finite() && cli.leiden_resolution > 0.0,
+        "--leiden-resolution must be finite and positive"
+    );
+    anyhow::ensure!(
+        cli.leiden_neighbors > 0,
+        "--leiden-neighbors must be positive"
+    );
+    anyhow::ensure!(
+        cli.multiplet_min_parent_fraction.is_finite()
+            && (0.0..=1.0).contains(&cli.multiplet_min_parent_fraction),
+        "--multiplet-min-parent-fraction must be between 0 and 1"
+    );
+    anyhow::ensure!(
+        (0.0..1.0).contains(&cli.multiplet_min_improvement),
+        "--multiplet-min-improvement must be in [0,1)"
+    );
     let config = AnalysisConfig {
         min_umi_count: Some(cli.min_umi_count),
+        target_gene_list: cli.target_gene_list.clone(),
         exclude_vdj_before_normalization: cli.exclude_vdj_before_normalization,
         variable_genes: cli.variable_genes,
         pca_components: cli.pca_components,
         umap_neighbors: cli.umap_neighbors,
+        leiden_resolution: cli.leiden_resolution,
+        leiden_neighbors: cli.leiden_neighbors,
         umap_epochs: cli.umap_epochs,
         spatial_min_cells: cli.spatial_min_cells,
         spatial_fraction: cli.spatial_fraction,
         merge_pearson: cli.merge_pearson,
+        ward_fraction_max: cli.ward_fraction_max,
         max_cluster_fraction: cli.max_cluster_fraction,
         target_clusters: cli.target_clusters,
         holdout_fraction: cli.holdout_fraction,
@@ -110,9 +160,18 @@ pub fn run_analysis(cli: AnalysisCli) -> Result<()> {
     };
 
     eprintln!("sc-analyse");
-    eprintln!("  input: {}", cli.matrix.display());
+    eprintln!("  inputs: {:?}", cli.data);
     eprintln!("  output: {}", cli.out.display());
-    eprintln!("  minimum surviving UMI count / resampling target: {}", cli.min_umi_count);
+    eprintln!(
+        "  target gene list (FIRST filter): {}",
+        cli.target_gene_list
+            .as_ref()
+            .map_or_else(|| "none".to_string(), |p| p.display().to_string())
+    );
+    eprintln!(
+        "  minimum surviving UMI count / resampling target: {}",
+        cli.min_umi_count
+    );
     eprintln!(
         "  V/D/J before normalization: {}",
         if config.exclude_vdj_before_normalization {
@@ -123,13 +182,19 @@ pub fn run_analysis(cli: AnalysisCli) -> Result<()> {
     );
     eprintln!("  variable genes: {}", config.variable_genes);
     eprintln!("  PCA components: {}", config.pca_components);
-    eprintln!("  spatial patching: recursive PCA boxes, max({} cells, {:.2}% of retained cells)", config.spatial_min_cells, config.spatial_fraction * 100.0);
+    eprintln!(
+        "  spatial patching: recursive PCA boxes, max({} cells, {:.2}% of retained cells)",
+        config.spatial_min_cells,
+        config.spatial_fraction * 100.0
+    );
     eprintln!(
         "  UMAP neighbours / epochs: {} / {}",
         config.umap_neighbors, config.umap_epochs
     );
     if let Some(k) = config.target_clusters {
-        eprintln!("  merge mode: full-expression Pearson, target {k} clusters (rho cutoff ignored)");
+        eprintln!(
+            "  merge mode: full-expression Pearson, target {k} clusters (rho cutoff ignored)"
+        );
     } else {
         eprintln!("  merge Pearson threshold: {:.4}", config.merge_pearson);
     }
@@ -137,10 +202,17 @@ pub fn run_analysis(cli: AnalysisCli) -> Result<()> {
         "  pseudo-deep holdout fraction: {:.3}",
         config.holdout_fraction
     );
-    eprintln!("  user-facing expression: log1p scale 10000; PCA/UMAP/Pearson/multiplets: resampled counts, seed 42");
+    eprintln!(
+        "  user-facing expression: log1p scale 10000; PCA/UMAP/Pearson/multiplets: resampled counts, seed 42"
+    );
     eprintln!("  pseudo-samples per cluster: {}", config.pseudo_samples);
 
-    let (_, summary) = analyze_exon_matrix(&cli.matrix, &config)?;
+    anyhow::ensure!(!cli.data.is_empty(), "provide --data INPUT [INPUT ...]");
+    let (_, summary) = if cli.data.len() == 1 && cli.sample_names.is_empty() {
+        analyze_exon_matrix(&cli.data[0], &config)?
+    } else {
+        analyze_sample_matrices(&cli.data, &cli.sample_names, &config)?
+    };
 
     eprintln!("\nAnalysis complete");
     eprintln!(

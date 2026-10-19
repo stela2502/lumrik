@@ -1,4 +1,3 @@
-use run_stats::RunStats;
 use crate::cellrep::{
     AlignmentGeometry, BamFeatureEvidence, BamFeatureSequenceParts, CellEvidence, CellEvidenceVdj,
     EvidenceId, MapperEvidence, RawBamFeatureEvidence, RawCellEvidence, SequencePart,
@@ -13,6 +12,7 @@ use crate::recombination::{
 use anyhow::{Context, Result};
 use int_to_dna::IntToDna;
 use rayon::prelude::*;
+use run_stats::RunStats;
 use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{self, Read};
 use sc_primer::ReadTagRecord;
@@ -114,7 +114,9 @@ impl BamInput {
 
     fn next_record(&mut self, record: &mut bam::Record) -> Option<Result<()>> {
         match self {
-            Self::Sequential(reader) => reader.read(record).map(|result| result.map_err(Into::into)),
+            Self::Sequential(reader) => {
+                reader.read(record).map(|result| result.map_err(Into::into))
+            }
             Self::Indexed {
                 reader,
                 regions,
@@ -608,8 +610,12 @@ impl VdjRunner {
         stats.rescued_cells = rescued_cells;
 
         if !rescued.is_empty() {
-            self.evidence
-                .consume_batch(rescued, &self.index, self.config.min_sequence_overlap, run_stats);
+            self.evidence.consume_batch(
+                rescued,
+                &self.index,
+                self.config.min_sequence_overlap,
+                run_stats,
+            );
         }
         stats
     }
@@ -654,7 +660,12 @@ impl VdjRunner {
     {
         let mut run_stats = RunStats::new(None, 0.0, 0);
         self.read_bam_with_progress_for_cells_limited(
-            path, resolver, allowed_cells, None, &mut run_stats, progress,
+            path,
+            resolver,
+            allowed_cells,
+            None,
+            &mut run_stats,
+            progress,
         )
         .map(|(records, _)| records)
     }
@@ -760,7 +771,12 @@ impl VdjRunner {
                     run_stats.merge(&batch_stats);
                     timing.evidence_processing += processing_started.elapsed();
                     progress(
-                        unmapped_rescue.progress(bam_records, allowed_cell_records, n, timing.bam_read),
+                        unmapped_rescue.progress(
+                            bam_records,
+                            allowed_cell_records,
+                            n,
+                            timing.bam_read,
+                        ),
                         &self.evidence,
                         &self.index,
                     );
@@ -777,7 +793,12 @@ impl VdjRunner {
                     n = n.saturating_add(rescue.admitted);
                     unmapped_rescue.add_assign(rescue);
                     progress(
-                        unmapped_rescue.progress(bam_records, allowed_cell_records, n, timing.bam_read),
+                        unmapped_rescue.progress(
+                            bam_records,
+                            allowed_cell_records,
+                            n,
+                            timing.bam_read,
+                        ),
                         &self.evidence,
                         &self.index,
                     );
@@ -836,20 +857,24 @@ impl VdjRunner {
             // The serial BAM path deliberately records only facts already present
             // in the BAM. Receptor/index interpretation happens after the batch
             // boundary in the CellHash Rayon loop.
-            batch.entry_cell(cell_id).or_default().records.push(RawBamFeatureEvidence {
-                id,
-                umi: bam_umi(&rec),
-                tid,
-                pos: rec.pos().max(0) as u32,
-                cigar: rec.cigar().iter().copied().collect(),
-                bases: rec.seq().as_bytes(),
-                qualities: rec.qual().to_vec(),
-                is_last_in_template: rec.is_last_in_template(),
-                is_reverse: rec.is_reverse(),
-                is_secondary: rec.is_secondary(),
-                is_supplementary: rec.is_supplementary(),
-                mapq: rec.mapq(),
-            });
+            batch
+                .entry_cell(cell_id)
+                .or_default()
+                .records
+                .push(RawBamFeatureEvidence {
+                    id,
+                    umi: bam_umi(&rec),
+                    tid,
+                    pos: rec.pos().max(0) as u32,
+                    cigar: rec.cigar().iter().copied().collect(),
+                    bases: rec.seq().as_bytes(),
+                    qualities: rec.qual().to_vec(),
+                    is_last_in_template: rec.is_last_in_template(),
+                    is_reverse: rec.is_reverse(),
+                    is_secondary: rec.is_secondary(),
+                    is_supplementary: rec.is_supplementary(),
+                    mapq: rec.mapq(),
+                });
             batch_records = batch_records.saturating_add(1);
             self.cell_names.entry(cell_id).or_insert(cell);
         }
@@ -1041,19 +1066,17 @@ fn qualifies_reconstruction_candidate(v_mappings: usize, j_mappings: usize) -> b
     v_mappings > 0 && (j_mappings > 0 || v_mappings >= 2)
 }
 
-
 #[cfg(test)]
 mod runner_tests {
     use super::{
-        qualifies_reconstruction_candidate, UnmappedIghSeeds,
-        UnmappedReadCandidate, UNMAPPED_IGH_SEED_LEN,
+        qualifies_reconstruction_candidate, UnmappedIghSeeds, UnmappedReadCandidate,
+        UNMAPPED_IGH_SEED_LEN,
     };
     use crate::cellrep::EvidenceId;
     use crate::index::{Chain, SegmentKind, Strand, VdjIndex, VdjSegment};
     use rust_htslib::bam;
     use rust_htslib::bam::record::Aux;
     use sc_primer::ReadTagRecord;
-
 
     #[test]
     fn bam_umi_recovers_native_lumrik_qname() {
@@ -1166,7 +1189,6 @@ mod runner_tests {
         assert!(!qualifies_reconstruction_candidate(0, 10));
         assert!(!qualifies_reconstruction_candidate(0, 0));
     }
-
 }
 
 #[allow(dead_code)]

@@ -10,7 +10,6 @@ use crate::cell_data::GeneUmiHash;
 use crate::{CellHash, FeatureIndex, MatrixValueType};
 use sprs::{CsMat, TriMat};
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScdataInsertState {
     Inserted,
@@ -186,11 +185,21 @@ impl Scdata {
     pub(crate) fn matrix_axis_ids(&self) -> (Vec<u64>, Vec<u64>) {
         use std::collections::BTreeSet;
         let features = if self.matrix_feature_ids.is_empty() {
-            self.values().flat_map(|cell| cell.total_reads.keys().copied()).collect::<BTreeSet<_>>().into_iter().collect()
-        } else { self.matrix_feature_ids.clone() };
+            self.values()
+                .flat_map(|cell| cell.total_reads.keys().copied())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        } else {
+            self.matrix_feature_ids.clone()
+        };
         let cells = if self.matrix_cell_ids.is_empty() {
-            let mut ids = self.keys(); ids.sort_unstable(); ids
-        } else { self.matrix_cell_ids.clone() };
+            let mut ids = self.keys();
+            ids.sort_unstable();
+            ids
+        } else {
+            self.matrix_cell_ids.clone()
+        };
         (features, cells)
     }
 
@@ -306,9 +315,8 @@ impl Scdata {
 
         self.invalidate_export_cache();
 
-        self.data.par_merge_with_mapping(
-            &other.data,
-            |self_bucket, other_bucket, local_mapping| {
+        self.data
+            .par_merge_with_mapping(&other.data, |self_bucket, other_bucket, local_mapping| {
                 for (cell_name, other_cell) in other_bucket {
                     match self_bucket.entry(*cell_name) {
                         std::collections::hash_map::Entry::Occupied(mut entry) => {
@@ -324,8 +332,7 @@ impl Scdata {
                         }
                     }
                 }
-            },
-        )
+            })
     }
 
     /// Merge another matrix into this one by consuming the source in a single thread.
@@ -378,12 +385,7 @@ impl Scdata {
     ///
     /// The storage layer reports only what happened. Run-level accounting is
     /// owned by the caller.
-    pub fn try_insert(
-        &mut self,
-        name: &u64,
-        data: GeneUmiHash,
-        _value: f32,
-    ) -> ScdataInsertState {
+    pub fn try_insert(&mut self, name: &u64, data: GeneUmiHash, _value: f32) -> ScdataInsertState {
         let index = self.to_key(name);
         self.invalidate_export_cache();
 
@@ -597,7 +599,11 @@ impl Scdata {
     /// This applies the UMI cutoff, retains only passing cells,
     /// establishes deterministic export order, rebuilds export caches,
     /// and marks the object as checked.
-    pub fn finalize_for_export<I: FeatureIndex + ?Sized>(&mut self, min_total_umis: usize, index: &I) {
+    pub fn finalize_for_export<I: FeatureIndex + ?Sized>(
+        &mut self,
+        min_total_umis: usize,
+        index: &I,
+    ) {
         let keep = self.passing_cell_set_by_umi(min_total_umis);
         self.restrict_to_cells(&keep);
         self.rebuild_feature_ids_with_data(index);

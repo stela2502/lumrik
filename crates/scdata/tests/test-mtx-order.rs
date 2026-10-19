@@ -18,9 +18,7 @@ fn write_mex(dir: &Path, entries: &str) {
     write_gz(&dir.join("barcodes.tsv.gz"), "AAAA-1\nCCCC-1\n");
     write_gz(
         &dir.join("matrix.mtx.gz"),
-        &format!(
-            "%%MatrixMarket matrix coordinate integer general\n% test\n2 2 4\n{entries}"
-        ),
+        &format!("%%MatrixMarket matrix coordinate integer general\n% test\n2 2 4\n{entries}"),
     );
 }
 
@@ -28,7 +26,11 @@ fn load_dense(dir: &Path) -> Vec<Vec<f32>> {
     let (data, index, _) = load_mtx_feature_matrix(dir, "Gene Expression", 1).unwrap();
     let matrix = data.as_sprs().unwrap();
     assert_eq!(index.ordered_feature_ids(), vec![0, 1]);
-    matrix.to_dense().outer_iter().map(|row| row.to_vec()).collect()
+    matrix
+        .to_dense()
+        .outer_iter()
+        .map(|row| row.to_vec())
+        .collect()
 }
 
 #[test]
@@ -58,11 +60,19 @@ fn mtx_import_accepts_numeric_vendor_cell_ids() {
     );
 
     let barcodes = read_mtx_barcodes(dir.path()).unwrap();
-    assert_eq!(barcodes, vec![("1764".to_string(), 1764), ("4422".to_string(), 4422)]);
+    assert_eq!(
+        barcodes,
+        vec![("1764".to_string(), 1764), ("4422".to_string(), 4422)]
+    );
 
     let (data, _, _) = load_mtx_feature_matrix(dir.path(), "Gene Expression", 1).unwrap();
     assert_eq!(
-        data.as_sprs().unwrap().to_dense().outer_iter().map(|row| row.to_vec()).collect::<Vec<_>>(),
+        data.as_sprs()
+            .unwrap()
+            .to_dense()
+            .outer_iter()
+            .map(|row| row.to_vec())
+            .collect::<Vec<_>>(),
         vec![vec![7.0, 0.0], vec![0.0, 9.0]],
     );
 }
@@ -83,11 +93,22 @@ fn mtx_import_preserves_arbitrary_cell_labels() {
     let first = read_mtx_barcodes(dir.path()).unwrap();
     let second = read_mtx_barcodes(dir.path()).unwrap();
     assert_eq!(first, second);
-    assert_eq!(first.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>(), vec!["cell-A", "Horst"]);
+    assert_eq!(
+        first
+            .iter()
+            .map(|(label, _)| label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["cell-A", "Horst"]
+    );
 
     let (data, _, _) = load_mtx_feature_matrix(dir.path(), "Gene Expression", 1).unwrap();
     assert_eq!(
-        data.as_sprs().unwrap().to_dense().outer_iter().map(|row| row.to_vec()).collect::<Vec<_>>(),
+        data.as_sprs()
+            .unwrap()
+            .to_dense()
+            .outer_iter()
+            .map(|row| row.to_vec())
+            .collect::<Vec<_>>(),
         vec![vec![3.0, 0.0], vec![0.0, 5.0]],
     );
 }

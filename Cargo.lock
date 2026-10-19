@@ -1791,6 +1791,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
+name = "leiden-rs"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7bbf4703fdbd25078c1842083c8f4e5551ed118a9d00342e309fee0bea46d42"
+dependencies = [
+ "rand 0.9.5",
+ "rayon",
+ "rustc-hash",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3139,6 +3151,7 @@ dependencies = [
  "flate2",
  "hdf5",
  "hdf5-sys",
+ "leiden-rs",
  "linfa",
  "linfa-reduction",
  "manifolds-rs",
@@ -3179,6 +3192,10 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "sc-regnet"
+version = "0.9.0"
 
 [[package]]
 name = "sc-te"

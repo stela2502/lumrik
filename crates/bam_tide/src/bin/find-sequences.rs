@@ -106,7 +106,10 @@ fn main() -> Result<()> {
     let file = File::create(&cli.out)
         .with_context(|| format!("failed to create {}", cli.out.display()))?;
     let mut out = BufWriter::new(file);
-    writeln!(out, "cell_id\tumi\tfeature\tfeature_start\tfeature_end\tstrand\tmatched_sequence")?;
+    writeln!(
+        out,
+        "cell_id\tumi\tfeature\tfeature_start\tfeature_end\tstrand\tmatched_sequence"
+    )?;
 
     let mut total = 0usize;
     let mut matched_reads = 0usize;
@@ -153,7 +156,8 @@ fn main() -> Result<()> {
             let record = result?;
             total += 1;
             let seq = record.seq().as_bytes();
-            let identity = bam_identity(&record).or_else(|| primer_identity_bytes(&detector, &seq, &record.qual()));
+            let identity = bam_identity(&record)
+                .or_else(|| primer_identity_bytes(&detector, &seq, &record.qual()));
             let hits = collapse_hits(find_hits(&mapper, &tiles, &seq));
             if !hits.is_empty() {
                 matched_reads += 1;
@@ -178,7 +182,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn build_mapper(references: &[ReferenceEntry], min_hits: u32) -> Result<(FastTagMapper, Vec<Tile>)> {
+fn build_mapper(
+    references: &[ReferenceEntry],
+    min_hits: u32,
+) -> Result<(FastTagMapper, Vec<Tile>)> {
     let mut mapper = FastTagMapper::new().with_min_hits(min_hits);
     let mut tiles = Vec::new();
     let mut feature_id = 1u64;
@@ -194,7 +201,11 @@ fn build_mapper(references: &[ReferenceEntry], min_hits: u32) -> Result<(FastTag
                 &reference.seq[start..end],
                 FeatureEntry::new(feature_id, reference.name.clone(), "sequence_query"),
             );
-            tiles.push(Tile { reference_index, start, end });
+            tiles.push(Tile {
+                reference_index,
+                start,
+                end,
+            });
             feature_id += 1;
             if end == reference.seq.len() {
                 break;
@@ -229,7 +240,14 @@ fn find_hits(mapper: &FastTagMapper, tiles: &[Tile], seq: &[u8]) -> Vec<Hit> {
 /// independent copies. Merge them before reporting so long references remain
 /// readable and repeated ONT occurrences stay separable.
 fn collapse_hits(mut hits: Vec<Hit>) -> Vec<Hit> {
-    hits.sort_by_key(|h| (h.reference_index, strand_key(h.strand), h.read_start, h.start));
+    hits.sort_by_key(|h| {
+        (
+            h.reference_index,
+            strand_key(h.strand),
+            h.read_start,
+            h.start,
+        )
+    });
     let mut out: Vec<Hit> = Vec::new();
     for hit in hits {
         if let Some(last) = out.last_mut() {
@@ -296,9 +314,16 @@ fn primer_identity(detector: &PrimerDetector, record: &FastqRecord) -> Option<(S
     primer_identity_bytes(detector, &record.seq, &record.qual)
 }
 
-fn primer_identity_bytes(detector: &PrimerDetector, seq: &[u8], qual: &[u8]) -> Option<(String, String)> {
+fn primer_identity_bytes(
+    detector: &PrimerDetector,
+    seq: &[u8],
+    qual: &[u8],
+) -> Option<(String, String)> {
     let hit = detector.detect_first(seq, qual).ok()??;
-    let cell = hit.cell_seq.as_ref().map(|x| String::from_utf8_lossy(x).into_owned())
+    let cell = hit
+        .cell_seq
+        .as_ref()
+        .map(|x| String::from_utf8_lossy(x).into_owned())
         .or_else(|| hit.bd_cell_id.map(|x| x.to_string()))?;
     let umi = first_segment_seq(seq, &hit, "UMI")?;
     Some((cell, String::from_utf8_lossy(umi).into_owned()))
@@ -306,8 +331,14 @@ fn primer_identity_bytes(detector: &PrimerDetector, seq: &[u8], qual: &[u8]) -> 
 
 fn bam_identity(record: &bam::Record) -> Option<(String, String)> {
     use bam::record::Aux;
-    let cell = match record.aux(b"CB").ok()? { Aux::String(x) => x.to_string(), _ => return None };
-    let umi = match record.aux(b"UB").ok()? { Aux::String(x) => x.to_string(), _ => return None };
+    let cell = match record.aux(b"CB").ok()? {
+        Aux::String(x) => x.to_string(),
+        _ => return None,
+    };
+    let umi = match record.aux(b"UB").ok()? {
+        Aux::String(x) => x.to_string(),
+        _ => return None,
+    };
     Some((cell, umi))
 }
 
@@ -318,19 +349,32 @@ fn first_segment_seq<'a>(seq: &'a [u8], hit: &PrimerMatch, name: &str) -> Option
 }
 
 fn read_fasta(path: &Path) -> Result<Vec<ReferenceEntry>> {
-    let reader = BufReader::new(File::open(path).with_context(|| format!("failed to open FASTA {}", path.display()))?);
+    let reader = BufReader::new(
+        File::open(path).with_context(|| format!("failed to open FASTA {}", path.display()))?,
+    );
     let mut entries = Vec::new();
     let mut name: Option<String> = None;
     let mut seq = Vec::new();
     for line in reader.lines() {
         let line = line?;
         let line = line.trim();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         if let Some(header) = line.strip_prefix('>') {
             if let Some(old) = name.take() {
-                entries.push(ReferenceEntry { name: old, seq: std::mem::take(&mut seq) });
+                entries.push(ReferenceEntry {
+                    name: old,
+                    seq: std::mem::take(&mut seq),
+                });
             }
-            name = Some(header.split_whitespace().next().unwrap_or(header).to_string());
+            name = Some(
+                header
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or(header)
+                    .to_string(),
+            );
         } else {
             seq.extend(line.as_bytes().iter().map(|b| b.to_ascii_uppercase()));
         }
@@ -338,12 +382,15 @@ fn read_fasta(path: &Path) -> Result<Vec<ReferenceEntry>> {
     if let Some(old) = name {
         entries.push(ReferenceEntry { name: old, seq });
     }
-    if entries.is_empty() { anyhow::bail!("FASTA contains no entries"); }
+    if entries.is_empty() {
+        anyhow::bail!("FASTA contains no entries");
+    }
     Ok(entries)
 }
 
 fn open_fastq(path: &Path) -> Result<Box<dyn BufRead>> {
-    let file = File::open(path).with_context(|| format!("failed to open FASTQ {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("failed to open FASTQ {}", path.display()))?;
     if path.extension().is_some_and(|x| x == "gz") {
         Ok(Box::new(BufReader::new(MultiGzDecoder::new(file))))
     } else {
@@ -353,7 +400,9 @@ fn open_fastq(path: &Path) -> Result<Box<dyn BufRead>> {
 
 fn read_fastq_record(reader: &mut dyn BufRead) -> Result<Option<FastqRecord>> {
     let mut header = String::new();
-    if reader.read_line(&mut header)? == 0 { return Ok(None); }
+    if reader.read_line(&mut header)? == 0 {
+        return Ok(None);
+    }
     let mut seq = String::new();
     let mut plus = String::new();
     let mut qual = String::new();
@@ -364,9 +413,20 @@ fn read_fastq_record(reader: &mut dyn BufRead) -> Result<Option<FastqRecord>> {
         anyhow::bail!("invalid FASTQ record near {}", header.trim_end());
     }
     let seq = seq.trim_end().as_bytes().to_vec();
-    let qual: Vec<u8> = qual.trim_end().as_bytes().iter().map(|q| q.saturating_sub(33)).collect();
-    if seq.len() != qual.len() { anyhow::bail!("FASTQ sequence/quality length mismatch"); }
-    Ok(Some(FastqRecord::new(header.trim_start_matches('@').trim_end().to_string(), &seq, &qual)))
+    let qual: Vec<u8> = qual
+        .trim_end()
+        .as_bytes()
+        .iter()
+        .map(|q| q.saturating_sub(33))
+        .collect();
+    if seq.len() != qual.len() {
+        anyhow::bail!("FASTQ sequence/quality length mismatch");
+    }
+    Ok(Some(FastqRecord::new(
+        header.trim_start_matches('@').trim_end().to_string(),
+        &seq,
+        &qual,
+    )))
 }
 
 fn progress(cli: &Cli, total: usize, matched: usize) {

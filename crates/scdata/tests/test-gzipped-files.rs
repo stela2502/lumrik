@@ -81,13 +81,15 @@ fn integer_10x_gz_files_match_expected_exactly() {
     // Cell 1: Gene1 x20, Gene4 x10
     for umi in 0..20 {
         assert!(
-            scdata.try_insert(&1_u64, GeneUmiHash(gene1, umi as u64), 0.0) == ScdataInsertState::Inserted,
+            scdata.try_insert(&1_u64, GeneUmiHash(gene1, umi as u64), 0.0)
+                == ScdataInsertState::Inserted,
             "insert Gene1 umi {umi}"
         );
     }
     for umi in 20..30 {
         assert!(
-            scdata.try_insert(&1_u64, GeneUmiHash(gene4, umi as u64), 0.0) == ScdataInsertState::Inserted,
+            scdata.try_insert(&1_u64, GeneUmiHash(gene4, umi as u64), 0.0)
+                == ScdataInsertState::Inserted,
             "insert Gene4 umi {umi}"
         );
     }
@@ -95,19 +97,13 @@ fn integer_10x_gz_files_match_expected_exactly() {
     // Cell 2: Gene3 x20, Gene1 x20
     for umi in 0..20 {
         assert!(
-            scdata.try_insert(
-                &13_452_355_u64,
-                GeneUmiHash(gene3, umi as u64),
-                0.0
-            ) == ScdataInsertState::Inserted,
+            scdata.try_insert(&13_452_355_u64, GeneUmiHash(gene3, umi as u64), 0.0)
+                == ScdataInsertState::Inserted,
             "insert Gene3 umi {umi}"
         );
         assert!(
-            scdata.try_insert(
-                &13_452_355_u64,
-                GeneUmiHash(gene1, umi as u64),
-                0.0
-            ) == ScdataInsertState::Inserted,
+            scdata.try_insert(&13_452_355_u64, GeneUmiHash(gene1, umi as u64), 0.0)
+                == ScdataInsertState::Inserted,
             "insert Gene1 umi {umi}"
         );
     }

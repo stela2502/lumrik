@@ -1,19 +1,23 @@
-mod multiplet;
-pub mod cli;
-pub mod snp;
 mod bioinformatics;
+pub mod cli;
 mod cluster;
 mod data;
 mod embedding;
+mod leiden;
 mod mex;
+mod multiplet;
 mod normalize;
 mod norn;
 mod partition;
 mod pca;
 mod qc;
 mod report;
+pub mod snp;
 mod stats;
-pub use bioinformatics::{AnalysisConfig, AnalysisSummary, analyze_exon_matrix};
+pub use bioinformatics::{
+    AnalysisConfig, AnalysisSummary, analyze_exon_matrix, analyze_sample_matrices,
+    merge_sample_inputs,
+};
 pub use data::{CellAnnotations, SingleCellData};
 pub use report::write_group_stats;
 

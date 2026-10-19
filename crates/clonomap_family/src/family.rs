@@ -838,7 +838,6 @@ pub(crate) fn fragment_path(
     Some(path)
 }
 
-
 /// Reconstruct a length-matched mature receptor by applying only confidently
 /// aligned substitutions from the observed fragment to the inferred naive
 /// receptor. Unobserved sequence remains naive; indels are deliberately not
@@ -853,7 +852,9 @@ pub fn project_observed_bases(reference: &str, observed: &str) -> Option<Vec<(us
     let path = fragment_path(reference.as_bytes(), observed.as_bytes())?;
     let mut projected = Vec::new();
     for (ai, bj) in path {
-        let (Some(ai), Some(bj)) = (ai, bj) else { continue; };
+        let (Some(ai), Some(bj)) = (ai, bj) else {
+            continue;
+        };
         let base = observed.as_bytes()[bj].to_ascii_uppercase();
         if base != b'N' {
             projected.push((ai, base));
@@ -866,7 +867,9 @@ pub fn reconstruct_substitutions(reference: &str, observed: &str) -> Option<Stri
     let path = fragment_path(reference.as_bytes(), observed.as_bytes())?;
     let mut mature = reference.as_bytes().to_vec();
     for (ai, bj) in path {
-        let (Some(ai), Some(bj)) = (ai, bj) else { continue; };
+        let (Some(ai), Some(bj)) = (ai, bj) else {
+            continue;
+        };
         let alt = observed.as_bytes()[bj].to_ascii_uppercase();
         let reference_base = reference.as_bytes()[ai].to_ascii_uppercase();
         if reference_base != b'N' && alt != b'N' && reference_base != alt {

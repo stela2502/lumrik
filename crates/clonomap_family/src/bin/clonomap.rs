@@ -3,22 +3,25 @@ use clap::Parser;
 use clonomap::{
     AlignedCell, CellReceptor, ClonoMap, Family, FamilyConfig, LightClone, LightMember,
     MutationMeasurement, Receptor, ReferenceModels, align_fragment, project_observed_bases,
-    reconstruct_substitutions,
-    rooted_categorical_hex, rooted_continuous_hex, translate_imgt_alignment,
+    reconstruct_substitutions, rooted_categorical_hex, rooted_continuous_hex,
+    translate_imgt_alignment,
 };
+use lumrik_status::{
+    ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status, public_hostname,
+    spawn_status_server,
+};
+use ndarray::Array2;
 use ommverse::AaModelVault;
 use rayon::prelude::*;
-use lumrik_status::{memory_status, public_hostname, spawn_status_server, ServerContent, ServerSnapshot, StatusMetric, StatusSection};
-use ndarray::Array2;
 use sc_primer::{Chemistry, PrimerDetector};
 use sc_vdj::RecombinationId;
-use std::str::FromStr;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{File, create_dir_all};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -100,7 +103,10 @@ struct ClonoMapStatus {
 impl ClonoMapStatus {
     fn new(args: &Cli) -> Self {
         Self {
-            started_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),
+            started_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
             finished_unix_ms: None,
             stage: "starting".to_owned(),
             detail: "Starting ClonoMap".to_owned(),
@@ -130,7 +136,12 @@ impl ClonoMapStatus {
 
     fn finish(&mut self) {
         self.stage("complete", "ClonoMap analysis complete");
-        self.finished_unix_ms = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis());
+        self.finished_unix_ms = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        );
     }
 }
 
@@ -143,21 +154,32 @@ impl ServerContent for ClonoMapStatus {
             StatusMetric::new("Qualified/final HC cells", self.hc_cells.to_string()),
             StatusMetric::new("HC families", self.families.to_string()),
             StatusMetric::new("LC clones", self.lc_clones.to_string()),
-            StatusMetric::new("HC-only attached to clone", self.hc_only_attached.to_string()),
+            StatusMetric::new(
+                "HC-only attached to clone",
+                self.hc_only_attached.to_string(),
+            ),
             StatusMetric::new("HC-only ambiguous", self.hc_only_ambiguous.to_string()),
             StatusMetric::new("HC-only unresolved", self.hc_only_unresolved.to_string()),
-            StatusMetric::new("LC-only attached to clone", self.lc_only_attached.to_string()),
+            StatusMetric::new(
+                "LC-only attached to clone",
+                self.lc_only_attached.to_string(),
+            ),
             StatusMetric::new("LC-only ambiguous", self.lc_only_ambiguous.to_string()),
             StatusMetric::new("LC-only unresolved", self.lc_only_unresolved.to_string()),
         ];
         for (rank, summary) in self.top_lc_rescues.iter().enumerate() {
-            run.push(StatusMetric::new(format!("Top rescued LC #{}", rank + 1), summary.clone()));
+            run.push(StatusMetric::new(
+                format!("Top rescued LC #{}", rank + 1),
+                summary.clone(),
+            ));
         }
         if let Some(vault) = &self.vault {
             run.push(StatusMetric::new("Model vault", vault.clone()));
             run.push(StatusMetric::new(
                 "Vault models",
-                self.vault_models.map(|n| n.to_string()).unwrap_or_else(|| "not loaded".to_owned()),
+                self.vault_models
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "not loaded".to_owned()),
             ));
         }
         ServerSnapshot {
@@ -169,15 +191,24 @@ impl ServerContent for ClonoMapStatus {
             public_url: self.public_url.clone(),
             sections: vec![
                 StatusSection::new("Current analysis", run),
-                StatusSection::new("Output", vec![StatusMetric::new("Directory", self.output.clone())]),
+                StatusSection::new(
+                    "Output",
+                    vec![StatusMetric::new("Directory", self.output.clone())],
+                ),
                 {
                     let mem = memory_status();
                     StatusSection::new(
                         "Process",
                         vec![
                             StatusMetric::new("RSS", format!("{:.1} MiB", mem.process_rss_mib)),
-                            StatusMetric::new("Peak RSS", format!("{:.1} MiB", mem.process_peak_rss_mib)),
-                            StatusMetric::new("System available", format!("{:.1} MiB", mem.system_available_mib)),
+                            StatusMetric::new(
+                                "Peak RSS",
+                                format!("{:.1} MiB", mem.process_peak_rss_mib),
+                            ),
+                            StatusMetric::new(
+                                "System available",
+                                format!("{:.1} MiB", mem.system_available_mib),
+                            ),
                         ],
                     )
                 },
@@ -249,10 +280,15 @@ fn lc_rescue_summary(assignment: &LightOnlyAssignment, total: usize) -> String {
     let umis: Vec<usize> = assignment.cells.iter().map(|c| c.support_umis).collect();
     let (read_mean, read_sd) = mean_sd(&reads);
     let (umi_mean, umi_sd) = mean_sd(&umis);
-    let share = if total == 0 { 0.0 } else { 100.0 * assignment.cells.len() as f64 / total as f64 };
+    let share = if total == 0 {
+        0.0
+    } else {
+        100.0 * assignment.cells.len() as f64 / total as f64
+    };
     format!(
         "{} cells ({share:.1}%), evidence reads {read_mean:.2} +/- {read_sd:.2}, UMIs {umi_mean:.2} +/- {umi_sd:.2}; {}",
-        assignment.cells.len(), assignment.clone_id
+        assignment.cells.len(),
+        assignment.clone_id
     )
 }
 
@@ -283,7 +319,10 @@ fn clone_chain_hex(receptor: &Receptor) -> Result<String> {
         + u32::from(d.n2_len.unwrap_or(0))
         + u32::from(d.p_j5_len);
     if d.v_id > u16::MAX as usize || d.j_id > u16::MAX as usize || vj_distance > u16::MAX as u32 {
-        bail!("clone structural fields exceed 16-bit encoding for {}", receptor.id);
+        bail!(
+            "clone structural fields exceed 16-bit encoding for {}",
+            receptor.id
+        );
     }
     Ok(format!(
         "{:04X}{:04X}{:04X}{:04X}{:04X}",
@@ -292,7 +331,11 @@ fn clone_chain_hex(receptor: &Receptor) -> Result<String> {
 }
 
 fn clone_id(hc: &Receptor, lc: &Receptor) -> Result<String> {
-    Ok(format!("CLONE:{}:{}", clone_chain_hex(hc)?, clone_chain_hex(lc)?))
+    Ok(format!(
+        "CLONE:{}:{}",
+        clone_chain_hex(hc)?,
+        clone_chain_hex(lc)?
+    ))
 }
 
 struct StageLog {
@@ -322,7 +365,11 @@ impl StageLog {
             stage,
             now.duration_since(self.stage_started).as_secs_f64(),
             now.duration_since(self.started).as_secs_f64(),
-            detail.as_ref().replace('\t', " ").replace('\n', " ").replace('\r', " "),
+            detail
+                .as_ref()
+                .replace('\t', " ")
+                .replace('\n', " ")
+                .replace('\r', " "),
         )?;
         self.out.flush()?;
         self.stage_started = now;
@@ -353,7 +400,11 @@ fn run(args: Cli) -> Result<()> {
     }
     eprintln!("[clonomap] health server: {url}");
 
-    set_status(&status, "preparing output", format!("Creating {}", args.out.display()));
+    set_status(
+        &status,
+        "preparing output",
+        format!("Creating {}", args.out.display()),
+    );
     create_dir_all(&args.out).with_context(|| format!("create {}", args.out.display()))?;
     let mut stage_log = StageLog::create(&args.out.join("clonomap.log"))?;
     let cfg = FamilyConfig {
@@ -363,9 +414,20 @@ fn run(args: Cli) -> Result<()> {
         ..FamilyConfig::default()
     };
 
-    set_status(&status, "discovering inputs", "Resolving VDJ output directories");
+    set_status(
+        &status,
+        "discovering inputs",
+        "Resolving VDJ output directories",
+    );
     let sources = input_sources(&args.vdj_out)?;
-    set_status(&status, "loading receptors", format!("Reading receptor calls from {} VDJ source(s)", sources.len()));
+    set_status(
+        &status,
+        "loading receptors",
+        format!(
+            "Reading receptor calls from {} VDJ source(s)",
+            sources.len()
+        ),
+    );
     let mut rows = Vec::new();
     for (source, dir) in &sources {
         let mut input = read_vdj_output(dir, source)?;
@@ -377,12 +439,18 @@ fn run(args: Cli) -> Result<()> {
         );
         rows.append(&mut input);
     }
-    if let Ok(mut s) = status.write() { s.receptor_calls = rows.len(); }
+    if let Ok(mut s) = status.write() {
+        s.receptor_calls = rows.len();
+    }
     stage_log.mark(
         "load_receptors",
         format!("sources={} receptor_calls={}", sources.len(), rows.len()),
     )?;
-    set_status(&status, "opening reference curator", "Loading persistent reference-candidate state");
+    set_status(
+        &status,
+        "opening reference curator",
+        "Loading persistent reference-candidate state",
+    );
     // ClonoMap discovers reference-incompatible fragments; reference_curator
     // owns their persistent identity, resolution state and external evidence.
     let curator_store = args
@@ -398,7 +466,14 @@ fn run(args: Cli) -> Result<()> {
     // have separate backgrounds. Receptors beyond mean + 2 SD receive a
     // hypothetical V model through reference_curator, then the normal ClonoMap
     // family machinery starts from scratch with those augmented assignments.
-    set_status(&status, "reference refinement", format!("Refining {} receptor calls against supplied germline", rows.len()));
+    set_status(
+        &status,
+        "reference refinement",
+        format!(
+            "Refining {} receptor calls against supplied germline",
+            rows.len()
+        ),
+    );
     let refinement = refine_global_reference_outliers(&mut rows, &mut novel_v);
     println!("\nGlobal reference refinement (max distance from supplied germline)");
     print_refinement_line("HC", &refinement.hc);
@@ -435,7 +510,14 @@ fn run(args: Cli) -> Result<()> {
         by_cell.entry(row.cell.clone()).or_default().push(row);
     }
 
-    set_status(&status, "HC qualification", format!("Selecting one valid heavy chain across {} cells", by_cell.len()));
+    set_status(
+        &status,
+        "HC qualification",
+        format!(
+            "Selecting one valid heavy chain across {} cells",
+            by_cell.len()
+        ),
+    );
     let examined = by_cell.len();
     let mut no_hc = 0usize;
     let mut multiple_hc = 0usize;
@@ -524,7 +606,10 @@ fn run(args: Cli) -> Result<()> {
         light_only_by_sequence
             .entry(key)
             .and_modify(|g| g.cells.push(observation.clone()))
-            .or_insert_with(|| LightOnlyGroup { receptor, cells: vec![observation] });
+            .or_insert_with(|| LightOnlyGroup {
+                receptor,
+                cells: vec![observation],
+            });
     }
     let light_only_groups: Vec<LightOnlyGroup> = light_only_by_sequence.into_values().collect();
 
@@ -551,8 +636,14 @@ fn run(args: Cli) -> Result<()> {
         ),
     )?;
 
-    if let Ok(mut s) = status.write() { s.hc_cells = qualified.len(); }
-    set_status(&status, "HC family construction", format!("Clustering {} qualified HC cells", qualified.len()));
+    if let Ok(mut s) = status.write() {
+        s.hc_cells = qualified.len();
+    }
+    set_status(
+        &status,
+        "HC family construction",
+        format!("Clustering {} qualified HC cells", qualified.len()),
+    );
     let mut families = build_initial_families(qualified, &cfg);
     let provisional_cells: usize = families.iter().map(Family::provisional_len).sum();
     println!(
@@ -561,11 +652,20 @@ fn run(args: Cli) -> Result<()> {
     );
     stage_log.mark(
         "initial_hc_families",
-        format!("families={} provisional_cells={provisional_cells}", families.len()),
+        format!(
+            "families={} provisional_cells={provisional_cells}",
+            families.len()
+        ),
     )?;
 
-    if let Ok(mut s) = status.write() { s.families = families.len(); }
-    set_status(&status, "HC mutation validation", format!("Validating {} provisional HC families", families.len()));
+    if let Ok(mut s) = status.write() {
+        s.families = families.len();
+    }
+    set_status(
+        &status,
+        "HC mutation validation",
+        format!("Validating {} provisional HC families", families.len()),
+    );
     // Family owns only accepted members. align() returns bare CellReceptors;
     // reassignment policy and unresolved cells belong to this outer layer.
     let mut rejected = Vec::<(String, CellReceptor)>::new();
@@ -597,8 +697,17 @@ fn run(args: Cli) -> Result<()> {
         ),
     )?;
 
-    if let Ok(mut s) = status.write() { s.hc_cells = final_cells; }
-    set_status(&status, "LC clone assignment", format!("Assigning light-chain clones in {} finalized HC families", families.len()));
+    if let Ok(mut s) = status.write() {
+        s.hc_cells = final_cells;
+    }
+    set_status(
+        &status,
+        "LC clone assignment",
+        format!(
+            "Assigning light-chain clones in {} finalized HC families",
+            families.len()
+        ),
+    );
     // LC clone ownership starts only after HC membership is final.
     for family in &mut families {
         family.split_light_chains(&cfg, &novel_v);
@@ -619,10 +728,11 @@ fn run(args: Cli) -> Result<()> {
         let hc_hex = clone_chain_hex(&family.root)?;
         for lc in &family.light_clones {
             let lc_hex = clone_chain_hex(&lc.root)?;
-            lc_to_hc
-                .entry(lc_hex)
-                .or_default()
-                .insert((hc_hex.clone(), family.name.clone(), lc.name.clone()));
+            lc_to_hc.entry(lc_hex).or_default().insert((
+                hc_hex.clone(),
+                family.name.clone(),
+                lc.name.clone(),
+            ));
         }
     }
     let mut light_only_assignments = Vec::new();
@@ -685,7 +795,11 @@ fn run(args: Cli) -> Result<()> {
     if !top_lc_rescues.is_empty() {
         println!("  Top rescued LC-only groups:");
         for (rank, assignment) in top_lc_rescues.iter().enumerate() {
-            println!("    {}. {}", rank + 1, lc_rescue_summary(assignment, lc_only_attached));
+            println!(
+                "    {}. {}",
+                rank + 1,
+                lc_rescue_summary(assignment, lc_only_attached)
+            );
         }
     }
     let top_lc_rescue_summaries: Vec<String> = top_lc_rescues
@@ -693,7 +807,10 @@ fn run(args: Cli) -> Result<()> {
         .map(|a| lc_rescue_summary(a, lc_only_attached))
         .collect();
 
-    let lc_clones: usize = families.iter().map(|family| family.light_clones.len()).sum();
+    let lc_clones: usize = families
+        .iter()
+        .map(|family| family.light_clones.len())
+        .sum();
     stage_log.mark(
         "lc_clone_assignment",
         format!(
@@ -712,7 +829,11 @@ fn run(args: Cli) -> Result<()> {
         s.lc_only_unresolved = light_only_unmatched;
         s.top_lc_rescues = top_lc_rescue_summaries;
     }
-    set_status(&status, "writing analysis reports", "Writing family, cell, overlap and reference reports");
+    set_status(
+        &status,
+        "writing analysis reports",
+        "Writing family, cell, overlap and reference reports",
+    );
     write_family_report(&args.out.join("families.tsv"), &families)?;
     let cell_id_detectors: Vec<PrimerDetector> = args
         .chemistry
@@ -721,7 +842,12 @@ fn run(args: Cli) -> Result<()> {
         .filter_map(|chemistry| PrimerDetector::from_chemistry(chemistry).ok())
         .collect();
     let receptor_rows_tmp = args.out.join(".cells.receptor_rows.tmp.tsv");
-    write_cell_report(&receptor_rows_tmp, &families, &light_only_assignments, &cell_id_detectors)?;
+    write_cell_report(
+        &receptor_rows_tmp,
+        &families,
+        &light_only_assignments,
+        &cell_id_detectors,
+    )?;
     write_unique_cells_and_duplicates(
         &receptor_rows_tmp,
         &args.out.join("cells.tsv"),
@@ -739,7 +865,12 @@ fn run(args: Cli) -> Result<()> {
     write_unassigned(&args.out.join("hc_unassigned.tsv"), &unassigned)?;
     stage_log.mark(
         "analysis_reports",
-        format!("families={} final_hc_cells={} reference_models={}", families.len(), final_cells, novel_v.total()),
+        format!(
+            "families={} final_hc_cells={} reference_models={}",
+            families.len(),
+            final_cells,
+            novel_v.total()
+        ),
     )?;
 
     println!(
@@ -749,12 +880,22 @@ fn run(args: Cli) -> Result<()> {
     );
 
     if let Some(vault_path) = &args.vault {
-        set_status(&status, "loading model vault", format!("Loading {}", vault_path.display()));
+        set_status(
+            &status,
+            "loading model vault",
+            format!("Loading {}", vault_path.display()),
+        );
         let vault = AaModelVault::load(vault_path)
             .with_context(|| format!("loading Ommverse model vault {}", vault_path.display()))?;
         let vault_models = vault.models.len() + vault.interpro_models.len();
-        if let Ok(mut s) = status.write() { s.vault_models = Some(vault_models); }
-        set_status(&status, "model-vault scoring", format!("Scoring family receptor states against {vault_models} models"));
+        if let Ok(mut s) = status.write() {
+            s.vault_models = Some(vault_models);
+        }
+        set_status(
+            &status,
+            "model-vault scoring",
+            format!("Scoring family receptor states against {vault_models} models"),
+        );
         write_model_space(&args.out.join("model_space"), &families, &novel_v, &vault)?;
         stage_log.mark(
             "model_vault",
@@ -767,7 +908,11 @@ fn run(args: Cli) -> Result<()> {
     }
 
     if !args.no_plots {
-        set_status(&status, "plotting", format!("Rendering family plots for {} families", families.len()));
+        set_status(
+            &status,
+            "plotting",
+            format!("Rendering family plots for {} families", families.len()),
+        );
         write_family_plots(
             &args.out.join("plots"),
             &families,
@@ -808,14 +953,27 @@ fn run(args: Cli) -> Result<()> {
             fmt_max3(&r.lc_mutations.max3),
         );
     }
-    set_status(&status, "finalizing", "Preparing final family selection summary");
+    set_status(
+        &status,
+        "finalizing",
+        "Preparing final family selection summary",
+    );
     stage_log.mark(
         "finished",
-        format!("families={} selected_families={}", families.len(), selected.len()),
+        format!(
+            "families={} selected_families={}",
+            families.len(),
+            selected.len()
+        ),
     )?;
-    if let Ok(mut s) = status.write() { s.finish(); }
+    if let Ok(mut s) = status.write() {
+        s.finish();
+    }
     println!("\nReports written to {}", args.out.display());
-    println!("Stage timings written to {}", args.out.join("clonomap.log").display());
+    println!(
+        "Stage timings written to {}",
+        args.out.join("clonomap.log").display()
+    );
     Ok(())
 }
 
@@ -916,10 +1074,7 @@ fn refine_global_reference_outliers(
     // once per receptor, in parallel, then reuse the result both for the global
     // HC/LC background and for outlier selection. Reference-model registration
     // remains serial so RC IDs and model merging stay deterministic.
-    let distances: Vec<Option<usize>> = rows
-        .par_iter()
-        .map(supplied_germline_distance)
-        .collect();
+    let distances: Vec<Option<usize>> = rows.par_iter().map(supplied_germline_distance).collect();
 
     let hc_values: Vec<usize> = rows
         .iter()
@@ -1204,7 +1359,9 @@ fn write_family_plots(
         // The HC recombination ID is the stable biological identity of the plotted
         // family. Only add a suffix if more than one selected family has the same
         // HC root ID; the first keeps the clean unsuffixed name.
-        let count = hc_plot_name_counts.entry(family.root.id.clone()).or_default();
+        let count = hc_plot_name_counts
+            .entry(family.root.id.clone())
+            .or_default();
         *count += 1;
         let plot_dir_name = if *count == 1 {
             family.root.id.clone()
@@ -1227,7 +1384,14 @@ struct ChainStateValidation {
 fn indel_signature(m: &MutationMeasurement) -> String {
     m.indels
         .iter()
-        .map(|x| format!("{}:{}:{}", x.naive_pos, if x.inserted { "ins" } else { "del" }, x.len))
+        .map(|x| {
+            format!(
+                "{}:{}:{}",
+                x.naive_pos,
+                if x.inserted { "ins" } else { "del" },
+                x.len
+            )
+        })
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -1246,7 +1410,11 @@ where
         };
     }
     let receptor_ids = rows.iter().map(|(r, _)| r.id.clone()).collect::<Vec<_>>();
-    let mut merged = reference.as_bytes().iter().map(|b| b.to_ascii_uppercase()).collect::<Vec<_>>();
+    let mut merged = reference
+        .as_bytes()
+        .iter()
+        .map(|b| b.to_ascii_uppercase())
+        .collect::<Vec<_>>();
     let mut observed_at: BTreeMap<usize, u8> = BTreeMap::new();
     let mut conflicts = Vec::new();
     let mut projection_failures = Vec::new();
@@ -1260,12 +1428,20 @@ where
         for (pos, base) in projected {
             if let Some(previous) = observed_at.get(&pos) {
                 if *previous != base {
-                    conflicts.push(format!("{}:{}>{}/{}", pos, reference.as_bytes().get(pos).copied().unwrap_or(b'?') as char, *previous as char, base as char));
+                    conflicts.push(format!(
+                        "{}:{}>{}/{}",
+                        pos,
+                        reference.as_bytes().get(pos).copied().unwrap_or(b'?') as char,
+                        *previous as char,
+                        base as char
+                    ));
                     continue;
                 }
             } else {
                 observed_at.insert(pos, base);
-                if pos < merged.len() { merged[pos] = base; }
+                if pos < merged.len() {
+                    merged[pos] = base;
+                }
             }
         }
     }
@@ -1274,7 +1450,10 @@ where
             status: "CONFLICT",
             receptor_ids,
             representative_nt: None,
-            detail: format!("overlapping receptor observations disagree at {}", conflicts.join(",")),
+            detail: format!(
+                "overlapping receptor observations disagree at {}",
+                conflicts.join(",")
+            ),
         };
     }
     if !projection_failures.is_empty() {
@@ -1282,7 +1461,10 @@ where
             status: "UNRESOLVED",
             receptor_ids,
             representative_nt: None,
-            detail: format!("could not place receptor(s) on clone reference: {}", projection_failures.join(",")),
+            detail: format!(
+                "could not place receptor(s) on clone reference: {}",
+                projection_failures.join(",")
+            ),
         };
     }
     // Different non-empty indel signatures cannot yet be merged into one exact
@@ -1294,43 +1476,105 @@ where
             status: "INDEL_AMBIGUOUS",
             receptor_ids,
             representative_nt: None,
-            detail: format!("clone-state members have different observed indel evidence: {}", indels.into_iter().collect::<Vec<_>>().join(" | ")),
+            detail: format!(
+                "clone-state members have different observed indel evidence: {}",
+                indels.into_iter().collect::<Vec<_>>().join(" | ")
+            ),
         };
     }
     ChainStateValidation {
-        status: if rows.len() == 1 { "singleton" } else { "compatible" },
+        status: if rows.len() == 1 {
+            "singleton"
+        } else {
+            "compatible"
+        },
         receptor_ids,
         representative_nt: String::from_utf8(merged).ok(),
-        detail: format!("{} receptor observation(s) merge without contradictory overlapping bases", rows.len()),
+        detail: format!(
+            "{} receptor observation(s) merge without contradictory overlapping bases",
+            rows.len()
+        ),
     }
 }
 
 fn write_graph_state_validation(dir: &Path, family: &Family, states: &[PlotState]) -> Result<()> {
     let hc_by_cell: HashMap<&str, &AlignedCell> = family
-        .members.iter().map(|m| (m.cell.cell_id.as_str(), m)).collect();
+        .members
+        .iter()
+        .map(|m| (m.cell.cell_id.as_str(), m))
+        .collect();
     let lc_by_name: HashMap<&str, &LightClone> = family
-        .light_clones.iter().map(|lc| (lc.name.as_str(), lc)).collect();
+        .light_clones
+        .iter()
+        .map(|lc| (lc.name.as_str(), lc))
+        .collect();
     let mut out = BufWriter::new(File::create(dir.join("graph_state_validation.tsv"))?);
-    writeln!(out, "family\tstate\tlc_clone\thc_depth\tlc_depth\tn_cells\tcells\thc_status\thc_recombination_ids\thc_representative_nt\thc_detail\tlc_status\tlc_recombination_ids\tlc_representative_nt\tlc_detail")?;
+    writeln!(
+        out,
+        "family\tstate\tlc_clone\thc_depth\tlc_depth\tn_cells\tcells\thc_status\thc_recombination_ids\thc_representative_nt\thc_detail\tlc_status\tlc_recombination_ids\tlc_representative_nt\tlc_detail"
+    )?;
     for (i, state) in states.iter().enumerate() {
-        let hc_rows = state.cells.iter().filter_map(|cell| hc_by_cell.get(cell.as_str()).map(|m| (&m.cell.hc, &m.hc_mutations))).collect::<Vec<_>>();
+        let hc_rows = state
+            .cells
+            .iter()
+            .filter_map(|cell| {
+                hc_by_cell
+                    .get(cell.as_str())
+                    .map(|m| (&m.cell.hc, &m.hc_mutations))
+            })
+            .collect::<Vec<_>>();
         let hc = validate_chain_state(&family.root.naive, hc_rows);
         let lc = if state.lc_name == "unpaired" {
-            ChainStateValidation { status: "absent", receptor_ids: Vec::new(), representative_nt: None, detail: "HC-only graph state".into() }
+            ChainStateValidation {
+                status: "absent",
+                receptor_ids: Vec::new(),
+                representative_nt: None,
+                detail: "HC-only graph state".into(),
+            }
         } else if let Some(clone) = lc_by_name.get(state.lc_name.as_str()) {
-            let by_cell: HashMap<&str, &LightMember> = clone.members.iter().map(|m| (m.cell.as_str(), m)).collect();
-            let rows = state.cells.iter().filter_map(|cell| by_cell.get(cell.as_str()).map(|m| (&m.receptor, &m.mutations))).collect::<Vec<_>>();
+            let by_cell: HashMap<&str, &LightMember> =
+                clone.members.iter().map(|m| (m.cell.as_str(), m)).collect();
+            let rows = state
+                .cells
+                .iter()
+                .filter_map(|cell| {
+                    by_cell
+                        .get(cell.as_str())
+                        .map(|m| (&m.receptor, &m.mutations))
+                })
+                .collect::<Vec<_>>();
             validate_chain_state(&clone.root.naive, rows)
         } else {
-            ChainStateValidation { status: "UNRESOLVED", receptor_ids: Vec::new(), representative_nt: None, detail: "LC clone named by plot state is absent from Family".into() }
+            ChainStateValidation {
+                status: "UNRESOLVED",
+                receptor_ids: Vec::new(),
+                representative_nt: None,
+                detail: "LC clone named by plot state is absent from Family".into(),
+            }
         };
         let clean = |x: &str| x.replace('\t', " ").replace('\n', " ");
-        writeln!(out, "{}\tstate{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            family.name, i + 1, state.lc_name, state.hc_depth,
-            state.lc_depth.map(|x| x.to_string()).unwrap_or_else(|| "NA".into()),
-            state.cells.len(), state.cells.iter().cloned().collect::<Vec<_>>().join(","),
-            hc.status, hc.receptor_ids.join(","), hc.representative_nt.as_deref().unwrap_or(""), clean(&hc.detail),
-            lc.status, lc.receptor_ids.join(","), lc.representative_nt.as_deref().unwrap_or(""), clean(&lc.detail))?;
+        writeln!(
+            out,
+            "{}\tstate{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            family.name,
+            i + 1,
+            state.lc_name,
+            state.hc_depth,
+            state
+                .lc_depth
+                .map(|x| x.to_string())
+                .unwrap_or_else(|| "NA".into()),
+            state.cells.len(),
+            state.cells.iter().cloned().collect::<Vec<_>>().join(","),
+            hc.status,
+            hc.receptor_ids.join(","),
+            hc.representative_nt.as_deref().unwrap_or(""),
+            clean(&hc.detail),
+            lc.status,
+            lc.receptor_ids.join(","),
+            lc.representative_nt.as_deref().unwrap_or(""),
+            clean(&lc.detail)
+        )?;
     }
     Ok(())
 }
@@ -1908,7 +2152,9 @@ fn read_reconstructions(path: &Path) -> Result<HashMap<(String, String), Selecte
     }
 
     parsed.par_iter_mut().for_each(|(_, candidate)| {
-        if let Some(measurement) = align_fragment(&candidate.naive, &candidate.observed_rearrangement) {
+        if let Some(measurement) =
+            align_fragment(&candidate.naive, &candidate.observed_rearrangement)
+        {
             candidate.mutation_events = measurement.mutation_events();
             candidate.informative_pairs = measurement.informative_pairs;
         }
@@ -2262,12 +2508,19 @@ fn write_cell_report(
     Ok(())
 }
 
-
 fn call_functional(row: &CallRow) -> bool {
     row.productive && receptor_complete(&row.receptor)
 }
 
-fn call_rank(row: &CallRow) -> (bool, bool, std::cmp::Reverse<usize>, std::cmp::Reverse<usize>, String) {
+fn call_rank(
+    row: &CallRow,
+) -> (
+    bool,
+    bool,
+    std::cmp::Reverse<usize>,
+    std::cmp::Reverse<usize>,
+    String,
+) {
     (
         !call_functional(row),
         !row.productive,
@@ -2284,10 +2537,16 @@ fn best_call<'a>(rows: &[&'a CallRow]) -> Option<&'a CallRow> {
 fn receptor_fields(row: Option<&CallRow>) -> Vec<String> {
     match row {
         Some(r) => vec![
-            r.receptor.id.clone(), r.receptor.chain.clone(), r.receptor.v.clone(),
-            r.receptor.d.clone(), r.receptor.j.clone(), r.receptor.c.clone(),
-            r.receptor.cdr3_nt.clone(), r.productive.to_string(),
-            call_functional(r).to_string(), r.receptor.evidence_reads.to_string(),
+            r.receptor.id.clone(),
+            r.receptor.chain.clone(),
+            r.receptor.v.clone(),
+            r.receptor.d.clone(),
+            r.receptor.j.clone(),
+            r.receptor.c.clone(),
+            r.receptor.cdr3_nt.clone(),
+            r.productive.to_string(),
+            call_functional(r).to_string(),
+            r.receptor.evidence_reads.to_string(),
             r.receptor.support_umis.to_string(),
         ],
         None => vec!["NA".into(); 11],
@@ -2306,82 +2565,153 @@ fn write_unique_cells_and_duplicates(
 ) -> Result<()> {
     let mut calls_by_cell: BTreeMap<String, Vec<&CallRow>> = BTreeMap::new();
     for call in calls {
-        calls_by_cell.entry(call.cell.clone()).or_default().push(call);
+        calls_by_cell
+            .entry(call.cell.clone())
+            .or_default()
+            .push(call);
     }
 
     let f = File::open(receptor_rows_path)?;
     let mut lines = BufReader::new(f).lines();
     let old_header = lines.next().context("empty temporary cell report")??;
     let names: Vec<&str> = old_header.split('\t').collect();
-    let idx: HashMap<&str, usize> = names.iter().enumerate().map(|(i,n)| (*n,i)).collect();
+    let idx: HashMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (*n, i)).collect();
     let source_i = *idx.get("source").context("cell report missing source")?;
     let cell_i = *idx.get("cell").context("cell report missing cell")?;
-    let hc_i = *idx.get("hc_recombination_id").context("cell report missing hc_recombination_id")?;
-    let lc_i = *idx.get("lc_recombination_id").context("cell report missing lc_recombination_id")?;
-    let membership_i = *idx.get("clone_membership").context("cell report missing clone_membership")?;
+    let hc_i = *idx
+        .get("hc_recombination_id")
+        .context("cell report missing hc_recombination_id")?;
+    let lc_i = *idx
+        .get("lc_recombination_id")
+        .context("cell report missing lc_recombination_id")?;
+    let membership_i = *idx
+        .get("clone_membership")
+        .context("cell report missing clone_membership")?;
 
     let mut report_by_cell: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
     for line in lines {
         let fields: Vec<String> = line?.split('\t').map(str::to_string).collect();
-        if fields.len() != names.len() { continue; }
+        if fields.len() != names.len() {
+            continue;
+        }
         let scoped = scoped_cell_id(&fields[source_i], &fields[cell_i]);
         report_by_cell.entry(scoped).or_default().push(fields);
     }
 
     let extra_header = [
-        "hc_chain","hc_v_call","hc_d_call","hc_j_call","hc_c_call_selected","hc_cdr3_nt",
-        "hc_productive","hc_functional","hc_evidence_reads","hc_support_umis",
-        "lc_chain","lc_v_call","lc_d_call","lc_j_call","lc_c_call_selected","lc_cdr3_nt",
-        "lc_productive","lc_functional","lc_evidence_reads","lc_support_umis",
-        "hc_receptors","hc_functional_receptors","lc_receptors","lc_functional_receptors","has_potential_duplicates"
+        "hc_chain",
+        "hc_v_call",
+        "hc_d_call",
+        "hc_j_call",
+        "hc_c_call_selected",
+        "hc_cdr3_nt",
+        "hc_productive",
+        "hc_functional",
+        "hc_evidence_reads",
+        "hc_support_umis",
+        "lc_chain",
+        "lc_v_call",
+        "lc_d_call",
+        "lc_j_call",
+        "lc_c_call_selected",
+        "lc_cdr3_nt",
+        "lc_productive",
+        "lc_functional",
+        "lc_evidence_reads",
+        "lc_support_umis",
+        "hc_receptors",
+        "hc_functional_receptors",
+        "lc_receptors",
+        "lc_functional_receptors",
+        "has_potential_duplicates",
     ];
     let mut out = BufWriter::new(File::create(cells_path)?);
     writeln!(out, "{}\t{}", old_header, extra_header.join("\t"))?;
 
     let mut dup = BufWriter::new(File::create(duplicates_path)?);
-    writeln!(dup, "source\tcell\tbd_cell_id\tchain\trecombination_id\tv_call\td_call\tj_call\tc_call\tcdr3_nt\tproductive\tfunctional\tevidence_reads\tsupport_umis\tselected_in_cells_tsv")?;
+    writeln!(
+        dup,
+        "source\tcell\tbd_cell_id\tchain\trecombination_id\tv_call\td_call\tj_call\tc_call\tcdr3_nt\tproductive\tfunctional\tevidence_reads\tsupport_umis\tselected_in_cells_tsv"
+    )?;
 
     for (scoped, cell_calls) in &calls_by_cell {
-        let hc: Vec<&CallRow> = cell_calls.iter().copied().filter(|r| r.receptor.chain == "IGH").collect();
-        let lc: Vec<&CallRow> = cell_calls.iter().copied().filter(|r| matches!(r.receptor.chain.as_str(), "IGK" | "IGL")).collect();
+        let hc: Vec<&CallRow> = cell_calls
+            .iter()
+            .copied()
+            .filter(|r| r.receptor.chain == "IGH")
+            .collect();
+        let lc: Vec<&CallRow> = cell_calls
+            .iter()
+            .copied()
+            .filter(|r| matches!(r.receptor.chain.as_str(), "IGK" | "IGL"))
+            .collect();
         let best_hc = best_call(&hc);
         let best_lc = best_call(&lc);
         let hc_ids: BTreeSet<&str> = hc.iter().map(|r| r.receptor.id.as_str()).collect();
         let lc_ids: BTreeSet<&str> = lc.iter().map(|r| r.receptor.id.as_str()).collect();
-        let hc_func = hc.iter().filter(|r| call_functional(r)).map(|r| r.receptor.id.as_str()).collect::<BTreeSet<_>>().len();
-        let lc_func = lc.iter().filter(|r| call_functional(r)).map(|r| r.receptor.id.as_str()).collect::<BTreeSet<_>>().len();
+        let hc_func = hc
+            .iter()
+            .filter(|r| call_functional(r))
+            .map(|r| r.receptor.id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
+        let lc_func = lc
+            .iter()
+            .filter(|r| call_functional(r))
+            .map(|r| r.receptor.id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
         let has_dups = hc.len() > 1 || lc.len() > 1;
 
         let chosen_report = report_by_cell.get(scoped).and_then(|rows| {
             let hc_id = best_hc.map(|r| r.receptor.id.as_str());
-            let lc_id = best_lc.filter(|r| call_functional(r)).map(|r| r.receptor.id.as_str());
-            rows.iter().find(|r| {
-                hc_id.map_or(r[hc_i] == "NA", |id| r[hc_i] == id)
-                    && lc_id.map_or(true, |id| r[lc_i] == id)
-            }).or_else(|| rows.iter().find(|r| hc_id.map_or(true, |id| r[hc_i] == id)))
-              .or_else(|| rows.first())
+            let lc_id = best_lc
+                .filter(|r| call_functional(r))
+                .map(|r| r.receptor.id.as_str());
+            rows.iter()
+                .find(|r| {
+                    hc_id.map_or(r[hc_i] == "NA", |id| r[hc_i] == id)
+                        && lc_id.map_or(true, |id| r[lc_i] == id)
+                })
+                .or_else(|| rows.iter().find(|r| hc_id.map_or(true, |id| r[hc_i] == id)))
+                .or_else(|| rows.first())
         });
 
-        let mut base = if let Some(row) = chosen_report { row.clone() } else {
+        let mut base = if let Some(row) = chosen_report {
+            row.clone()
+        } else {
             let (source, cell) = split_scoped_cell_id(scoped);
             let bd = bd_cell_id_for_seq(cell, cell_id_detectors);
             let mut row = vec!["NA".to_string(); names.len()];
-            row[source_i] = source.to_string(); row[cell_i] = cell.to_string();
-            if let Some(i) = idx.get("bd_cell_id") { row[*i] = bd; }
+            row[source_i] = source.to_string();
+            row[cell_i] = cell.to_string();
+            if let Some(i) = idx.get("bd_cell_id") {
+                row[*i] = bd;
+            }
             row[membership_i] = "unresolved".into();
             row
         };
         // The selected receptor columns are authoritative even when family inference
         // intentionally left a cell unresolved.
-        if let Some(h) = best_hc { base[hc_i] = h.receptor.id.clone(); }
-        if let Some(l) = best_lc { base[lc_i] = l.receptor.id.clone(); }
+        if let Some(h) = best_hc {
+            base[hc_i] = h.receptor.id.clone();
+        }
+        if let Some(l) = best_lc {
+            base[lc_i] = l.receptor.id.clone();
+        }
 
         let mut extras = receptor_fields(best_hc);
         // receptor_fields includes id; the legacy table already owns recombination_id.
         extras.remove(0);
-        let mut lfields = receptor_fields(best_lc); lfields.remove(0); extras.extend(lfields);
+        let mut lfields = receptor_fields(best_lc);
+        lfields.remove(0);
+        extras.extend(lfields);
         extras.extend([
-            hc_ids.len().to_string(), hc_func.to_string(), lc_ids.len().to_string(), lc_func.to_string(), has_dups.to_string()
+            hc_ids.len().to_string(),
+            hc_func.to_string(),
+            lc_ids.len().to_string(),
+            lc_func.to_string(),
+            has_dups.to_string(),
         ]);
         writeln!(out, "{}\t{}", base.join("\t"), extras.join("\t"))?;
 
@@ -2391,10 +2721,25 @@ fn write_unique_cells_and_duplicates(
             for r in cell_calls {
                 let selected = best_hc.map_or(false, |x| std::ptr::eq(x, *r))
                     || best_lc.map_or(false, |x| std::ptr::eq(x, *r));
-                writeln!(dup, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    source, cell, bd, r.receptor.chain, r.receptor.id, r.receptor.v, r.receptor.d,
-                    r.receptor.j, r.receptor.c, r.receptor.cdr3_nt, r.productive,
-                    call_functional(r), r.receptor.evidence_reads, r.receptor.support_umis, selected)?;
+                writeln!(
+                    dup,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    source,
+                    cell,
+                    bd,
+                    r.receptor.chain,
+                    r.receptor.id,
+                    r.receptor.v,
+                    r.receptor.d,
+                    r.receptor.j,
+                    r.receptor.c,
+                    r.receptor.cdr3_nt,
+                    r.productive,
+                    call_functional(r),
+                    r.receptor.evidence_reads,
+                    r.receptor.support_umis,
+                    selected
+                )?;
             }
         }
     }
@@ -2577,7 +2922,6 @@ fn write_unassigned(path: &Path, rows: &[UnassignedCell]) -> Result<()> {
     Ok(())
 }
 
-
 #[derive(Debug, Clone)]
 struct CloneSequenceAudit {
     family_id: String,
@@ -2589,7 +2933,6 @@ struct CloneSequenceAudit {
     mature_aa: String,
     aa_changes: usize,
 }
-
 
 #[derive(Debug, Clone)]
 struct TrajectoryStat {
@@ -2615,9 +2958,13 @@ fn average_ranks(values: &[f64]) -> Vec<f64> {
     let mut i = 0;
     while i < order.len() {
         let mut j = i + 1;
-        while j < order.len() && values[order[j]] == values[order[i]] { j += 1; }
+        while j < order.len() && values[order[j]] == values[order[i]] {
+            j += 1;
+        }
         let rank = ((i + 1 + j) as f64) / 2.0;
-        for k in i..j { ranks[order[k]] = rank; }
+        for k in i..j {
+            ranks[order[k]] = rank;
+        }
         i = j;
     }
     ranks
@@ -2625,30 +2972,57 @@ fn average_ranks(values: &[f64]) -> Vec<f64> {
 
 fn spearman(x: &[f64], y: &[f64]) -> PearsonStat {
     let n = x.len().min(y.len());
-    if n < 3 { return PearsonStat { n, ..Default::default() }; }
+    if n < 3 {
+        return PearsonStat {
+            n,
+            ..Default::default()
+        };
+    }
     pearson(&average_ranks(&x[..n]), &average_ranks(&y[..n]))
 }
 
 fn summarize_trajectory_points(points: &[CloneModelPoint]) -> Vec<TrajectoryStat> {
-    let mut groups: BTreeMap<(String, String, String, String, String, &'static str), Vec<&CloneModelPoint>> = BTreeMap::new();
+    let mut groups: BTreeMap<
+        (String, String, String, String, String, &'static str),
+        Vec<&CloneModelPoint>,
+    > = BTreeMap::new();
     for p in points {
-        groups.entry((p.family_id.clone(), p.lc_clone_id.clone(), p.chain.clone(), p.model_id.clone(), p.model_name.clone(), p.model_kind))
-            .or_default().push(p);
+        groups
+            .entry((
+                p.family_id.clone(),
+                p.lc_clone_id.clone(),
+                p.chain.clone(),
+                p.model_id.clone(),
+                p.model_name.clone(),
+                p.model_kind,
+            ))
+            .or_default()
+            .push(p);
     }
     let mut out = Vec::new();
     for ((family_id, lc_clone_id, chain, model_id, model_name, model_kind), rows) in groups {
-        if rows.len() < 4 { continue; }
+        if rows.len() < 4 {
+            continue;
+        }
         let x: Vec<f64> = rows.iter().map(|p| p.aa_changes as f64).collect();
         let y: Vec<f64> = rows.iter().map(|p| p.delta).collect();
         let stat = spearman(&x, &y);
         let delta_min = y.iter().copied().fold(f64::INFINITY, f64::min);
         let delta_max = y.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         out.push(TrajectoryStat {
-            family_id, lc_clone_id, chain, model_id, model_name, model_kind,
+            family_id,
+            lc_clone_id,
+            chain,
+            model_id,
+            model_name,
+            model_kind,
             n_states: rows.len(),
             n_cells: rows.iter().map(|p| p.clone_cells).max().unwrap_or(0),
-            rho: stat.r, nominal_p: stat.p,
-            delta_min, delta_max, delta_range: delta_max - delta_min,
+            rho: stat.r,
+            nominal_p: stat.p,
+            delta_min,
+            delta_max,
+            delta_range: delta_max - delta_min,
         });
     }
     out
@@ -2750,7 +3124,10 @@ fn score_clone_chain(
     let mut out = Vec::with_capacity(naive.len());
     for n in naive {
         let m = mature_by_id.get(n.model_id.as_str()).with_context(|| {
-            format!("vault model {} disappeared between matched naive/mature scoring", n.model_id)
+            format!(
+                "vault model {} disappeared between matched naive/mature scoring",
+                n.model_id
+            )
         })?;
         out.push(CloneModelPoint {
             family_id: family_id.to_owned(),
@@ -2877,68 +3254,158 @@ fn write_model_space(
     // states, never from cells.  The compact clone_hmm.tsv below remains the endpoint
     // audit table; these transient state scores exist only to answer "look, I found a
     // goody" questions about monotonic model-space movement.
-    let trajectory_results: Result<Vec<Vec<CloneModelPoint>>> = families.par_iter().map(|family| {
-        let hc_by_cell: HashMap<&str, &AlignedCell> = family.members.iter()
-            .map(|m| (m.cell.cell_id.as_str(), m)).collect();
-        let mut out = Vec::new();
-        let paired_cells: BTreeSet<&str> = family.light_clones.iter()
-            .flat_map(|lc| lc.members.iter().map(|m| m.cell.as_str())).collect();
+    let trajectory_results: Result<Vec<Vec<CloneModelPoint>>> = families
+        .par_iter()
+        .map(|family| {
+            let hc_by_cell: HashMap<&str, &AlignedCell> = family
+                .members
+                .iter()
+                .map(|m| (m.cell.cell_id.as_str(), m))
+                .collect();
+            let mut out = Vec::new();
+            let paired_cells: BTreeSet<&str> = family
+                .light_clones
+                .iter()
+                .flat_map(|lc| lc.members.iter().map(|m| m.cell.as_str()))
+                .collect();
 
-        // HC-only is an independent family background, not a graph/clone member.
-        let mut hc_only: BTreeMap<usize, &AlignedCell> = BTreeMap::new();
-        for hc in family.members.iter().filter(|m| !paired_cells.contains(m.cell.cell_id.as_str())) {
-            let depth = hc.hc_mutations.mutation_events();
-            let replace = hc_only.get(&depth).map_or(true, |old| {
-                (hc.hc_mutations.informative_pairs, hc.hc_mutations.matching_pairs, hc.cell.hc.observed.len()) >
-                (old.hc_mutations.informative_pairs, old.hc_mutations.matching_pairs, old.cell.hc.observed.len())
-            });
-            if replace { hc_only.insert(depth, hc); }
-        }
-        if hc_only.len() >= MIN_CLONE_STATES {
-            for hc in hc_only.values() {
-                let naive = references.effective_naive(&hc.cell.hc);
-                let (mut rows, _) = score_clone_chain(vault, &family.root.id, "HC_ONLY", hc_only.len(), hc_only.len(), &hc.cell.hc, &hc.hc_mutations, &naive)?;
-                out.append(&mut rows);
-            }
-        }
-
-        for lc in &family.light_clones {
-            let clone_states = light_clone_state_depth(family, lc);
-            if clone_states < MIN_CLONE_STATES { continue; }
-            let mut states: BTreeMap<(usize, usize), &LightMember> = BTreeMap::new();
-            for light in &lc.members {
-                let Some(hc) = hc_by_cell.get(light.cell.as_str()).copied() else { continue; };
-                let key = (hc.hc_mutations.mutation_events(), light.mutations.mutation_events());
-                let replace = states.get(&key).map_or(true, |old| {
-                    (light.mutations.informative_pairs, light.mutations.matching_pairs, light.receptor.observed.len()) >
-                    (old.mutations.informative_pairs, old.mutations.matching_pairs, old.receptor.observed.len())
+            // HC-only is an independent family background, not a graph/clone member.
+            let mut hc_only: BTreeMap<usize, &AlignedCell> = BTreeMap::new();
+            for hc in family
+                .members
+                .iter()
+                .filter(|m| !paired_cells.contains(m.cell.cell_id.as_str()))
+            {
+                let depth = hc.hc_mutations.mutation_events();
+                let replace = hc_only.get(&depth).map_or(true, |old| {
+                    (
+                        hc.hc_mutations.informative_pairs,
+                        hc.hc_mutations.matching_pairs,
+                        hc.cell.hc.observed.len(),
+                    ) > (
+                        old.hc_mutations.informative_pairs,
+                        old.hc_mutations.matching_pairs,
+                        old.cell.hc.observed.len(),
+                    )
                 });
-                if replace { states.insert(key, light); }
+                if replace {
+                    hc_only.insert(depth, hc);
+                }
             }
-            for light in states.values() {
-                let Some(hc) = hc_by_cell.get(light.cell.as_str()).copied() else { continue; };
-                let naive_hc = references.effective_naive(&hc.cell.hc);
-                let (mut hc_rows, _) = score_clone_chain(vault, &family.root.id, &lc.root.id, lc.members.len(), states.len(), &hc.cell.hc, &hc.hc_mutations, &naive_hc)?;
-                out.append(&mut hc_rows);
-                let naive_lc = references.effective_naive(&light.receptor);
-                let (mut lc_rows, _) = score_clone_chain(vault, &family.root.id, &lc.root.id, lc.members.len(), states.len(), &light.receptor, &light.mutations, &naive_lc)?;
-                out.append(&mut lc_rows);
+            if hc_only.len() >= MIN_CLONE_STATES {
+                for hc in hc_only.values() {
+                    let naive = references.effective_naive(&hc.cell.hc);
+                    let (mut rows, _) = score_clone_chain(
+                        vault,
+                        &family.root.id,
+                        "HC_ONLY",
+                        hc_only.len(),
+                        hc_only.len(),
+                        &hc.cell.hc,
+                        &hc.hc_mutations,
+                        &naive,
+                    )?;
+                    out.append(&mut rows);
+                }
             }
-        }
-        Ok(out)
-    }).collect();
-    let trajectory_points: Vec<CloneModelPoint> = trajectory_results?.into_iter().flatten().collect();
+
+            for lc in &family.light_clones {
+                let clone_states = light_clone_state_depth(family, lc);
+                if clone_states < MIN_CLONE_STATES {
+                    continue;
+                }
+                let mut states: BTreeMap<(usize, usize), &LightMember> = BTreeMap::new();
+                for light in &lc.members {
+                    let Some(hc) = hc_by_cell.get(light.cell.as_str()).copied() else {
+                        continue;
+                    };
+                    let key = (
+                        hc.hc_mutations.mutation_events(),
+                        light.mutations.mutation_events(),
+                    );
+                    let replace = states.get(&key).map_or(true, |old| {
+                        (
+                            light.mutations.informative_pairs,
+                            light.mutations.matching_pairs,
+                            light.receptor.observed.len(),
+                        ) > (
+                            old.mutations.informative_pairs,
+                            old.mutations.matching_pairs,
+                            old.receptor.observed.len(),
+                        )
+                    });
+                    if replace {
+                        states.insert(key, light);
+                    }
+                }
+                for light in states.values() {
+                    let Some(hc) = hc_by_cell.get(light.cell.as_str()).copied() else {
+                        continue;
+                    };
+                    let naive_hc = references.effective_naive(&hc.cell.hc);
+                    let (mut hc_rows, _) = score_clone_chain(
+                        vault,
+                        &family.root.id,
+                        &lc.root.id,
+                        lc.members.len(),
+                        states.len(),
+                        &hc.cell.hc,
+                        &hc.hc_mutations,
+                        &naive_hc,
+                    )?;
+                    out.append(&mut hc_rows);
+                    let naive_lc = references.effective_naive(&light.receptor);
+                    let (mut lc_rows, _) = score_clone_chain(
+                        vault,
+                        &family.root.id,
+                        &lc.root.id,
+                        lc.members.len(),
+                        states.len(),
+                        &light.receptor,
+                        &light.mutations,
+                        &naive_lc,
+                    )?;
+                    out.append(&mut lc_rows);
+                }
+            }
+            Ok(out)
+        })
+        .collect();
+    let trajectory_points: Vec<CloneModelPoint> =
+        trajectory_results?.into_iter().flatten().collect();
     let mut trajectories = summarize_trajectory_points(&trajectory_points);
-    trajectories.sort_by(|a,b| b.rho.unwrap_or(0.0).abs().total_cmp(&a.rho.unwrap_or(0.0).abs())
-        .then_with(|| b.delta_range.total_cmp(&a.delta_range)));
+    trajectories.sort_by(|a, b| {
+        b.rho
+            .unwrap_or(0.0)
+            .abs()
+            .total_cmp(&a.rho.unwrap_or(0.0).abs())
+            .then_with(|| b.delta_range.total_cmp(&a.delta_range))
+    });
 
     let trajectory_path = out.join("clone_trajectories.tsv");
     let mut tw = BufWriter::new(File::create(&trajectory_path)?);
-    writeln!(tw, "family_hc_recombination_id\tlc_clone_recombination_id\tchain\tmodel_id\tmodel_name\tmodel_kind\tn_states\tn_cells\tspearman_rho\tnominal_p\tdelta_min\tdelta_max\tdelta_range")?;
+    writeln!(
+        tw,
+        "family_hc_recombination_id\tlc_clone_recombination_id\tchain\tmodel_id\tmodel_name\tmodel_kind\tn_states\tn_cells\tspearman_rho\tnominal_p\tdelta_min\tdelta_max\tdelta_range"
+    )?;
     for t in &trajectories {
-        writeln!(tw, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.8}\t{:.8}\t{:.8}",
-            t.family_id, t.lc_clone_id, t.chain, t.model_id, t.model_name, t.model_kind,
-            t.n_states, t.n_cells, fmt_stat(t.rho), fmt_stat(t.nominal_p), t.delta_min, t.delta_max, t.delta_range)?;
+        writeln!(
+            tw,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.8}\t{:.8}\t{:.8}",
+            t.family_id,
+            t.lc_clone_id,
+            t.chain,
+            t.model_id,
+            t.model_name,
+            t.model_kind,
+            t.n_states,
+            t.n_cells,
+            fmt_stat(t.rho),
+            fmt_stat(t.nominal_p),
+            t.delta_min,
+            t.delta_max,
+            t.delta_range
+        )?;
     }
 
     // Pair the HC and LC responses from the *same* HC+LC clone trajectory.
@@ -2946,11 +3413,22 @@ fn write_model_space(
     // n_states is a property of that paired trajectory, not of either chain.
     let paired_path = out.join("paired_clone_trajectories.tsv");
     let mut pw = BufWriter::new(File::create(&paired_path)?);
-    let mut paired_groups: BTreeMap<(String,String,String,String,String), Vec<&TrajectoryStat>> = BTreeMap::new();
+    let mut paired_groups: BTreeMap<
+        (String, String, String, String, String),
+        Vec<&TrajectoryStat>,
+    > = BTreeMap::new();
     for t in &trajectories {
         if t.lc_clone_id != "HC_ONLY" {
-            paired_groups.entry((t.family_id.clone(), t.lc_clone_id.clone(), t.model_id.clone(), t.model_name.clone(), t.model_kind.to_string()))
-                .or_default().push(t);
+            paired_groups
+                .entry((
+                    t.family_id.clone(),
+                    t.lc_clone_id.clone(),
+                    t.model_id.clone(),
+                    t.model_name.clone(),
+                    t.model_kind.to_string(),
+                ))
+                .or_default()
+                .push(t);
         }
     }
     // First materialize the paired rows.  The permutation test below treats the
@@ -2962,41 +3440,83 @@ fn write_model_space(
     // winning InterPro label is an antibody domain.
     #[derive(Clone)]
     struct PairedRow {
-        family: String, lc_clone: String, lc_chain: String, model_id: String,
-        model_name: String, model_kind: String, n_states: usize, n_cells: usize,
-        hc_rho: f64, hc_p: Option<f64>, lc_rho: f64, lc_p: Option<f64>,
-        concordance: f64, hc_range: f64, lc_range: f64,
+        family: String,
+        lc_clone: String,
+        lc_chain: String,
+        model_id: String,
+        model_name: String,
+        model_kind: String,
+        n_states: usize,
+        n_cells: usize,
+        hc_rho: f64,
+        hc_p: Option<f64>,
+        lc_rho: f64,
+        lc_p: Option<f64>,
+        concordance: f64,
+        hc_range: f64,
+        lc_range: f64,
     }
     let mut paired_rows = Vec::<PairedRow>::new();
     for ((family, lc_clone, model_id, model_name, model_kind), rows) in paired_groups {
-        let Some(hc) = rows.iter().copied().find(|t| t.chain == "IGH") else { continue; };
-        let Some(lc) = rows.iter().copied().find(|t| t.chain == "IGK" || t.chain == "IGL") else { continue; };
+        let Some(hc) = rows.iter().copied().find(|t| t.chain == "IGH") else {
+            continue;
+        };
+        let Some(lc) = rows
+            .iter()
+            .copied()
+            .find(|t| t.chain == "IGK" || t.chain == "IGL")
+        else {
+            continue;
+        };
         // HC and LC were scored from the same distinct paired clone states. If
         // this invariant is ever broken, do not manufacture a paired statistic.
-        if hc.n_states != lc.n_states { continue; }
-        let (Some(hc_rho), Some(lc_rho)) = (hc.rho, lc.rho) else { continue; };
+        if hc.n_states != lc.n_states {
+            continue;
+        }
+        let (Some(hc_rho), Some(lc_rho)) = (hc.rho, lc.rho) else {
+            continue;
+        };
         let concordance = hc_rho * lc_rho;
         paired_rows.push(PairedRow {
-            family, lc_clone, lc_chain: lc.chain.clone(), model_id, model_name, model_kind,
-            n_states: hc.n_states, n_cells: hc.n_cells.max(lc.n_cells),
-            hc_rho, hc_p: hc.nominal_p, lc_rho, lc_p: lc.nominal_p, concordance,
-            hc_range: hc.delta_range, lc_range: lc.delta_range,
+            family,
+            lc_clone,
+            lc_chain: lc.chain.clone(),
+            model_id,
+            model_name,
+            model_kind,
+            n_states: hc.n_states,
+            n_cells: hc.n_cells.max(lc.n_cells),
+            hc_rho,
+            hc_p: hc.nominal_p,
+            lc_rho,
+            lc_p: lc.nominal_p,
+            concordance,
+            hc_range: hc.delta_range,
+            lc_range: lc.delta_range,
         });
     }
 
     const N_PERMUTATIONS: usize = 1000;
-    let mut null_max_by_clone: BTreeMap<(String,String), Vec<f64>> = BTreeMap::new();
-    let mut paired_by_clone: BTreeMap<(String,String), Vec<usize>> = BTreeMap::new();
+    let mut null_max_by_clone: BTreeMap<(String, String), Vec<f64>> = BTreeMap::new();
+    let mut paired_by_clone: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     for (i, r) in paired_rows.iter().enumerate() {
-        paired_by_clone.entry((r.family.clone(), r.lc_clone.clone())).or_default().push(i);
+        paired_by_clone
+            .entry((r.family.clone(), r.lc_clone.clone()))
+            .or_default()
+            .push(i);
     }
     // Tiny deterministic PRNG: no dependency and identical results across runs.
     let mut rng: u64 = 0x434c_4f4e_4f4d_4150;
     let mut next_u64 = || {
-        rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng
     };
     for (key, idx) in &paired_by_clone {
-        if idx.len() < 2 { continue; }
+        if idx.len() < 2 {
+            continue;
+        }
         let hc: Vec<f64> = idx.iter().map(|&i| paired_rows[i].hc_rho).collect();
         let lc: Vec<f64> = idx.iter().map(|&i| paired_rows[i].lc_rho).collect();
         let mut null = Vec::with_capacity(N_PERMUTATIONS);
@@ -3006,7 +3526,9 @@ fn write_model_space(
                 let j = (next_u64() as usize) % (i + 1);
                 perm.swap(i, j);
             }
-            let max_abs = hc.iter().enumerate()
+            let max_abs = hc
+                .iter()
+                .enumerate()
                 .map(|(i, &h)| (h * lc[perm[i]]).abs())
                 .fold(0.0_f64, f64::max);
             null.push(max_abs);
@@ -3014,8 +3536,11 @@ fn write_model_space(
         null_max_by_clone.insert(key.clone(), null);
     }
 
-    writeln!(pw, "family_hc_recombination_id\tlc_clone_recombination_id\tlc_chain\tmodel_id\tmodel_name\tmodel_kind\tn_states\tn_cells\thc_rho\thc_nominal_p\tlc_rho\tlc_nominal_p\tconcordance\tpermutation_maxT_p\thc_delta_range\tlc_delta_range")?;
-    let mut paired_goodies: Vec<(f64,String)> = Vec::new();
+    writeln!(
+        pw,
+        "family_hc_recombination_id\tlc_clone_recombination_id\tlc_chain\tmodel_id\tmodel_name\tmodel_kind\tn_states\tn_cells\thc_rho\thc_nominal_p\tlc_rho\tlc_nominal_p\tconcordance\tpermutation_maxT_p\thc_delta_range\tlc_delta_range"
+    )?;
+    let mut paired_goodies: Vec<(f64, String)> = Vec::new();
     let mut perm_sig = 0usize;
     for r in &paired_rows {
         let key = (r.family.clone(), r.lc_clone.clone());
@@ -3023,64 +3548,151 @@ fn write_model_space(
             let obs = r.concordance.abs();
             (1 + null.iter().filter(|&&x| x >= obs).count()) as f64 / (null.len() + 1) as f64
         });
-        if perm_p.is_some_and(|p| p <= 0.05) { perm_sig += 1; }
-        writeln!(pw, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{:.8}\t{:.8}",
-            r.family, r.lc_clone, r.lc_chain, r.model_id, r.model_name, r.model_kind,
-            r.n_states, r.n_cells, r.hc_rho, fmt_stat(r.hc_p), r.lc_rho, fmt_stat(r.lc_p),
-            r.concordance, fmt_stat(perm_p), r.hc_range, r.lc_range)?;
+        if perm_p.is_some_and(|p| p <= 0.05) {
+            perm_sig += 1;
+        }
+        writeln!(
+            pw,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{:.8}\t{:.8}",
+            r.family,
+            r.lc_clone,
+            r.lc_chain,
+            r.model_id,
+            r.model_name,
+            r.model_kind,
+            r.n_states,
+            r.n_cells,
+            r.hc_rho,
+            fmt_stat(r.hc_p),
+            r.lc_rho,
+            fmt_stat(r.lc_p),
+            r.concordance,
+            fmt_stat(perm_p),
+            r.hc_range,
+            r.lc_range
+        )?;
         let movement = r.hc_range.max(r.lc_range);
         paired_goodies.push((r.concordance.abs() * movement,
             format!("{} {} {} {}: n={} HC rho={:+.3} LC rho={:+.3} concordance={:+.3} perm-maxT p={} max delta range={:.3}",
                 r.family, r.lc_clone, r.lc_chain, r.model_name, r.n_states, r.hc_rho, r.lc_rho,
                 r.concordance, fmt_stat(perm_p), movement)));
     }
-    paired_goodies.sort_by(|a,b| b.0.total_cmp(&a.0));
+    paired_goodies.sort_by(|a, b| b.0.total_cmp(&a.0));
 
     // Family/model comparison: HC-only background versus LC-conditioned trajectories.
-    let mut by_family_model: BTreeMap<(String,String,String,String,String), Vec<&TrajectoryStat>> = BTreeMap::new();
+    let mut by_family_model: BTreeMap<
+        (String, String, String, String, String),
+        Vec<&TrajectoryStat>,
+    > = BTreeMap::new();
     for t in &trajectories {
-        by_family_model.entry((t.family_id.clone(), t.chain.clone(), t.model_id.clone(), t.model_name.clone(), t.model_kind.to_string())).or_default().push(t);
+        by_family_model
+            .entry((
+                t.family_id.clone(),
+                t.chain.clone(),
+                t.model_id.clone(),
+                t.model_name.clone(),
+                t.model_kind.to_string(),
+            ))
+            .or_default()
+            .push(t);
     }
     let summary_path = out.join("family_model_summary.tsv");
     let mut sw = BufWriter::new(File::create(&summary_path)?);
-    writeln!(sw, "family_hc_recombination_id\tchain\tmodel_id\tmodel_name\tmodel_kind\thc_only_rho\tbest_positive_lc_clone\tbest_positive_rho\tbest_negative_lc_clone\tbest_negative_rho\tlc_rho_spread\tmax_abs_lc_minus_hc_only")?;
-    let mut goodies: Vec<(f64,String)> = Vec::new();
+    writeln!(
+        sw,
+        "family_hc_recombination_id\tchain\tmodel_id\tmodel_name\tmodel_kind\thc_only_rho\tbest_positive_lc_clone\tbest_positive_rho\tbest_negative_lc_clone\tbest_negative_rho\tlc_rho_spread\tmax_abs_lc_minus_hc_only"
+    )?;
+    let mut goodies: Vec<(f64, String)> = Vec::new();
     for ((family, chain, model_id, model_name, model_kind), rows) in by_family_model {
-        let hc_rho = rows.iter().find(|t| t.lc_clone_id == "HC_ONLY").and_then(|t| t.rho);
-        let lc: Vec<_> = rows.iter().copied().filter(|t| t.lc_clone_id != "HC_ONLY" && t.rho.is_some()).collect();
-        if lc.is_empty() { continue; }
-        let pos = lc.iter().copied().max_by(|a,b| a.rho.unwrap().total_cmp(&b.rho.unwrap()));
-        let neg = lc.iter().copied().min_by(|a,b| a.rho.unwrap().total_cmp(&b.rho.unwrap()));
-        let spread = match (pos,neg) { (Some(a),Some(b)) => Some(a.rho.unwrap()-b.rho.unwrap()), _=>None };
-        let departure = hc_rho.map(|h| lc.iter().map(|t| (t.rho.unwrap()-h).abs()).fold(0.0,f64::max));
-        writeln!(sw, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            family, chain, model_id, model_name, model_kind, fmt_stat(hc_rho),
-            pos.map_or("NA", |t| t.lc_clone_id.as_str()), fmt_stat(pos.and_then(|t|t.rho)),
-            neg.map_or("NA", |t| t.lc_clone_id.as_str()), fmt_stat(neg.and_then(|t|t.rho)),
-            fmt_stat(spread), fmt_stat(departure))?;
+        let hc_rho = rows
+            .iter()
+            .find(|t| t.lc_clone_id == "HC_ONLY")
+            .and_then(|t| t.rho);
+        let lc: Vec<_> = rows
+            .iter()
+            .copied()
+            .filter(|t| t.lc_clone_id != "HC_ONLY" && t.rho.is_some())
+            .collect();
+        if lc.is_empty() {
+            continue;
+        }
+        let pos = lc
+            .iter()
+            .copied()
+            .max_by(|a, b| a.rho.unwrap().total_cmp(&b.rho.unwrap()));
+        let neg = lc
+            .iter()
+            .copied()
+            .min_by(|a, b| a.rho.unwrap().total_cmp(&b.rho.unwrap()));
+        let spread = match (pos, neg) {
+            (Some(a), Some(b)) => Some(a.rho.unwrap() - b.rho.unwrap()),
+            _ => None,
+        };
+        let departure = hc_rho.map(|h| {
+            lc.iter()
+                .map(|t| (t.rho.unwrap() - h).abs())
+                .fold(0.0, f64::max)
+        });
+        writeln!(
+            sw,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            family,
+            chain,
+            model_id,
+            model_name,
+            model_kind,
+            fmt_stat(hc_rho),
+            pos.map_or("NA", |t| t.lc_clone_id.as_str()),
+            fmt_stat(pos.and_then(|t| t.rho)),
+            neg.map_or("NA", |t| t.lc_clone_id.as_str()),
+            fmt_stat(neg.and_then(|t| t.rho)),
+            fmt_stat(spread),
+            fmt_stat(departure)
+        )?;
         if let Some(s) = spread {
             let range = lc.iter().map(|t| t.delta_range).fold(0.0, f64::max);
-            goodies.push((s.abs()*range, format!("{} {} {}: LC rho spread={:.3}, max delta range={:.3}", family, chain, model_name, s, range)));
+            goodies.push((
+                s.abs() * range,
+                format!(
+                    "{} {} {}: LC rho spread={:.3}, max delta range={:.3}",
+                    family, chain, model_name, s, range
+                ),
+            ));
         }
     }
-    goodies.sort_by(|a,b| b.0.total_cmp(&a.0));
+    goodies.sort_by(|a, b| b.0.total_cmp(&a.0));
     println!("\nInteresting model-space trajectories (>= {MIN_CLONE_STATES} states)");
-    for (_, line) in goodies.iter().take(10) { println!("  {line}"); }
+    for (_, line) in goodies.iter().take(10) {
+        println!("  {line}");
+    }
     println!("  trajectory statistics: {}", trajectory_path.display());
     println!("  family/model ranking:  {}", summary_path.display());
     println!("  paired HC/LC trajectories: {}", paired_path.display());
     println!("\nStrongest paired HC/LC model trajectories");
-    for (_, line) in paired_goodies.iter().take(10) { println!("  {line}"); }
-    println!("  permutation sanity test: {} model rows with maxT empirical p <= 0.05 ({} permutations/clone)", perm_sig, N_PERMUTATIONS);
+    for (_, line) in paired_goodies.iter().take(10) {
+        println!("  {line}");
+    }
+    println!(
+        "  permutation sanity test: {} model rows with maxT empirical p <= 0.05 ({} permutations/clone)",
+        perm_sig, N_PERMUTATIONS
+    );
 
     // Exact protein strings handed to the vault.  This is intentionally one
     // naive/mature pair per qualifying clone chain, not one entry per model.
     let faa_path = out.join("clone_sequences.faa");
     let mut faa = BufWriter::new(File::create(&faa_path)?);
     for a in &audits {
-        writeln!(faa, ">{}|{}|{}|naive|aa_changes={}", a.family_id, a.lc_clone_id, a.representative_recombination_id, a.aa_changes)?;
+        writeln!(
+            faa,
+            ">{}|{}|{}|naive|aa_changes={}",
+            a.family_id, a.lc_clone_id, a.representative_recombination_id, a.aa_changes
+        )?;
         writeln!(faa, "{}", a.naive_aa)?;
-        writeln!(faa, ">{}|{}|{}|mature_germline_filled|aa_changes={}", a.family_id, a.lc_clone_id, a.representative_recombination_id, a.aa_changes)?;
+        writeln!(
+            faa,
+            ">{}|{}|{}|mature_germline_filled|aa_changes={}",
+            a.family_id, a.lc_clone_id, a.representative_recombination_id, a.aa_changes
+        )?;
         writeln!(faa, "{}", a.mature_aa)?;
     }
 

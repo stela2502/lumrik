@@ -411,7 +411,11 @@ fn integration_tiny_star() {
         let exprs_cell = exprs_data
             .get(&cell_id)
             .expect("cell missing from canonical expression Scdata");
-        assert_eq!(exprs_cell.total_umis(), 2, "exprs must contain exonic + intronic molecules");
+        assert_eq!(
+            exprs_cell.total_umis(),
+            2,
+            "exprs must contain exonic + intronic molecules"
+        );
         assert_eq!(exonic_cell.total_umis(), 1);
         assert_eq!(intronic_cell.total_umis(), 1);
     }

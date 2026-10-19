@@ -7,8 +7,8 @@
 //! longer treating a pile of seed votes as an alignment.
 
 use int_to_dna::IntToDna;
-use run_stats::RunStats;
 use onehot_dna::OneHotSequence;
+use run_stats::RunStats;
 use std::{
     fs::File,
     io::{BufRead, BufReader},

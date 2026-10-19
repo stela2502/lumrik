@@ -5,7 +5,9 @@
 
 mod genes_transcripts;
 
-pub use genes_transcripts::{GeneTranscriptPlotOptions, plot_gene_transcripts, plot_gene_transcripts_with_options};
+pub use genes_transcripts::{
+    GeneTranscriptPlotOptions, plot_gene_transcripts, plot_gene_transcripts_with_options,
+};
 
 use std::path::{Path, PathBuf};
 

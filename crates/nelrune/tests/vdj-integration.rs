@@ -6,8 +6,7 @@ use std::process::Command;
 const CELL: &str = "CTTGGTCTTTTGGTTAATTCTTACCAT";
 
 fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../sc-vdj/tests/data/vdj-integration-cell")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sc-vdj/tests/data/vdj-integration-cell")
 }
 
 fn test_output_dir() -> PathBuf {
@@ -104,10 +103,13 @@ fn one_cell_fixture_writes_expected_airr_calls() {
     // First pin the rich Lumrik calls to the established one-cell result. This
     // catches regressions in the biological caller independently of AIRR
     // serialization.
-    let rich = fs::read_to_string(out.join("vdj_calls.tsv"))
-        .expect("read vdj_calls.tsv");
+    let rich = fs::read_to_string(out.join("vdj_calls.tsv")).expect("read vdj_calls.tsv");
     let (_header, rich_rows) = tsv_rows(&rich);
-    assert_eq!(rich_rows.len(), 3, "expected exactly IGH, IGK and IGL calls");
+    assert_eq!(
+        rich_rows.len(),
+        3,
+        "expected exactly IGH, IGK and IGL calls"
+    );
 
     let expected = HashMap::from([
         ("IGH", ("Vdj", "Ighv1-64", "Ighd1-1", "Ighj3", "Igha", "18")),
@@ -126,7 +128,11 @@ fn one_cell_fixture_writes_expected_airr_calls() {
         let Some((stage, v, d, j, c, umis)) = expected.get(chain) else {
             panic!("unexpected chain in one-cell fixture: {chain}");
         };
-        assert_eq!(field(row, "stage", chain), *stage, "wrong stage for {chain}");
+        assert_eq!(
+            field(row, "stage", chain),
+            *stage,
+            "wrong stage for {chain}"
+        );
         assert_eq!(field(row, "v", chain), *v, "wrong V call for {chain}");
         assert_eq!(field(row, "d", chain), *d, "wrong D call for {chain}");
         assert_eq!(field(row, "j", chain), *j, "wrong J call for {chain}");
@@ -174,8 +180,7 @@ fn one_cell_fixture_writes_expected_airr_calls() {
     for row in &airr_rows {
         assert_eq!(row["cell_id"], CELL);
         assert_eq!(
-            row["lumrik_rustody_cell_id"],
-            "38637011",
+            row["lumrik_rustody_cell_id"], "38637011",
             "wrong AIRR BD/Rustody positional cell id for fixture barcode {CELL}"
         );
         let chain = row["locus"];
@@ -191,7 +196,10 @@ fn one_cell_fixture_writes_expected_airr_calls() {
             "wrong AIRR UMI support for {chain}"
         );
 
-        assert!(!row["sequence_id"].is_empty(), "missing sequence_id for {chain}");
+        assert!(
+            !row["sequence_id"].is_empty(),
+            "missing sequence_id for {chain}"
+        );
         assert!(!row["sequence"].is_empty(), "missing sequence for {chain}");
 
         // AIRR sequence/junction amino-acid annotations are only meaningful
@@ -215,11 +223,23 @@ fn one_cell_fixture_writes_expected_airr_calls() {
         let has_v_anchor = row["lumrik_v_cys_anchor"] == "T";
         let has_j_anchor = row["lumrik_j_anchor"] == "T";
         if has_v_anchor && has_j_anchor {
-            assert!(!row["sequence_aa"].is_empty(), "missing sequence_aa for anchored {chain}");
-            assert!(!row["junction"].is_empty(), "missing junction for anchored {chain}");
-            assert!(!row["junction_aa"].is_empty(), "missing junction_aa for anchored {chain}");
+            assert!(
+                !row["sequence_aa"].is_empty(),
+                "missing sequence_aa for anchored {chain}"
+            );
+            assert!(
+                !row["junction"].is_empty(),
+                "missing junction for anchored {chain}"
+            );
+            assert!(
+                !row["junction_aa"].is_empty(),
+                "missing junction_aa for anchored {chain}"
+            );
             assert!(!row["cdr3"].is_empty(), "missing cdr3 for anchored {chain}");
-            assert!(!row["cdr3_aa"].is_empty(), "missing cdr3_aa for anchored {chain}");
+            assert!(
+                !row["cdr3_aa"].is_empty(),
+                "missing cdr3_aa for anchored {chain}"
+            );
 
             let junction_aa = row["junction_aa"].as_bytes();
             let cdr3_aa = row["cdr3_aa"].as_bytes();
@@ -228,7 +248,11 @@ fn one_cell_fixture_writes_expected_airr_calls() {
                 cdr3_aa.len() + 2,
                 "junction_aa must contain exactly the two conserved anchor residues around cdr3_aa for {chain}"
             );
-            assert_eq!(junction_aa.first(), Some(&b'C'), "V anchor is not cysteine for {chain}");
+            assert_eq!(
+                junction_aa.first(),
+                Some(&b'C'),
+                "V anchor is not cysteine for {chain}"
+            );
             assert!(
                 matches!(junction_aa.last(), Some(&b'W') | Some(&b'F')),
                 "J anchor is not W/F for {chain}: {}",
@@ -240,10 +264,22 @@ fn one_cell_fixture_writes_expected_airr_calls() {
                 "CDR3 amino acid sequence is inconsistent with junction_aa for {chain}"
             );
         } else {
-            assert!(row["junction"].is_empty(), "unanchored {chain} must not fabricate junction");
-            assert!(row["junction_aa"].is_empty(), "unanchored {chain} must not fabricate junction_aa");
-            assert!(row["cdr3"].is_empty(), "unanchored {chain} must not fabricate cdr3");
-            assert!(row["cdr3_aa"].is_empty(), "unanchored {chain} must not fabricate cdr3_aa");
+            assert!(
+                row["junction"].is_empty(),
+                "unanchored {chain} must not fabricate junction"
+            );
+            assert!(
+                row["junction_aa"].is_empty(),
+                "unanchored {chain} must not fabricate junction_aa"
+            );
+            assert!(
+                row["cdr3"].is_empty(),
+                "unanchored {chain} must not fabricate cdr3"
+            );
+            assert!(
+                row["cdr3_aa"].is_empty(),
+                "unanchored {chain} must not fabricate cdr3_aa"
+            );
         }
     }
 

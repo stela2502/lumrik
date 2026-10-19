@@ -73,7 +73,6 @@ impl ChrBuckets {
     }
 }
 
-
 #[inline]
 pub(crate) fn partition_point<T, F>(slice: &[T], mut pred: F) -> usize
 where
@@ -83,7 +82,11 @@ where
     let mut right = slice.len();
     while left < right {
         let mid = left + (right - left) / 2;
-        if pred(&slice[mid]) { left = mid + 1; } else { right = mid; }
+        if pred(&slice[mid]) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
     }
     left
 }

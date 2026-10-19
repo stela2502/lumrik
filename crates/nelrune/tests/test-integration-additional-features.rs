@@ -88,9 +88,7 @@ fn assert_feature_output(out: &Path, feature_type: &str, feature_name: &str) {
     for view in ["raw", "filtered"] {
         let dir = out.join(view).join(feature_type);
 
-        eprintln!(
-            "\n========== FEATURE OUTPUT: {view}/{feature_type} =========="
-        );
+        eprintln!("\n========== FEATURE OUTPUT: {view}/{feature_type} ==========");
         eprintln!("directory: {}", dir.display());
 
         assert!(

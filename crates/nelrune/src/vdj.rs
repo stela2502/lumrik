@@ -1,12 +1,12 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use lumrik_status::{
-    memory_status, public_hostname, snapshot_html, spawn_status_server, ServerContent,
-    ServerSnapshot, StatusMetric, StatusSection,
+    ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status, public_hostname,
+    snapshot_html, spawn_status_server,
 };
 use run_stats::RunStats;
 use sc_primer::BdCellVersion;
-use sc_vdj::output::{write_run_stats_report, ReportWriter};
+use sc_vdj::output::{ReportWriter, write_run_stats_report};
 use sc_vdj::{
     BamIngestProgress, CellEvidenceVdj, Chain, NelruneIdentityResolver, SegmentKind, VdjIndex,
     VdjIndexBuilder, VdjRunner, VdjRunnerConfig,
@@ -218,14 +218,21 @@ impl VdjRunStatus {
 
     fn initial_bam_records_per_second(&self) -> f64 {
         let seconds = self.initial_bam_read_time.as_secs_f64();
-        if seconds > 0.0 { self.bam_records as f64 / seconds } else { 0.0 }
+        if seconds > 0.0 {
+            self.bam_records as f64 / seconds
+        } else {
+            0.0
+        }
     }
 
     fn rescan_bam_records_per_second(&self) -> f64 {
         let seconds = self.rescan_bam_read_time.as_secs_f64();
-        if seconds > 0.0 { self.rescan_records as f64 / seconds } else { 0.0 }
+        if seconds > 0.0 {
+            self.rescan_records as f64 / seconds
+        } else {
+            0.0
+        }
     }
-
 }
 
 impl ServerContent for VdjRunStatus {
@@ -581,7 +588,6 @@ fn format_count_pct(count: usize, denominator: usize) -> String {
     format!("{count} ({pct:.1}%)")
 }
 
-
 fn preliminary_cell_ids(exonic: Option<&Path>) -> Result<Option<HashSet<u64>>> {
     let Some(path) = exonic else {
         return Ok(None);
@@ -906,9 +912,7 @@ fn write_static_report(path: &Path, state: &VdjRunStatus) -> Result<()> {
 }
 
 pub fn run() -> Result<()> {
-    let c = Cli::parse_from(
-        std::iter::once("vdj".to_string()).chain(std::env::args().skip(2)),
-    );
+    let c = Cli::parse_from(std::iter::once("vdj".to_string()).chain(std::env::args().skip(2)));
     let status = Arc::new(RwLock::new(VdjRunStatus::new(c.threads.max(1))));
     update_status(&status, |state| {
         state.bam_path = c.bam.display().to_string();
@@ -1039,10 +1043,7 @@ pub fn run() -> Result<()> {
     run_stats.start_timer("vdj.recombination_calling");
     let mut calls = runner.identify();
     for (chain, evidence_cells) in receptor_evidence {
-        let prefix = format!(
-            "vdj.evidence.{}",
-            chain.to_string().to_ascii_lowercase()
-        );
+        let prefix = format!("vdj.evidence.{}", chain.to_string().to_ascii_lowercase());
         run_stats.report_n(format!("{prefix}.cells"), evidence_cells);
         eprintln!(
             "[nelrune vdj] {} receptor evidence: {} cell(s); all retained",

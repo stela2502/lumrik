@@ -11,7 +11,6 @@ pub const NAME: &str = "TraConMech";
 /// Short description of the project's core job.
 pub const TAGLINE: &str = "Trace Context to Mechanism";
 
-
 pub mod exprs;
 
 pub mod contracts;

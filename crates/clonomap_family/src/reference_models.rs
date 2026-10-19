@@ -2,8 +2,8 @@
 //! Persistent identity and evidence belong to `reference_curator`; this module
 //! only decides which reconstructed V-side fragments are credible candidates.
 
-use crate::{Receptor, align_fragment};
 use crate::family::fragment_path;
+use crate::{Receptor, align_fragment};
 use reference_curator::{Observation, ReferenceCurator};
 use sc_primer::{Chemistry, Grammar, PrimerDetector};
 use std::path::Path;

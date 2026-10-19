@@ -378,11 +378,7 @@ impl RunProgress {
     }
 
     /// Publish a live quantification snapshot after a BAM chunk has been processed.
-    pub fn update_quantification_live(
-        &self,
-        data: &scdata::QuantData,
-        report: &RunStats,
-    ) {
+    pub fn update_quantification_live(&self, data: &scdata::QuantData, report: &RunStats) {
         let memory = memory_status();
         if let Ok(mut state) = self.state.write() {
             state.bam_records_seen = report.get_issue_count("bam_records_seen");
@@ -397,8 +393,10 @@ impl RunProgress {
             state.unmapped_bam_records = report.get_issue_count("unmapped");
             state.observed_exonic_cells = data.cell_ids(scdata::QuantData::EXONIC).len();
             state.observed_intronic_cells = data.cell_ids(scdata::QuantData::INTRONIC).len();
-            state.observed_exonic_genes = data.observed_feature_ids(scdata::QuantData::EXONIC).len();
-            state.observed_intronic_genes = data.observed_feature_ids(scdata::QuantData::INTRONIC).len();
+            state.observed_exonic_genes =
+                data.observed_feature_ids(scdata::QuantData::EXONIC).len();
+            state.observed_intronic_genes =
+                data.observed_feature_ids(scdata::QuantData::INTRONIC).len();
             state.exonic_umis = data.total_umis(scdata::QuantData::EXONIC);
             state.intronic_umis = data.total_umis(scdata::QuantData::INTRONIC);
             // Surface post-quantification PCR duplicates from the runner-owned report

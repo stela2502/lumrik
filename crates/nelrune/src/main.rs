@@ -1,5 +1,5 @@
-mod prepare_fastqs;
 mod materialize_norn_test_data;
+mod prepare_fastqs;
 mod quant;
 mod vdj;
 use std::collections::HashMap;
@@ -19,8 +19,8 @@ use bam_tide::ont_normalizer::normalizer::OntNormalizerConfig;
 use bam_tide::quantification::bam_collector::BamCollector;
 
 use gtf_splice_index::SpliceIndex;
-use scdata::QuantData;
 use sc_mapper::{MappingCall, StreamingMapper};
+use scdata::QuantData;
 
 use lumrik_status::{public_hostname, spawn_status_server};
 use nelrune::cli::Cli;
@@ -217,7 +217,11 @@ fn run(args: Cli) -> Result<()> {
         .finalize_and_write_all(cell_barcode_len, &args.outpath.join("raw"))
         .context("writing raw additional feature tables")?;
     feature_counts
-        .finalize_and_write(&retained_cells, cell_barcode_len, &args.outpath.join("filtered"))
+        .finalize_and_write(
+            &retained_cells,
+            cell_barcode_len,
+            &args.outpath.join("filtered"),
+        )
         .context("writing filtered additional feature tables")?;
     progress.stop_timer("nelrune/writing");
 
@@ -272,11 +276,8 @@ fn run(args: Cli) -> Result<()> {
     progress.report_timings();
     progress.report_block("Quantification report", &report);
 
-    fs::write(
-        args.outpath.join("nelrune-report.txt"),
-        report.to_string(),
-    )
-    .context("writing nelrune-report.txt")?;
+    fs::write(args.outpath.join("nelrune-report.txt"), report.to_string())
+        .context("writing nelrune-report.txt")?;
 
     progress.stage(format!("mapper BAM retained at {}", mapper_bam.display()));
 
@@ -510,4 +511,3 @@ impl MapperBamSink {
         Ok(())
     }
 }
-

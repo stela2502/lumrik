@@ -206,12 +206,9 @@ impl FastLocusMapper {
                 let Some(query) = packed_query.as_ref() else {
                     return None;
                 };
-                let Some((informative, compatible)) = query.compatibility_counts(
-                    query_start,
-                    &feature.packed,
-                    0,
-                    reference_len,
-                ) else {
+                let Some((informative, compatible)) =
+                    query.compatibility_counts(query_start, &feature.packed, 0, reference_len)
+                else {
                     continue;
                 };
                 if informative != reference_len || compatible != reference_len {

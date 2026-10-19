@@ -60,7 +60,9 @@ impl Query {
             "protein" | "proteins" => Entity::Protein,
             "feature" | "features" => Entity::Feature,
             "variant" | "variants" => Entity::Variant,
-            other => bail!("unsupported SELECT entity '{other}' (currently: gene, transcript, protein, feature, variant)"),
+            other => bail!(
+                "unsupported SELECT entity '{other}' (currently: gene, transcript, protein, feature, variant)"
+            ),
         };
 
         let where_text = &input[where_at + 7..];
@@ -80,7 +82,9 @@ fn parse_predicate(clause: &str) -> Result<Predicate> {
     let upper = clause.to_ascii_uppercase();
     for (suffix, negated) in [(" IS NOT NULL", true), (" IS NULL", false)] {
         if upper.ends_with(suffix) {
-            let field = clause[..clause.len() - suffix.len()].trim().to_ascii_lowercase();
+            let field = clause[..clause.len() - suffix.len()]
+                .trim()
+                .to_ascii_lowercase();
             if field.is_empty() {
                 bail!("empty field in WHERE clause");
             }
@@ -113,7 +117,10 @@ fn parse_predicate(clause: &str) -> Result<Predicate> {
     if field.is_empty() {
         bail!("empty field in WHERE clause");
     }
-    Ok(Predicate::Eq { field, value: parse_value(raw_value.trim())? })
+    Ok(Predicate::Eq {
+        field,
+        value: parse_value(raw_value.trim())?,
+    })
 }
 
 fn find_keyword_outside_quotes(input: &str, keyword: &str) -> Option<usize> {
@@ -185,14 +192,22 @@ fn parse_value(raw: &str) -> Result<Value> {
         return Ok(Value::Text(raw[1..raw.len() - 1].to_owned()));
     }
     if let Some((start, end)) = raw.split_once(':') {
-        let start: u64 = start.trim().parse().with_context(|| format!("invalid range start '{start}'"))?;
-        let end: u64 = end.trim().parse().with_context(|| format!("invalid range end '{end}'"))?;
+        let start: u64 = start
+            .trim()
+            .parse()
+            .with_context(|| format!("invalid range start '{start}'"))?;
+        let end: u64 = end
+            .trim()
+            .parse()
+            .with_context(|| format!("invalid range end '{end}'"))?;
         if start == 0 || end == 0 || end < start {
             bail!("invalid inclusive biological range {start}:{end}");
         }
         return Ok(Value::InclusiveRange(start, end));
     }
-    let value: u64 = raw.parse().with_context(|| format!("unsupported value '{raw}'"))?;
+    let value: u64 = raw
+        .parse()
+        .with_context(|| format!("unsupported value '{raw}'"))?;
     Ok(Value::Integer(value))
 }
 
@@ -257,7 +272,17 @@ pub struct TranscriptRow {
 
 impl fmt::Display for TranscriptRow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}", self.transcript_id, self.gene_id, self.names.join(","), self.chromosome, self.strand, self.transcript_bases, self.cds_bases)
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.transcript_id,
+            self.gene_id,
+            self.names.join(","),
+            self.chromosome,
+            self.strand,
+            self.transcript_bases,
+            self.cds_bases
+        )
     }
 }
 
@@ -275,7 +300,22 @@ pub struct ProteinRow {
 
 impl fmt::Display for ProteinRow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", self.protein_id, self.accession, self.entry_name, self.name, self.gene_symbol, self.ensembl_protein.as_deref().unwrap_or("."), self.transcript_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","), self.feature_count)
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.protein_id,
+            self.accession,
+            self.entry_name,
+            self.name,
+            self.gene_symbol,
+            self.ensembl_protein.as_deref().unwrap_or("."),
+            self.transcript_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            self.feature_count
+        )
     }
 }
 
@@ -297,14 +337,28 @@ pub struct FeatureRow {
 
 impl fmt::Display for FeatureRow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let blocks = self.blocks.iter()
+        let blocks = self
+            .blocks
+            .iter()
             .map(|(start, end)| format!("{}-{}", start + 1, end))
             .collect::<Vec<_>>()
             .join(",");
-        write!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}..{}",
-            self.feature_id, self.label, self.kind, self.description, self.signature,
-            self.chromosome, self.strand, blocks, self.source_protein,
-            self.source_transcript, self.aa_start + 1, self.aa_end)
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}..{}",
+            self.feature_id,
+            self.label,
+            self.kind,
+            self.description,
+            self.signature,
+            self.chromosome,
+            self.strand,
+            blocks,
+            self.source_protein,
+            self.source_transcript,
+            self.aa_start + 1,
+            self.aa_end
+        )
     }
 }
 
@@ -364,7 +418,10 @@ fn execute_gene_query(omm: &Ommverse, query: &Query) -> Result<Vec<GeneRow>> {
         }
         gene_ids.sort_unstable();
         gene_ids.dedup();
-        return gene_ids.into_iter().map(|gene_id| gene_row(omm, gene_id)).collect();
+        return gene_ids
+            .into_iter()
+            .map(|gene_id| gene_row(omm, gene_id))
+            .collect();
     }
 
     let chromosome = text_predicate(query, "chromosome")
@@ -373,12 +430,19 @@ fn execute_gene_query(omm: &Ommverse, query: &Query) -> Result<Vec<GeneRow>> {
         .context("gene query requires name = \"...\" or chromosome = \"...\" with position = N|START:END")?;
     let (start1, end1) = position_predicate_for(query, "gene")?;
 
-    let chr_id = omm.splice.chr_id(chromosome)
+    let chr_id = omm
+        .splice
+        .chr_id(chromosome)
         .with_context(|| format!("chromosome '{chromosome}' not present in splice index"))?;
-    let start0: u32 = (start1 - 1).try_into().context("gene query start exceeds supported genomic coordinate range")?;
-    let end0: u32 = end1.try_into().context("gene query end exceeds supported genomic coordinate range")?;
+    let start0: u32 = (start1 - 1)
+        .try_into()
+        .context("gene query start exceeds supported genomic coordinate range")?;
+    let end0: u32 = end1
+        .try_into()
+        .context("gene query end exceeds supported genomic coordinate range")?;
 
-    let mut gene_ids = omm.splice
+    let mut gene_ids = omm
+        .splice
         .overlapping_genes_with_bins(chr_id, start0, end0)
         .into_iter()
         .map(|(_, gene_id)| gene_id)
@@ -423,7 +487,11 @@ fn execute_gene_query(omm: &Ommverse, query: &Query) -> Result<Vec<GeneRow>> {
 }
 
 fn gene_row(omm: &Ommverse, gene_id: usize) -> Result<GeneRow> {
-    let gene = omm.splice.genes.get(gene_id).context("gene id outside splice index")?;
+    let gene = omm
+        .splice
+        .genes
+        .get(gene_id)
+        .context("gene id outside splice index")?;
     let mut span_start = u32::MAX;
     let mut span_end = 0u32;
     let mut chr_id = None;
@@ -436,8 +504,25 @@ fn gene_row(omm: &Ommverse, gene_id: usize) -> Result<GeneRow> {
         strand.get_or_insert(tx.strand);
     }
     let chr_id = chr_id.context("gene has no transcripts")?;
-    let chromosome = omm.splice.chr_names.get(chr_id).cloned().unwrap_or_else(|| chr_id.to_string());
-    Ok(GeneRow { chromosome, start: span_start as u64 + 1, end: span_end as u64, gene_id, names: gene.names.clone(), strand: match strand { Some(gtf_splice_index::Strand::Plus) => "+", Some(gtf_splice_index::Strand::Minus) => "-", _ => "." }.to_owned() })
+    let chromosome = omm
+        .splice
+        .chr_names
+        .get(chr_id)
+        .cloned()
+        .unwrap_or_else(|| chr_id.to_string());
+    Ok(GeneRow {
+        chromosome,
+        start: span_start as u64 + 1,
+        end: span_end as u64,
+        gene_id,
+        names: gene.names.clone(),
+        strand: match strand {
+            Some(gtf_splice_index::Strand::Plus) => "+",
+            Some(gtf_splice_index::Strand::Minus) => "-",
+            _ => ".",
+        }
+        .to_owned(),
+    })
 }
 
 fn execute_transcript_query(omm: &Ommverse, query: &Query) -> Result<Vec<TranscriptRow>> {
@@ -458,12 +543,33 @@ fn execute_transcript_query(omm: &Ommverse, query: &Query) -> Result<Vec<Transcr
     if transcript_ids.is_empty() {
         bail!("none of the supplied identities resolve to a transcript");
     }
-    Ok(transcript_ids.into_iter().map(|tx_id| {
-        let tx = &omm.splice.transcripts[tx_id];
-        let chromosome = omm.splice.chr_names.get(tx.chr_id).cloned().unwrap_or_else(|| tx.chr_id.to_string());
-        let cds_bases = tx.cds_transcript_span().map(|(s,e)| e-s).unwrap_or(0);
-        TranscriptRow { transcript_id: tx.id, gene_id: tx.gene_id, names: tx.names.clone(), chromosome, strand: match tx.strand { gtf_splice_index::Strand::Plus => "+", gtf_splice_index::Strand::Minus => "-", _ => "." }.to_owned(), transcript_bases: tx.transcript_len(), cds_bases }
-    }).collect())
+    Ok(transcript_ids
+        .into_iter()
+        .map(|tx_id| {
+            let tx = &omm.splice.transcripts[tx_id];
+            let chromosome = omm
+                .splice
+                .chr_names
+                .get(tx.chr_id)
+                .cloned()
+                .unwrap_or_else(|| tx.chr_id.to_string());
+            let cds_bases = tx.cds_transcript_span().map(|(s, e)| e - s).unwrap_or(0);
+            TranscriptRow {
+                transcript_id: tx.id,
+                gene_id: tx.gene_id,
+                names: tx.names.clone(),
+                chromosome,
+                strand: match tx.strand {
+                    gtf_splice_index::Strand::Plus => "+",
+                    gtf_splice_index::Strand::Minus => "-",
+                    _ => ".",
+                }
+                .to_owned(),
+                transcript_bases: tx.transcript_len(),
+                cds_bases,
+            }
+        })
+        .collect())
 }
 
 fn execute_protein_query(omm: &Ommverse, query: &Query) -> Result<Vec<ProteinRow>> {
@@ -484,11 +590,27 @@ fn execute_protein_query(omm: &Ommverse, query: &Query) -> Result<Vec<ProteinRow
     }
     protein_ids.sort_unstable();
     protein_ids.dedup();
-    if protein_ids.is_empty() { bail!("none of the supplied identities resolve to a protein, gene, or transcript with proteins"); }
-    Ok(protein_ids.into_iter().map(|protein_id| {
-        let p = &omm.proteins[protein_id];
-        ProteinRow { protein_id, accession: p.accession.clone(), entry_name: p.entry_name.clone(), name: p.name.clone(), gene_symbol: p.gene_symbol.clone(), ensembl_protein: p.ensembl_protein.clone(), transcript_ids: p.transcript_ids.clone(), feature_count: p.features.len() }
-    }).collect())
+    if protein_ids.is_empty() {
+        bail!(
+            "none of the supplied identities resolve to a protein, gene, or transcript with proteins"
+        );
+    }
+    Ok(protein_ids
+        .into_iter()
+        .map(|protein_id| {
+            let p = &omm.proteins[protein_id];
+            ProteinRow {
+                protein_id,
+                accession: p.accession.clone(),
+                entry_name: p.entry_name.clone(),
+                name: p.name.clone(),
+                gene_symbol: p.gene_symbol.clone(),
+                ensembl_protein: p.ensembl_protein.clone(),
+                transcript_ids: p.transcript_ids.clone(),
+                feature_count: p.features.len(),
+            }
+        })
+        .collect())
 }
 
 fn execute_feature_query(omm: &Ommverse, query: &Query) -> Result<Vec<FeatureRow>> {
@@ -510,9 +632,10 @@ fn execute_feature_query(omm: &Ommverse, query: &Query) -> Result<Vec<FeatureRow
         ids.extend_from_slice(omm.protein_features.ids_for_label(label));
     }
 
-    let strict_protein_lookup = query.predicates.iter().any(|predicate| {
-        matches!(predicate, Predicate::Eq { field, .. } if field == "protein")
-    });
+    let strict_protein_lookup = query
+        .predicates
+        .iter()
+        .any(|predicate| matches!(predicate, Predicate::Eq { field, .. } if field == "protein"));
     for identity in proteins {
         let Some(protein_id) = omm.protein_id(identity) else {
             if strict_protein_lookup {
@@ -521,37 +644,53 @@ fn execute_feature_query(omm: &Ommverse, query: &Query) -> Result<Vec<FeatureRow
             continue;
         };
         let transcript_ids = &omm.proteins[protein_id].transcript_ids;
-        ids.extend(omm.protein_features.features.iter()
-            .filter(|feature| transcript_ids.contains(&feature.source_transcript))
-            .map(|feature| feature.id));
+        ids.extend(
+            omm.protein_features
+                .features
+                .iter()
+                .filter(|feature| transcript_ids.contains(&feature.source_transcript))
+                .map(|feature| feature.id),
+        );
     }
 
     ids.sort_unstable();
     ids.dedup();
-    Ok(ids.into_iter().filter_map(|id| {
-        let feature = omm.protein_features.features.get(id)?;
-        let chromosome = omm.splice.chr_names.get(feature.chr_id)
-            .cloned().unwrap_or_else(|| feature.chr_id.to_string());
-        let strand = match feature.strand {
-            gtf_splice_index::Strand::Plus => "+",
-            gtf_splice_index::Strand::Minus => "-",
-            _ => ".",
-        }.to_owned();
-        Some(FeatureRow {
-            feature_id: feature.id,
-            label: feature.label.clone(),
-            kind: format!("{:?}", feature.kind),
-            description: feature.description.clone(),
-            signature: feature.signature.clone(),
-            chromosome,
-            strand,
-            blocks: feature.blocks.iter().map(|block| (block.start, block.end)).collect(),
-            source_protein: feature.source_protein.clone(),
-            source_transcript: feature.source_transcript,
-            aa_start: feature.source_protein_range.0,
-            aa_end: feature.source_protein_range.1,
+    Ok(ids
+        .into_iter()
+        .filter_map(|id| {
+            let feature = omm.protein_features.features.get(id)?;
+            let chromosome = omm
+                .splice
+                .chr_names
+                .get(feature.chr_id)
+                .cloned()
+                .unwrap_or_else(|| feature.chr_id.to_string());
+            let strand = match feature.strand {
+                gtf_splice_index::Strand::Plus => "+",
+                gtf_splice_index::Strand::Minus => "-",
+                _ => ".",
+            }
+            .to_owned();
+            Some(FeatureRow {
+                feature_id: feature.id,
+                label: feature.label.clone(),
+                kind: format!("{:?}", feature.kind),
+                description: feature.description.clone(),
+                signature: feature.signature.clone(),
+                chromosome,
+                strand,
+                blocks: feature
+                    .blocks
+                    .iter()
+                    .map(|block| (block.start, block.end))
+                    .collect(),
+                source_protein: feature.source_protein.clone(),
+                source_transcript: feature.source_transcript,
+                aa_start: feature.source_protein_range.0,
+                aa_end: feature.source_protein_range.1,
+            })
         })
-    }).collect())
+        .collect())
 }
 
 fn execute_variant_query(omm: &Ommverse, query: &Query) -> Result<Vec<VariantRow>> {
@@ -561,10 +700,13 @@ fn execute_variant_query(omm: &Ommverse, query: &Query) -> Result<Vec<VariantRow
         .context("variant query requires chromosome = \"...\"")?;
     let (start1, end1) = position_predicate_for(query, "variant")?;
 
-    let clinical_filter = query.predicates.iter().find_map(|predicate| match predicate {
-        Predicate::IsNull { field, negated } if field == "clinical_effect" => Some(*negated),
-        _ => None,
-    });
+    let clinical_filter = query
+        .predicates
+        .iter()
+        .find_map(|predicate| match predicate {
+            Predicate::IsNull { field, negated } if field == "clinical_effect" => Some(*negated),
+            _ => None,
+        });
 
     for predicate in &query.predicates {
         match predicate.field() {
@@ -583,7 +725,12 @@ fn execute_variant_query(omm: &Ommverse, query: &Query) -> Result<Vec<VariantRow
     let source_chromosome = resolve_chromosome(&omm.assembly, chromosome);
     let rid = header
         .name2rid(source_chromosome.as_bytes())
-        .with_context(|| format!("chromosome '{chromosome}' ({source_chromosome}) not present in {}", vcf.display()))?;
+        .with_context(|| {
+            format!(
+                "chromosome '{chromosome}' ({source_chromosome}) not present in {}",
+                vcf.display()
+            )
+        })?;
 
     // User coordinates are 1-based inclusive. htslib fetch uses 0-based,
     // half-open coordinates, so [start1, end1] -> [start1 - 1, end1).
@@ -615,9 +762,10 @@ fn execute_variant_query(omm: &Ommverse, query: &Query) -> Result<Vec<VariantRow
     if let Some(require_present) = clinical_filter {
         let clinical = clinical_variant_keys(omm, chromosome, start1, end1)?;
         rows.retain(|row| {
-            let present = row.alternates.iter().any(|alt| {
-                clinical.contains(&(row.position, row.reference.clone(), alt.clone()))
-            });
+            let present = row
+                .alternates
+                .iter()
+                .any(|alt| clinical.contains(&(row.position, row.reference.clone(), alt.clone())));
             present == require_present
         });
     }
@@ -651,7 +799,11 @@ fn clinical_variant_keys(
         }
         let reference = String::from_utf8_lossy(alleles[0]).into_owned();
         for alt in &alleles[1..] {
-            keys.insert((pos1, reference.clone(), String::from_utf8_lossy(alt).into_owned()));
+            keys.insert((
+                pos1,
+                reference.clone(),
+                String::from_utf8_lossy(alt).into_owned(),
+            ));
         }
     }
     Ok(keys)
@@ -659,17 +811,25 @@ fn clinical_variant_keys(
 
 fn clinvar_rid(header: &bcf::header::HeaderView, chromosome: &str) -> Option<u32> {
     let bare = chromosome.strip_prefix("chr").unwrap_or(chromosome);
-    [bare, chromosome].into_iter().find_map(|name| header.name2rid(name.as_bytes()).ok())
+    [bare, chromosome]
+        .into_iter()
+        .find_map(|name| header.name2rid(name.as_bytes()).ok())
 }
 
 fn text_predicate_values<'a>(query: &'a Query, fields: &[&str]) -> Result<Vec<&'a str>> {
     let mut values = Vec::new();
     for predicate in &query.predicates {
         match predicate {
-            Predicate::Eq { field, value: Value::Text(value) } if fields.contains(&field.as_str()) => {
+            Predicate::Eq {
+                field,
+                value: Value::Text(value),
+            } if fields.contains(&field.as_str()) => {
                 values.push(value.as_str());
             }
-            Predicate::In { field, values: in_values } if fields.contains(&field.as_str()) => {
+            Predicate::In {
+                field,
+                values: in_values,
+            } if fields.contains(&field.as_str()) => {
                 for value in in_values {
                     match value {
                         Value::Text(value) => values.push(value.as_str()),
@@ -685,18 +845,23 @@ fn text_predicate_values<'a>(query: &'a Query, fields: &[&str]) -> Result<Vec<&'
 
 fn text_predicate<'a>(query: &'a Query, field: &str) -> Option<&'a str> {
     query.predicates.iter().find_map(|p| match p {
-        Predicate::Eq { field: predicate_field, value: Value::Text(value) } if predicate_field == field => {
-            Some(value.as_str())
-        }
+        Predicate::Eq {
+            field: predicate_field,
+            value: Value::Text(value),
+        } if predicate_field == field => Some(value.as_str()),
         _ => None,
     })
 }
 
 fn position_predicate_for(query: &Query, entity: &str) -> Result<(u64, u64)> {
-    let value = query.predicates.iter().find_map(|p| match p {
-        Predicate::Eq { field, value } if field == "position" || field == "pos" => Some(value),
-        _ => None,
-    }).with_context(|| format!("{entity} query requires position = N or position = START:END"))?;
+    let value = query
+        .predicates
+        .iter()
+        .find_map(|p| match p {
+            Predicate::Eq { field, value } if field == "position" || field == "pos" => Some(value),
+            _ => None,
+        })
+        .with_context(|| format!("{entity} query requires position = N or position = START:END"))?;
     match value {
         Value::Integer(pos) if *pos > 0 => Ok((*pos, *pos)),
         Value::InclusiveRange(start, end) => Ok((*start, *end)),
@@ -709,11 +874,19 @@ fn variant_source(omm: &Ommverse) -> Result<PathBuf> {
 }
 
 fn source_for_kind(omm: &Ommverse, kind: &str) -> Result<PathBuf> {
-    let manifest = omm.sources.as_ref().context("Ommverse index has no source manifest")?;
-    let resource = manifest.resources.iter()
+    let manifest = omm
+        .sources
+        .as_ref()
+        .context("Ommverse index has no source manifest")?;
+    let resource = manifest
+        .resources
+        .iter()
         .find(|resource| resource.kind == kind)
         .with_context(|| format!("Ommverse source manifest has no {kind} resource"))?;
-    let relative = resource.file.as_ref().with_context(|| format!("{kind} resource has no file"))?;
+    let relative = resource
+        .file
+        .as_ref()
+        .with_context(|| format!("{kind} resource has no file"))?;
     let path = omm.source_root.join(relative);
     if !path.is_file() {
         bail!("{kind} source is missing: {}", path.display());
@@ -735,10 +908,30 @@ fn resolve_chromosome(assembly: &str, chromosome: &str) -> String {
         },
     };
     let version = match number {
-        1 => 11, 2 => 12, 3 => 12, 4 => 12, 5 => 10, 6 => 12,
-        7 => 14, 8 => 11, 9 => 12, 10 => 11, 11 => 10, 12 => 12,
-        13 => 11, 14 => 9, 15 => 10, 16 => 10, 17 => 11, 18 => 10,
-        19 => 10, 20 => 11, 21 => 9, 22 => 11, 23 => 11, 24 => 10,
+        1 => 11,
+        2 => 12,
+        3 => 12,
+        4 => 12,
+        5 => 10,
+        6 => 12,
+        7 => 14,
+        8 => 11,
+        9 => 12,
+        10 => 11,
+        11 => 10,
+        12 => 12,
+        13 => 11,
+        14 => 9,
+        15 => 10,
+        16 => 10,
+        17 => 11,
+        18 => 10,
+        19 => 10,
+        20 => 11,
+        21 => 9,
+        22 => 11,
+        23 => 11,
+        24 => 10,
         _ => return chromosome.to_owned(),
     };
     format!("NC_{number:06}.{version}")
@@ -752,7 +945,8 @@ mod tests {
     fn parses_gene_range_query() {
         let query = Query::parse(
             r#"SELECT gene WHERE chromosome = "chr17" AND position = 7661779:7687550"#,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(query.entity, Entity::Gene);
         assert_eq!(query.predicates.len(), 2);
     }
@@ -761,23 +955,30 @@ mod tests {
     fn parses_variant_range_query() {
         let query = Query::parse(
             r#"SELECT variant WHERE chromosome = "chr17" AND position = 7674894:7679000"#,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(query.entity, Entity::Variant);
         assert_eq!(query.predicates.len(), 2);
         assert_eq!(
             query.predicates[1],
-            Predicate::Eq { field: "position".to_owned(), value: Value::InclusiveRange(7_674_894, 7_679_000) }
+            Predicate::Eq {
+                field: "position".to_owned(),
+                value: Value::InclusiveRange(7_674_894, 7_679_000)
+            }
         );
     }
 
     #[test]
     fn parses_exact_position_query() {
-        let query = Query::parse(
-            r#"select variant where chromosome = "chr17" and position = 7674894"#,
-        ).unwrap();
+        let query =
+            Query::parse(r#"select variant where chromosome = "chr17" and position = 7674894"#)
+                .unwrap();
         assert_eq!(
             query.predicates[1],
-            Predicate::Eq { field: "position".to_owned(), value: Value::Integer(7_674_894) }
+            Predicate::Eq {
+                field: "position".to_owned(),
+                value: Value::Integer(7_674_894)
+            }
         );
     }
 
@@ -788,15 +989,18 @@ mod tests {
         ).unwrap();
         assert_eq!(
             query.predicates[2],
-            Predicate::IsNull { field: "clinical_effect".to_owned(), negated: true }
+            Predicate::IsNull {
+                field: "clinical_effect".to_owned(),
+                negated: true
+            }
         );
     }
 
     #[test]
     fn parses_in_without_parentheses() {
-        let query = Query::parse(
-            r#"SELECT protein WHERE id IN "ENSP00000452874", "ENSP00000453793""#,
-        ).unwrap();
+        let query =
+            Query::parse(r#"SELECT protein WHERE id IN "ENSP00000452874", "ENSP00000453793""#)
+                .unwrap();
         assert_eq!(
             query.predicates[0],
             Predicate::In {

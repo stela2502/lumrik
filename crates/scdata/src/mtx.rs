@@ -28,7 +28,15 @@ pub struct MexFeatureIndex {
 impl MexFeatureIndex {
     pub fn from_dir(dir: impl AsRef<Path>, feature_type: &str) -> Result<Self> {
         let dir = dir.as_ref();
-        let path = find_text_file(dir, &["features.tsv.gz", "features.tsv", "genes.tsv.gz", "genes.tsv"])?;
+        let path = find_text_file(
+            dir,
+            &[
+                "features.tsv.gz",
+                "features.tsv",
+                "genes.tsv.gz",
+                "genes.tsv",
+            ],
+        )?;
         let reader = text_lines(&path)?;
 
         let mut features = Vec::new();

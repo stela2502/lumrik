@@ -138,13 +138,11 @@ where
     let accounting = data.cell_accounting();
 
     let (retained, calling) = match args.cell_calling {
-        CellCallingMode::Fixed => (
-            data.cells_with_min_exonic_umis(args.min_umi_count),
-            None,
-        ),
+        CellCallingMode::Fixed => (data.cells_with_min_exonic_umis(args.min_umi_count), None),
         CellCallingMode::Beacon => {
             println!("Running sc-beacon barcode-rank knee cell identification and QC...");
-            let calling = bam_tide::results::beacon_cell_calling(&data).map_err(anyhow::Error::msg)?;
+            let calling =
+                bam_tide::results::beacon_cell_calling(&data).map_err(anyhow::Error::msg)?;
 
             std::fs::create_dir_all(&args.outpath)
                 .with_context(|| format!("creating {}", args.outpath.display()))?;
@@ -160,8 +158,14 @@ where
     };
 
     let mut indexes: HashMap<String, &dyn scdata::FeatureIndex> = HashMap::new();
-    indexes.insert(gtf_splice_index::QuantClass::Exonic.as_str().to_string(), features);
-    indexes.insert(gtf_splice_index::QuantClass::Intronic.as_str().to_string(), features);
+    indexes.insert(
+        gtf_splice_index::QuantClass::Exonic.as_str().to_string(),
+        features,
+    );
+    indexes.insert(
+        gtf_splice_index::QuantClass::Intronic.as_str().to_string(),
+        features,
+    );
     if let Some(snp_index) = snp_index {
         indexes.insert(scdata::QuantData::SNP_REF.to_string(), snp_index);
         indexes.insert(scdata::QuantData::SNP_ALT.to_string(), snp_index);

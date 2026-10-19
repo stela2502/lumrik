@@ -26,8 +26,14 @@ impl CellAnnotations {
     pub(crate) fn subset(&self, keep: &[usize]) -> Result<Self> {
         let mut columns = Vec::with_capacity(self.headers.len());
         for name in &self.headers {
-            let values = self.columns.get(name).expect("annotation header has values");
-            columns.push((name.as_str(), keep.iter().map(|&i| values[i].clone()).collect()));
+            let values = self
+                .columns
+                .get(name)
+                .expect("annotation header has values");
+            columns.push((
+                name.as_str(),
+                keep.iter().map(|&i| values[i].clone()).collect(),
+            ));
         }
         let mut subset = Self::from_columns(columns, keep.len())?;
         subset.categorical_levels = self.categorical_levels.clone();
@@ -152,7 +158,9 @@ impl SingleCellData {
                 Column::F64(values) => values.iter().map(ToString::to_string).collect(),
                 Column::I64(values) => values.iter().map(ToString::to_string).collect(),
                 Column::Bool(values) => values.iter().map(ToString::to_string).collect(),
-                Column::Categorical { categories, codes, .. } => codes
+                Column::Categorical {
+                    categories, codes, ..
+                } => codes
                     .iter()
                     .map(|&code| {
                         if code == -1 {
@@ -161,7 +169,10 @@ impl SingleCellData {
                             let idx = usize::try_from(code)
                                 .with_context(|| format!("negative categorical code {code}"))?;
                             categories.get(idx).cloned().with_context(|| {
-                                format!("categorical code {code} exceeds {} levels", categories.len())
+                                format!(
+                                    "categorical code {code} exceeds {} levels",
+                                    categories.len()
+                                )
                             })
                         }
                     })
@@ -196,7 +207,9 @@ impl SingleCellData {
         } else {
             Box::new(File::open(path)?)
         };
-        let mut csv = csv::ReaderBuilder::new().delimiter(b'\t').from_reader(reader);
+        let mut csv = csv::ReaderBuilder::new()
+            .delimiter(b'\t')
+            .from_reader(reader);
         let headers = csv.headers()?.iter().map(str::to_owned).collect::<Vec<_>>();
         let cell_col = headers
             .iter()
@@ -217,11 +230,14 @@ impl SingleCellData {
                     .push(record.get(idx).unwrap_or_default().to_owned());
             }
         }
-        Ok((cell_ids, CellAnnotations {
-            headers,
-            columns,
-            categorical_levels: HashMap::new(),
-        }))
+        Ok((
+            cell_ids,
+            CellAnnotations {
+                headers,
+                columns,
+                categorical_levels: HashMap::new(),
+            },
+        ))
     }
 
     pub(crate) fn read_matrix_market(path: &Path) -> Result<CsMat<f32>> {
@@ -296,21 +312,30 @@ impl SingleCellData {
     }
 }
 
-
-
 #[cfg(test)]
 mod h5ad_input_tests {
     use super::*;
-    use sc_anndata::{AnnData, Column, Matrix, Table};
     use ndarray::array;
+    use sc_anndata::{AnnData, Column, Matrix, Table};
 
     fn fixture(x: Matrix) -> AnnData {
         let mut obs = Table::new("cell_id", vec!["c1".into(), "c2".into()]);
-        obs.add_column("louvain", Column::String(vec!["0".into(), "1".into()])).unwrap();
-        obs.add_column("sname", Column::String(vec!["DBA".into(), "Con".into()])).unwrap();
+        obs.add_column("louvain", Column::String(vec!["0".into(), "1".into()]))
+            .unwrap();
+        obs.add_column("sname", Column::String(vec!["DBA".into(), "Con".into()]))
+            .unwrap();
         obs.add_column("n_genes", Column::I64(vec![2, 1])).unwrap();
-        let var = Table::new("gene_id", vec!["MEIS2".into(), "GATA1".into(), "KLF1".into()]);
-        AnnData { x, obs, var, obsm: Default::default(), layers: Default::default() }
+        let var = Table::new(
+            "gene_id",
+            vec!["MEIS2".into(), "GATA1".into(), "KLF1".into()],
+        );
+        AnnData {
+            x,
+            obs,
+            var,
+            obsm: Default::default(),
+            layers: Default::default(),
+        }
     }
 
     fn assert_converted(data: SingleCellData) {
@@ -339,6 +364,8 @@ mod h5ad_input_tests {
         tri.add_triplet(0, 0, 5.0);
         tri.add_triplet(0, 2, 2.0);
         tri.add_triplet(1, 1, 7.0);
-        assert_converted(SingleCellData::from_anndata(fixture(Matrix::CsrF32(tri.to_csr()))).unwrap());
+        assert_converted(
+            SingleCellData::from_anndata(fixture(Matrix::CsrF32(tri.to_csr()))).unwrap(),
+        );
     }
 }

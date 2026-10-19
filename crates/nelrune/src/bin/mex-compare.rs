@@ -57,16 +57,10 @@ struct MatrixInput {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    fs::create_dir_all(&cli.out)
-        .with_context(|| format!("creating {}", cli.out.display()))?;
+    fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
 
     let nelrune = load_nelrune(&cli.nelrune, cli.threads)?;
-    let other = load_other(
-        &cli.other,
-        cli.other_producer,
-        &cli.bd_version,
-        cli.threads,
-    )?;
+    let other = load_other(&cli.other, cli.other_producer, &cli.bd_version, cli.threads)?;
 
     compare(&nelrune, &other, &cli.out)
 }
@@ -157,11 +151,7 @@ fn canonical_dna_label(label: &str) -> Result<String> {
     Ok(seq.to_ascii_uppercase())
 }
 
-fn ensure_unique_cells(
-    ids: &[u64],
-    barcodes: &[(String, u64)],
-    source: &str,
-) -> Result<()> {
+fn ensure_unique_cells(ids: &[u64], barcodes: &[(String, u64)], source: &str) -> Result<()> {
     let mut seen = HashMap::<u64, &str>::new();
     for (id, (label, _)) in ids.iter().zip(barcodes) {
         if let Some(previous) = seen.insert(*id, label) {
@@ -228,8 +218,16 @@ fn compare(a: &MatrixInput, b: &MatrixInput, out: &Path) -> Result<()> {
     writeln!(summary, "Nelrune cells: {}", a.matrix.cols())?;
     writeln!(summary, "Other cells: {}", b.matrix.cols())?;
     writeln!(summary, "Shared canonical cells: {}", shared_cells.len())?;
-    writeln!(summary, "Nelrune-only cells: {}", a_set.difference(&b_set).count())?;
-    writeln!(summary, "Other-only cells: {}", b_set.difference(&a_set).count())?;
+    writeln!(
+        summary,
+        "Nelrune-only cells: {}",
+        a_set.difference(&b_set).count()
+    )?;
+    writeln!(
+        summary,
+        "Other-only cells: {}",
+        b_set.difference(&a_set).count()
+    )?;
     writeln!(summary, "Nelrune total counts: {:.0}", a_total)?;
     writeln!(summary, "Other total counts: {:.0}", b_total)?;
     writeln!(
@@ -283,8 +281,12 @@ fn write_cell_table(
     let shared_a: HashSet<usize> = shared_genes.iter().map(|(_, a_row, _)| *a_row).collect();
 
     for (cell_id, a_col, b_col) in shared_cells {
-        let av = a_t.outer_view(*a_col).context("missing Nelrune cell column")?;
-        let bv = b_t.outer_view(*b_col).context("missing comparison cell column")?;
+        let av = a_t
+            .outer_view(*a_col)
+            .context("missing Nelrune cell column")?;
+        let bv = b_t
+            .outer_view(*b_col)
+            .context("missing comparison cell column")?;
         let a_counts: f64 = av.data().iter().map(|x| f64::from(*x)).sum();
         let b_counts: f64 = bv.data().iter().map(|x| f64::from(*x)).sum();
 
@@ -315,7 +317,6 @@ fn write_cell_table(
     Ok(())
 }
 
-
 fn write_other_only_cells(
     out: &Path,
     a: &MatrixInput,
@@ -329,7 +330,9 @@ fn write_other_only_cells(
         if a_cells.contains(&cell_id) {
             continue;
         }
-        let bv = b_t.outer_view(b_col).context("missing comparison cell column")?;
+        let bv = b_t
+            .outer_view(b_col)
+            .context("missing comparison cell column")?;
         let counts: f64 = bv.data().iter().map(|x| f64::from(*x)).sum();
         rows.push((counts, b_col, cell_id));
     }
@@ -348,7 +351,9 @@ fn write_other_only_cells(
     )?;
 
     for (counts, b_col, cell_id) in rows {
-        let bv = b_t.outer_view(b_col).context("missing comparison cell column")?;
+        let bv = b_t
+            .outer_view(b_col)
+            .context("missing comparison cell column")?;
         writeln!(
             writer,
             "{cell_id}\t{}\t{}\t{counts:.0}\t{}",
@@ -384,7 +389,9 @@ fn write_gene_table(
     let shared_b_cols: HashSet<usize> = shared_cells.iter().map(|(_, _, col)| *col).collect();
 
     for (row, vec) in a.matrix.outer_iterator().enumerate() {
-        let Some(i) = a_lookup.get(&row) else { continue };
+        let Some(i) = a_lookup.get(&row) else {
+            continue;
+        };
         a_totals[*i] = vec
             .iter()
             .filter(|(col, _)| shared_a_cols.contains(col))
@@ -392,7 +399,9 @@ fn write_gene_table(
             .sum();
     }
     for (row, vec) in b.matrix.outer_iterator().enumerate() {
-        let Some(i) = b_lookup.get(&row) else { continue };
+        let Some(i) = b_lookup.get(&row) else {
+            continue;
+        };
         b_totals[*i] = vec
             .iter()
             .filter(|(col, _)| shared_b_cols.contains(col))
@@ -402,19 +411,22 @@ fn write_gene_table(
 
     let corr = dense_pearson(&a_totals, &b_totals);
     let mut writer = BufWriter::new(File::create(out.join("genes.tsv"))?);
-    writeln!(writer, "gene\tnelrune_counts\tother_counts\tlog2_ratio_nelrune_over_other")?;
+    writeln!(
+        writer,
+        "gene\tnelrune_counts\tother_counts\tlog2_ratio_nelrune_over_other"
+    )?;
     for (i, (name, _, _)) in shared_genes.iter().enumerate() {
         let ratio = ((a_totals[i] + 1.0) / (b_totals[i] + 1.0)).log2();
-        writeln!(writer, "{name}\t{:.0}\t{:.0}\t{ratio:.6}", a_totals[i], b_totals[i])?;
+        writeln!(
+            writer,
+            "{name}\t{:.0}\t{:.0}\t{ratio:.6}",
+            a_totals[i], b_totals[i]
+        )?;
     }
     Ok(corr)
 }
 
-fn sparse_pearson(
-    a: &HashMap<usize, f64>,
-    b: &[(usize, f64)],
-    n: usize,
-) -> Option<f64> {
+fn sparse_pearson(a: &HashMap<usize, f64>, b: &[(usize, f64)], n: usize) -> Option<f64> {
     if n < 2 {
         return None;
     }

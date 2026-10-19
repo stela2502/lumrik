@@ -25,7 +25,10 @@ fn open_text(path: &Path) -> Result<Box<dyn BufRead>> {
 }
 
 fn embedded_ensp(string_id: &str) -> &str {
-    string_id.split_once('.').map(|(_, id)| id).unwrap_or(string_id)
+    string_id
+        .split_once('.')
+        .map(|(_, id)| id)
+        .unwrap_or(string_id)
 }
 
 fn feature_vector(omm: &Ommverse, protein_id: usize) -> Vec<String> {
@@ -69,7 +72,9 @@ pub fn probe_string(index: &Path, info: &Path, links: &Path, out: &Path) -> Resu
             continue;
         }
         info_records += 1;
-        let Some(string_id) = line.split_whitespace().next() else { continue };
+        let Some(string_id) = line.split_whitespace().next() else {
+            continue;
+        };
         let ensp = embedded_ensp(string_id);
         let Some(protein_id) = omm.protein_id(ensp) else {
             unresolved += 1;
@@ -81,14 +86,21 @@ pub fn probe_string(index: &Path, info: &Path, links: &Path, out: &Path) -> Resu
         };
         nodes.insert(
             string_id.to_owned(),
-            Node { protein_id, gene_id, features: feature_vector(&omm, protein_id) },
+            Node {
+                protein_id,
+                gene_id,
+                features: feature_vector(&omm, protein_id),
+            },
         );
         resolved += 1;
     }
 
     let mut gene_vectors: HashMap<GeneId, BTreeSet<Vec<String>>> = HashMap::new();
     for node in nodes.values() {
-        gene_vectors.entry(node.gene_id).or_default().insert(node.features.clone());
+        gene_vectors
+            .entry(node.gene_id)
+            .or_default()
+            .insert(node.features.clone());
     }
     let candidate_genes = gene_vectors
         .iter()
@@ -96,7 +108,11 @@ pub fn probe_string(index: &Path, info: &Path, links: &Path, out: &Path) -> Resu
         .collect::<HashSet<_>>();
     let candidate_nodes = nodes
         .iter()
-        .filter_map(|(id, node)| candidate_genes.contains(&node.gene_id).then_some(id.clone()))
+        .filter_map(|(id, node)| {
+            candidate_genes
+                .contains(&node.gene_id)
+                .then_some(id.clone())
+        })
         .collect::<HashSet<_>>();
 
     eprintln!(
@@ -104,9 +120,12 @@ pub fn probe_string(index: &Path, info: &Path, links: &Path, out: &Path) -> Resu
     );
     eprintln!(
         "[ommverse] genes represented: {}; genes with >1 InterPro feature vector: {}",
-        gene_vectors.len(), candidate_genes.len()
+        gene_vectors.len(),
+        candidate_genes.len()
     );
-    eprintln!("[ommverse] streaming STRING links; retaining partner sets only for candidate genes...");
+    eprintln!(
+        "[ommverse] streaming STRING links; retaining partner sets only for candidate genes..."
+    );
 
     let mut partners: HashMap<String, BTreeSet<GeneId>> = HashMap::new();
     let mut link_records = 0usize;
@@ -120,7 +139,9 @@ pub fn probe_string(index: &Path, info: &Path, links: &Path, out: &Path) -> Resu
         let mut fields = line.split_whitespace();
         let Some(a) = fields.next() else { continue };
         let Some(b) = fields.next() else { continue };
-        let (Some(na), Some(nb)) = (nodes.get(a), nodes.get(b)) else { continue };
+        let (Some(na), Some(nb)) = (nodes.get(a), nodes.get(b)) else {
+            continue;
+        };
         resolved_links += 1;
         if candidate_nodes.contains(a) {
             partners.entry(a.to_owned()).or_default().insert(nb.gene_id);
@@ -134,32 +155,65 @@ pub fn probe_string(index: &Path, info: &Path, links: &Path, out: &Path) -> Resu
     for (string_id, node) in &nodes {
         if candidate_genes.contains(&node.gene_id) {
             by_gene.entry(node.gene_id).or_default().push((
-                string_id.as_str(), node, partners.get(string_id).cloned().unwrap_or_default(),
+                string_id.as_str(),
+                node,
+                partners.get(string_id).cloned().unwrap_or_default(),
             ));
         }
     }
 
     let mut genes_with_multiple_link_sets = 0usize;
-    let mut writer = BufWriter::new(File::create(out).with_context(|| format!("creating {}", out.display()))?);
-    writeln!(writer, "gene_id\tgene\tn_feature_vectors\tn_link_sets\tstring_id\tprotein_id\ttranscript_ids\tinterpro_features\tn_partner_genes\tpartner_gene_ids")?;
+    let mut writer =
+        BufWriter::new(File::create(out).with_context(|| format!("creating {}", out.display()))?);
+    writeln!(
+        writer,
+        "gene_id\tgene\tn_feature_vectors\tn_link_sets\tstring_id\tprotein_id\ttranscript_ids\tinterpro_features\tn_partner_genes\tpartner_gene_ids"
+    )?;
     for (gene_id, rows) in &by_gene {
-        let link_sets = rows.iter().map(|(_, _, set)| set.clone()).collect::<BTreeSet<_>>();
-        if link_sets.len() > 1 { genes_with_multiple_link_sets += 1; }
+        let link_sets = rows
+            .iter()
+            .map(|(_, _, set)| set.clone())
+            .collect::<BTreeSet<_>>();
+        if link_sets.len() > 1 {
+            genes_with_multiple_link_sets += 1;
+        }
         let gene = &omm.splice.genes[*gene_id];
         let gene_name = gene.primary_name().unwrap_or(".");
         let n_feature_vectors = gene_vectors.get(gene_id).map_or(0, BTreeSet::len);
         for (string_id, node, partner_set) in rows {
-            let tx = omm.proteins[node.protein_id].transcript_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+            let tx = omm.proteins[node.protein_id]
+                .transcript_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             let features = node.features.join(",");
-            let partner_ids = partner_set.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-            writeln!(writer, "{gene_id}\t{gene_name}\t{n_feature_vectors}\t{}\t{string_id}\t{}\t{tx}\t{features}\t{}\t{partner_ids}", link_sets.len(), node.protein_id, partner_set.len())?;
+            let partner_ids = partner_set
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            writeln!(
+                writer,
+                "{gene_id}\t{gene_name}\t{n_feature_vectors}\t{}\t{string_id}\t{}\t{tx}\t{features}\t{}\t{partner_ids}",
+                link_sets.len(),
+                node.protein_id,
+                partner_set.len()
+            )?;
         }
     }
     writer.flush()?;
 
-    eprintln!("[ommverse] STRING links streamed: {link_records}; both endpoints resolved: {resolved_links}");
-    eprintln!("[ommverse] candidate genes with >1 feature vector: {}", candidate_genes.len());
-    eprintln!("[ommverse] candidate genes with >1 partner-gene link set: {genes_with_multiple_link_sets}");
+    eprintln!(
+        "[ommverse] STRING links streamed: {link_records}; both endpoints resolved: {resolved_links}"
+    );
+    eprintln!(
+        "[ommverse] candidate genes with >1 feature vector: {}",
+        candidate_genes.len()
+    );
+    eprintln!(
+        "[ommverse] candidate genes with >1 partner-gene link set: {genes_with_multiple_link_sets}"
+    );
     eprintln!("[ommverse] report: {}", out.display());
     Ok(())
 }

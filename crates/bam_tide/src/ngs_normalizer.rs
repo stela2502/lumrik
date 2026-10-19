@@ -98,7 +98,6 @@ impl NgsNormalizerSupport {
         Scdata::new(1, MatrixValueType::Real)
     }
 
-
     pub fn orientation_label(orientation: Orientation) -> &'static str {
         match orientation {
             Orientation::Forward => "forward",

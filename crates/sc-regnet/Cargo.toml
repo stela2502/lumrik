@@ -1,0 +1,10 @@
+[package]
+name = "sc-regnet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Biology-constrained regulatory graph learning for single-cell observations"
+
+[dependencies]
+# Add Burn here when the first differentiable model is implemented.

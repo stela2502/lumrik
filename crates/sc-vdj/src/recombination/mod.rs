@@ -294,7 +294,8 @@ pub fn process_chain_work(work: ChainWork<'_>) -> Vec<Recombination> {
             .then_with(|| b.supporting_features.cmp(&a.supporting_features))
             .then_with(|| a.stable_id.to_string().cmp(&b.stable_id.to_string()))
     });
-    let mut seen_vdj = std::collections::HashSet::<(SegmentId, Option<SegmentId>, SegmentId)>::new();
+    let mut seen_vdj =
+        std::collections::HashSet::<(SegmentId, Option<SegmentId>, SegmentId)>::new();
     calls.retain(|r| seen_vdj.insert((r.v, r.d, r.j)));
     calls.truncate(MAX_FINAL_RECOMBINATIONS_PER_LOCUS);
 
@@ -384,7 +385,11 @@ fn identify_summary(
         cdr3: productivity.cdr3.clone(),
         cdr3_aa: productivity.cdr3_aa.clone(),
         supporting_features: assembled.support_features,
-        supporting_umis: assembled.supporting_umis.len().try_into().unwrap_or(u32::MAX),
+        supporting_umis: assembled
+            .supporting_umis
+            .len()
+            .try_into()
+            .unwrap_or(u32::MAX),
         receptor_linkage: ReceptorLinkageSupport::default(),
         stable_id: RecombinationId::placeholder(chain),
     };
@@ -556,12 +561,9 @@ fn direct_anchor_alignment(
     let mut compatible = 0usize;
     let mut incompatible_run = 0usize;
     for i in 0..overlap {
-        let Some((n, ok)) = observed.compatibility_counts(
-            query_start + i,
-            &germline,
-            reference_start + i,
-            1,
-        ) else {
+        let Some((n, ok)) =
+            observed.compatibility_counts(query_start + i, &germline, reference_start + i, 1)
+        else {
             incompatible_run = 0;
             continue;
         };

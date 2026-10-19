@@ -7,13 +7,19 @@ use ndarray::Array2;
 /// Clustering is deliberately performed in PCA space; this embedding never
 /// participates in population calling. Keeping that separation makes the
 /// plotted geometry diagnostic rather than part of the biological decision.
-pub(crate) fn umap_2d(pca: &Array2<f32>, neighbors: usize, epochs: usize) -> Result<Array2<f32>> {
+pub(crate) fn umap_nd(
+    pca: &Array2<f32>,
+    dims: usize,
+    neighbors: usize,
+    epochs: usize,
+) -> Result<Array2<f32>> {
+    anyhow::ensure!(dims >= 2, "UMAP needs at least two output dimensions");
     let n = pca.nrows();
     if n == 0 {
-        return Ok(Array2::zeros((0, 2)));
+        return Ok(Array2::zeros((0, dims)));
     }
     if n < 3 {
-        return Ok(Array2::zeros((n, 2)));
+        return Ok(Array2::zeros((n, dims)));
     }
 
     // manifolds-rs accepts a row-major slice tuple, which avoids coupling its
@@ -23,17 +29,23 @@ pub(crate) fn umap_2d(pca: &Array2<f32>, neighbors: usize, epochs: usize) -> Res
         .as_slice()
         .context("PCA coordinates are not contiguous")?;
     let mut params = UmapParams::<f32>::new_default_2d(Some(0.5), Some(1.0));
+    params.n_dim = dims;
     params.k = neighbors.max(2).min(n - 1);
     params.optim_params.n_epochs = epochs.max(1);
     let coords = umap((values, n, pca.ncols()), None, &params, 42, 0)
         .map_err(|e| anyhow::anyhow!("UMAP failed: {e}"))?;
-    if coords.len() != 2 || coords[0].len() != n || coords[1].len() != n {
+    if coords.len() != dims || coords[0].len() != n || coords[1].len() != n {
         anyhow::bail!("UMAP returned unexpected shape");
     }
-    let mut out = Array2::<f32>::zeros((n, 2));
+    let mut out = Array2::<f32>::zeros((n, dims));
     for i in 0..n {
-        out[(i, 0)] = coords[0][i];
-        out[(i, 1)] = coords[1][i];
+        for d in 0..dims {
+            out[(i, d)] = coords[d][i];
+        }
     }
     Ok(out)
+}
+
+pub(crate) fn umap_2d(pca: &Array2<f32>, neighbors: usize, epochs: usize) -> Result<Array2<f32>> {
+    umap_nd(pca, 2, neighbors, epochs)
 }

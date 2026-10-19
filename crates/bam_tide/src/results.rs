@@ -24,8 +24,8 @@ impl BeaconCellCalling {
         let mut rows = self.cells.clone();
         rows.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-        let mut out = std::fs::File::create(path)
-            .map_err(|e| format!("creating {}: {e}", path.display()))?;
+        let mut out =
+            std::fs::File::create(path).map_err(|e| format!("creating {}: {e}", path.display()))?;
         writeln!(out, "rank\tcell_id\tumi_count\tcalled")
             .map_err(|e| format!("writing {}: {e}", path.display()))?;
         for (rank, (cell_id, count, called)) in rows.into_iter().enumerate() {
@@ -48,5 +48,9 @@ pub fn beacon_cell_calling(data: &QuantData) -> Result<BeaconCellCalling, String
         .iter()
         .filter_map(|(cell_id, _, called)| called.then_some(*cell_id))
         .collect();
-    Ok(BeaconCellCalling { fit, cells, retained })
+    Ok(BeaconCellCalling {
+        fit,
+        cells,
+        retained,
+    })
 }

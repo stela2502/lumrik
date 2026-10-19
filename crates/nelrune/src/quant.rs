@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bam_tide::FeatureTagCounts;
-use scdata::QuantData;
 use bam_tide::quantification::bam_collector::{BamCollector, BamCollectorConfig};
 use clap::Parser;
 use flate2::Compression;
@@ -16,6 +15,7 @@ use gtf_splice_index::SpliceIndex;
 use lumrik_status::{public_hostname, spawn_status_server};
 use nelrune::progress::RunProgress;
 use sc_primer::{BdCellVersion, Chemistry, PrimerCli, RhapsodyWhitelist};
+use scdata::QuantData;
 
 #[derive(Debug, Parser)]
 #[command(about = "Quantify a STAR BAM and integrate FASTQ-derived Nelrune observations")]
@@ -300,14 +300,14 @@ struct MatrixFeatureCounts {
 impl MatrixFeatureCounts {
     fn from_output(outpath: &Path) -> Result<Self> {
         Ok(Self {
-            raw_exonic: count_gzip_lines(
-                &outpath.join("raw/exonic_exprs/features.tsv.gz"),
+            raw_exonic: count_gzip_lines(&outpath.join("raw/exonic_exprs/features.tsv.gz"))?,
+            filtered_exonic: count_gzip_lines(
+                &outpath.join("filtered/exonic_exprs/features.tsv.gz"),
             )?,
-            filtered_exonic: count_gzip_lines(&outpath.join("filtered/exonic_exprs/features.tsv.gz"))?,
-            raw_intronic: count_gzip_lines(
-                &outpath.join("raw/intronic_exprs/features.tsv.gz"),
+            raw_intronic: count_gzip_lines(&outpath.join("raw/intronic_exprs/features.tsv.gz"))?,
+            filtered_intronic: count_gzip_lines(
+                &outpath.join("filtered/intronic_exprs/features.tsv.gz"),
             )?,
-            filtered_intronic: count_gzip_lines(&outpath.join("filtered/intronic_exprs/features.tsv.gz"))?,
         })
     }
 }
@@ -316,21 +316,13 @@ impl std::fmt::Display for MatrixFeatureCounts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Matrix feature counts")?;
         writeln!(f, "---------------------")?;
-        writeln!(
-            f,
-            "raw exonic features written: {}",
-            self.raw_exonic
-        )?;
+        writeln!(f, "raw exonic features written: {}", self.raw_exonic)?;
         writeln!(
             f,
             "filtered exonic features written: {}",
             self.filtered_exonic
         )?;
-        writeln!(
-            f,
-            "raw intronic features written: {}",
-            self.raw_intronic
-        )?;
+        writeln!(f, "raw intronic features written: {}", self.raw_intronic)?;
         writeln!(
             f,
             "filtered intronic features written: {}",

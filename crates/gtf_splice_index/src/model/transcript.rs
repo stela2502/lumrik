@@ -1,4 +1,4 @@
-use crate::capabilities::{compact_positions, Axis, CoordinateMapper, Identifiable, Plottable};
+use crate::capabilities::{Axis, CoordinateMapper, Identifiable, Plottable, compact_positions};
 use crate::model::types::{MatchClass, MatchHit, MatchOptions, PlacementAudit, TranscriptId};
 use crate::types::{RefBlock, SplicedRead, Strand};
 use serde::{Deserialize, Serialize};
@@ -8,11 +8,19 @@ use int_to_prot::IntToProt;
 
 fn add_alias_with_unversioned(names: &mut Vec<String>, value: &str) {
     let value = value.trim();
-    if value.is_empty() { return; }
-    if !names.iter().any(|known| known == value) { names.push(value.to_owned()); }
+    if value.is_empty() {
+        return;
+    }
+    if !names.iter().any(|known| known == value) {
+        names.push(value.to_owned());
+    }
     if let Some((base, version)) = value.rsplit_once('.') {
-        if !base.is_empty() && version.chars().all(|c| c.is_ascii_digit())
-            && !names.iter().any(|known| known == base) { names.push(base.to_owned()); }
+        if !base.is_empty()
+            && version.chars().all(|c| c.is_ascii_digit())
+            && !names.iter().any(|known| known == base)
+        {
+            names.push(base.to_owned());
+        }
     }
 }
 
@@ -35,12 +43,18 @@ pub struct Transcript {
 }
 
 impl Identifiable for Transcript {
-    fn aliases(&self) -> &[String] { &self.names }
+    fn aliases(&self) -> &[String] {
+        &self.names
+    }
 }
 
 impl Plottable for Transcript {
-    fn axis(&self) -> Axis { Axis::Genomic }
-    fn blocks(&self) -> Vec<RefBlock> { self.exons.clone() }
+    fn axis(&self) -> Axis {
+        Axis::Genomic
+    }
+    fn blocks(&self) -> Vec<RefBlock> {
+        self.exons.clone()
+    }
 }
 
 impl CoordinateMapper for Transcript {
@@ -50,25 +64,35 @@ impl CoordinateMapper for Transcript {
     }
 
     fn project(&self, from: Axis, to: Axis, blocks: &[RefBlock]) -> Option<Vec<RefBlock>> {
-        if !self.axes().contains(&from) || !self.axes().contains(&to) { return None; }
-        if from == to { return Some(blocks.to_vec()); }
+        if !self.axes().contains(&from) || !self.axes().contains(&to) {
+            return None;
+        }
+        if from == to {
+            return Some(blocks.to_vec());
+        }
 
         match (from, to) {
             (Axis::Genomic, Axis::Transcriptomic) => {
-                let positions = blocks.iter().flat_map(|b| b.start..b.end)
+                let positions = blocks
+                    .iter()
+                    .flat_map(|b| b.start..b.end)
                     .filter_map(|p| self.transcript_position_of_genomic(p).map(|x| x as u32))
                     .collect();
                 Some(compact_positions(positions))
             }
             (Axis::Transcriptomic, Axis::Genomic) => {
-                let positions = blocks.iter().flat_map(|b| b.start..b.end)
+                let positions = blocks
+                    .iter()
+                    .flat_map(|b| b.start..b.end)
                     .filter_map(|p| self.genomic_position_of_transcript(p as usize))
                     .collect();
                 Some(compact_positions(positions))
             }
             (Axis::Proteomic, Axis::Genomic) => {
                 let mut out = Vec::new();
-                for b in blocks { out.extend(self.protein_range_to_genomic_blocks(b.start, b.end)); }
+                for b in blocks {
+                    out.extend(self.protein_range_to_genomic_blocks(b.start, b.end));
+                }
                 Some(out)
             }
             (Axis::Proteomic, Axis::Transcriptomic) => {
@@ -77,7 +101,9 @@ impl CoordinateMapper for Transcript {
                 for b in blocks {
                     let start = cds_start.saturating_add(b.start as usize * 3).min(cds_end);
                     let end = cds_start.saturating_add(b.end as usize * 3).min(cds_end);
-                    if start < end { out.push(RefBlock::new(start as u32, end as u32)); }
+                    if start < end {
+                        out.push(RefBlock::new(start as u32, end as u32));
+                    }
                 }
                 Some(out)
             }
@@ -90,7 +116,9 @@ impl CoordinateMapper for Transcript {
                     if start < end {
                         let aa_start = ((start - cds_start) / 3) as u32;
                         let aa_end = ((end - cds_start + 2) / 3) as u32;
-                        if aa_start < aa_end { out.push(RefBlock::new(aa_start, aa_end)); }
+                        if aa_start < aa_end {
+                            out.push(RefBlock::new(aa_start, aa_end));
+                        }
                     }
                 }
                 Some(out)
@@ -135,7 +163,9 @@ impl Transcript {
         add_alias_with_unversioned(&mut self.protein_names, name);
     }
 
-    pub fn protein_aliases(&self) -> &[String] { &self.protein_names }
+    pub fn protein_aliases(&self) -> &[String] {
+        &self.protein_names
+    }
 
     pub fn primary_name(&self) -> Option<&str> {
         self.names.first().map(|s| s.as_str())
@@ -254,19 +284,27 @@ impl Transcript {
         genomic.sort_unstable();
         genomic.dedup();
         let mut out = Vec::new();
-        let Some(&first) = genomic.first() else { return out; };
+        let Some(&first) = genomic.first() else {
+            return out;
+        };
         let mut start = first;
         let mut prev = first;
         for &pos in genomic.iter().skip(1) {
             if pos == prev + 1 {
                 prev = pos;
             } else {
-                out.push(RefBlock { start, end: prev + 1 });
+                out.push(RefBlock {
+                    start,
+                    end: prev + 1,
+                });
                 start = pos;
                 prev = pos;
             }
         }
-        out.push(RefBlock { start, end: prev + 1 });
+        out.push(RefBlock {
+            start,
+            end: prev + 1,
+        });
         out
     }
 
@@ -419,10 +457,8 @@ impl Transcript {
         let exonic_bases = overlap_bases(&read.blocks, &self.exons);
         let introns = self.intron_blocks();
         let intronic_bases = overlap_bases(&read.blocks, &introns);
-        let read_junctions = RefBlock::junctions_from_blocks(
-            &read.blocks,
-            opts.allowed_intronic_gap_size,
-        );
+        let read_junctions =
+            RefBlock::junctions_from_blocks(&read.blocks, opts.allowed_intronic_gap_size);
         let tx_junctions = self.junctions();
         let matched_junctions = read_junctions
             .iter()
@@ -430,10 +466,12 @@ impl Transcript {
             .count();
         let unmatched_junctions = read_junctions.len().saturating_sub(matched_junctions);
 
-        let transcript_read_start = read.blocks
+        let transcript_read_start = read
+            .blocks
             .first()
             .and_then(|b| self.transcript_position_of_genomic(b.start));
-        let transcript_read_end = read.blocks
+        let transcript_read_end = read
+            .blocks
             .last()
             .and_then(|b| b.end.checked_sub(1))
             .and_then(|p| self.transcript_position_of_genomic(p));

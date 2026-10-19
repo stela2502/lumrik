@@ -13,7 +13,9 @@ fn xml_escape(s: &str) -> String {
 }
 
 fn svg_header(w: f64, h: f64) -> String {
-    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}"><rect width="100%" height="100%" fill="white"/><style>text{{font-family:Arial,sans-serif;fill:#222}} .small{{font-size:11px}} .label{{font-size:12px}} .title{{font-size:18px;font-weight:bold}}</style>"#)
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}"><rect width="100%" height="100%" fill="white"/><style>text{{font-family:Arial,sans-serif;fill:#222}} .small{{font-size:11px}} .label{{font-size:12px}} .title{{font-size:18px;font-weight:bold}}</style>"#
+    )
 }
 
 #[derive(Clone, Debug, Default)]
@@ -87,9 +89,7 @@ pub fn plot_gene_transcripts_with_options(
     let bottom = 70.0;
     let h = top + row_h * plotted.len() as f64 + bottom;
     let plot_w = w - left - right;
-    let gx = |p: u32| {
-        left + plot_w * (p.saturating_sub(gstart) as f64 / (gend - gstart) as f64)
-    };
+    let gx = |p: u32| left + plot_w * (p.saturating_sub(gstart) as f64 / (gend - gstart) as f64);
 
     let mut s = svg_header(w, h);
     s.push_str(&format!(
@@ -133,7 +133,8 @@ pub fn plot_gene_transcripts_with_options(
                     let x2 = gx(b);
                     s.push_str(&format!(
                         r##"<rect x="{x1:.1}" y="{:.1}" width="{:.1}" height="8" fill="#444"/>"##,
-                        y - 4.0, (x2 - x1).max(1.0)
+                        y - 4.0,
+                        (x2 - x1).max(1.0)
                     ));
                 }
             }
@@ -180,7 +181,11 @@ pub fn plot_gene_transcripts_with_options(
                 continue;
             }
 
-            let key = (feature.label.clone(), feature.signature.clone(), blocks.clone());
+            let key = (
+                feature.label.clone(),
+                feature.signature.clone(),
+                blocks.clone(),
+            );
             if !seen_features.insert(key) {
                 continue;
             }
@@ -227,7 +232,12 @@ pub fn plot_gene_transcripts_with_options(
             ));
         }
 
-        let row_key = tx.names.iter().find(|x| x.starts_with("ENST")).map(String::as_str).unwrap_or(name);
+        let row_key = tx
+            .names
+            .iter()
+            .find(|x| x.starts_with("ENST"))
+            .map(String::as_str)
+            .unwrap_or(name);
         if let Some(notes) = options.row_notes.get(row_key) {
             let rx = w - right + 25.0;
             for (ni, note) in notes.iter().enumerate() {

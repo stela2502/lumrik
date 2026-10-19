@@ -4,7 +4,12 @@ use ndarray::Array2;
 ///
 /// These labels are only seeds for the existing mean-expression merge.  They
 /// deliberately carry no biological meaning by themselves.
-pub(crate) fn spatial_patches(pca: &Array2<f32>, explained: &[f64], min_cells: usize, fraction: f64) -> Vec<usize> {
+pub(crate) fn spatial_patches(
+    pca: &Array2<f32>,
+    explained: &[f64],
+    min_cells: usize,
+    fraction: f64,
+) -> Vec<usize> {
     let n = pca.nrows();
     if n == 0 {
         return Vec::new();
@@ -134,13 +139,16 @@ mod tests {
     #[test]
     fn patch_size_can_be_controlled_externally() {
         let mut pca = Array2::<f32>::zeros((1000, 2));
-        for i in 0..1000 { pca[(i, 0)] = i as f32; }
+        for i in 0..1000 {
+            pca[(i, 0)] = i as f32;
+        }
         let labels = spatial_patches(&pca, &[0.9, 0.1], 100, 0.0);
         let k = labels.iter().copied().max().unwrap() + 1;
         assert_eq!(k, 16);
         let mut sizes = vec![0; k];
-        for label in labels { sizes[label] += 1; }
+        for label in labels {
+            sizes[label] += 1;
+        }
         assert!(sizes.iter().all(|&n| n <= 100));
     }
-
 }

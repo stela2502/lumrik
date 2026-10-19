@@ -203,7 +203,8 @@ mod tests {
 
     #[test]
     fn resolves_current_exprs_and_clonomap_from_sample_root() {
-        let root = std::env::temp_dir().join(format!("sc_analysis_norn_contract_{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("sc_analysis_norn_contract_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let exprs = root.join("filtered/exprs");
         fs::create_dir_all(&exprs).unwrap();
@@ -218,15 +219,36 @@ mod tests {
         ).unwrap();
 
         assert_eq!(resolve_exonic(&root).unwrap(), exprs);
-        assert_eq!(resolve_clonomap_cells(&root).unwrap(), clonomap.join("cells.tsv"));
-        let block = load_clonomap(&root, &["CELL_A".into(), "CELL_B".into()]).unwrap().unwrap();
-        let family = block.headers.iter().position(|x| x == "clonomap_family").unwrap();
+        assert_eq!(
+            resolve_clonomap_cells(&root).unwrap(),
+            clonomap.join("cells.tsv")
+        );
+        let block = load_clonomap(&root, &["CELL_A".into(), "CELL_B".into()])
+            .unwrap()
+            .unwrap();
+        let family = block
+            .headers
+            .iter()
+            .position(|x| x == "clonomap_family")
+            .unwrap();
         assert_eq!(block.columns[family], ["HC_1", ""]);
-        let lc = block.headers.iter().position(|x| x == "clonomap_lc_clone").unwrap();
+        let lc = block
+            .headers
+            .iter()
+            .position(|x| x == "clonomap_lc_clone")
+            .unwrap();
         assert_eq!(block.columns[lc], ["LC_2", ""]);
-        let hc_id = block.headers.iter().position(|x| x == "clonomap_hc_recombination_id").unwrap();
+        let hc_id = block
+            .headers
+            .iter()
+            .position(|x| x == "clonomap_hc_recombination_id")
+            .unwrap();
         assert_eq!(block.columns[hc_id], ["HC:abc123", ""]);
-        let lc_id = block.headers.iter().position(|x| x == "clonomap_lc_recombination_id").unwrap();
+        let lc_id = block
+            .headers
+            .iter()
+            .position(|x| x == "clonomap_lc_recombination_id")
+            .unwrap();
         assert_eq!(block.columns[lc_id], ["LC:def456", ""]);
         fs::remove_dir_all(&root).unwrap();
     }

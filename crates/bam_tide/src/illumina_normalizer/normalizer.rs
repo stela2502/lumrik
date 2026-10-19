@@ -6,9 +6,9 @@ use read_tag_table::{ReadTagRecord, ReadTagTable};
 
 use anyhow::{Context, Result, bail};
 use int_to_dna::IntToDna;
-use run_stats::RunStats;
 use onehot_dna::OneHotSequence;
 use rayon::prelude::*;
+use run_stats::RunStats;
 use sc_primer::PrimerDetector;
 use scdata::{GeneUmiHash, Scdata, ScdataInsertState};
 

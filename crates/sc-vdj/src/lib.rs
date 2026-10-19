@@ -14,9 +14,8 @@ pub mod recombination;
 pub mod runner;
 
 pub use cellrep::{
-    AlignmentGeometry, BamFeatureEvidence,
-    BamFeatureSequenceParts, CellEvidence, CellEvidenceVdj, EvidenceId, MapperEvidence,
-    RawBamFeatureEvidence, RawCellEvidence, SequencePart,
+    AlignmentGeometry, BamFeatureEvidence, BamFeatureSequenceParts, CellEvidence, CellEvidenceVdj,
+    EvidenceId, MapperEvidence, RawBamFeatureEvidence, RawCellEvidence, SequencePart,
 };
 pub use index::{
     Chain, SegmentId, SegmentKind, Strand, VdjIndex, VdjIndexBuilder, VdjSegment,

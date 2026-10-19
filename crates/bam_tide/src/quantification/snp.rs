@@ -1,9 +1,9 @@
 //snp.rs
 use anyhow::{Context, Result};
+use run_stats::RunStats;
 use scdata::QuantData;
 use scdata::cell_data::GeneUmiHash;
 use snp_index::{AlignedRead, SnpIndex, VcfReadOptions};
-use run_stats::RunStats;
 
 pub struct SnpSideChannel {
     pub index: SnpIndex,
@@ -52,11 +52,23 @@ impl SnpSideChannel {
         }
 
         for snp_id in ref_ids {
-            data.try_insert(QuantData::SNP_REF, &cell, GeneUmiHash(snp_id, umi), 1.0, report);
+            data.try_insert(
+                QuantData::SNP_REF,
+                &cell,
+                GeneUmiHash(snp_id, umi),
+                1.0,
+                report,
+            );
         }
 
         for snp_id in alt_ids {
-            data.try_insert(QuantData::SNP_ALT, &cell, GeneUmiHash(snp_id, umi), 1.0, report);
+            data.try_insert(
+                QuantData::SNP_ALT,
+                &cell,
+                GeneUmiHash(snp_id, umi),
+                1.0,
+                report,
+            );
         }
 
         report.report("snp hit");
