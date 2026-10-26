@@ -1,6 +1,7 @@
 //! Portable cluster centroids. Apply never updates a trained model.
 use anyhow::{Context, Result, ensure};
 use sc_analysis::SingleCellData;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -43,32 +44,20 @@ pub fn create(
     );
     let groups = data.annotations.groups(cluster)?;
     ensure!(!groups.is_empty(), "no clusters in {}", cluster);
-    let mut clusters = Vec::new();
-    for (name, indices) in groups {
-        if name.trim().is_empty() {
-            continue;
-        }
+    // Each centroid is independent. Keep the per-gene accumulation order unchanged.
+    let clusters: Vec<Centroid> = groups.into_par_iter().filter_map(|(name, indices)| {
+        if name.trim().is_empty() { return None; }
         let mut selected = vec![false; data.cells.len()];
-        for &i in &indices {
-            selected[i] = true;
-        }
+        for &i in &indices { selected[i] = true; }
         let mut means = vec![0.0; data.features.len()];
         for (g, row) in data.matrix.outer_iterator().enumerate() {
             for (c, v) in row.iter() {
-                if selected[c] {
-                    means[g] += f64::from(*v);
-                }
+                if selected[c] { means[g] += f64::from(*v); }
             }
         }
-        for m in &mut means {
-            *m = (*m / indices.len() as f64).max(0.0).ln_1p();
-        }
-        clusters.push(Centroid {
-            name,
-            n_cells: indices.len(),
-            log1p_mean: means,
-        });
-    }
+        for m in &mut means { *m /= indices.len() as f64; }
+        Some(Centroid { name, n_cells: indices.len(), log1p_mean: means })
+    }).collect();
     ensure!(!clusters.is_empty(), "no nonempty cluster labels");
     let modules = read_training_modules(&out.join("module_membership.tsv"))?;
     ensure!(
@@ -212,8 +201,8 @@ pub fn plot_frozen_modules(
         .annotations
         .column(condition)
         .with_context(|| format!("missing condition annotation {condition}"))?;
-    let case_set: std::collections::HashSet<&str> = cases.split(',').map(str::trim).collect();
-    let control_set: std::collections::HashSet<&str> = controls.split(',').map(str::trim).collect();
+    let case_set: std::collections::HashSet<&str> = cases.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let control_set: std::collections::HashSet<&str> = controls.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
     let mut groups: BTreeMap<String, (Vec<usize>, Vec<usize>)> = BTreeMap::new();
     for (i, (cl, co)) in clusters.iter().zip(conditions).enumerate() {
         let pair = groups.entry(cl.clone()).or_default();
@@ -328,100 +317,56 @@ pub fn apply(data: &SingleCellData, model_path: &Path, condition: &str, out: &Pa
         coverage * 100.0
     );
     std::fs::create_dir_all(out)?;
+    let quantified = crate::module_score::score(data, &model.modules)?;
+    let module_ids = &quantified.ids;
+    let module_columns: Vec<String> = module_ids.iter().map(|id| format!("module_{id}")).collect();
     let mut output = BufWriter::new(File::create(out.join("gene_model_scores.tsv"))?);
     write!(output, "cell")?;
-    for c in &model.clusters {
-        write!(output, "\t{}", c.name)?;
-    }
-    writeln!(output, "\tbest_cluster\tcondition")?;
+    for name in &module_columns { write!(output, "\t{name}")?; }
+    writeln!(output, "\tbest_module\tcondition")?;
     let mut summaries: BTreeMap<(String, usize), (usize, f64, f64)> = BTreeMap::new();
-    // Pearson across shared genes, using the fixed training centroids. No fitting on external labels.
-    let refs: Vec<Vec<f64>> = model
-        .clusters
-        .iter()
-        .map(|c| shared.iter().map(|(i, _)| c.log1p_mean[*i]).collect())
-        .collect();
-    let mut external = vec![vec![0.0f64; shared.len()]; data.cells.len()];
-    for (p, &(_, g)) in shared.iter().enumerate() {
-        if let Some(row) = data.matrix.outer_view(g) {
-            for (cell, v) in row.iter() {
-                external[cell][p] = f64::from(*v).max(0.0).ln_1p();
-            }
-        }
-    }
-    for (cell_index, (cell, values)) in data.cells.iter().zip(&external).enumerate() {
+    for (cell_index, cell) in data.cells.iter().enumerate() {
         write!(output, "{cell}")?;
-        let mut best = None;
-        for (i, reference) in refs.iter().enumerate() {
-            let score = pearson(values, reference);
-            if let Some(s) = score {
-                if best.map_or(true, |(_, b)| s > b) {
-                    best = Some((i, s));
-                }
-                let entry = summaries
-                    .entry((labels[cell_index].clone(), i))
-                    .or_default();
-                entry.0 += 1;
-                entry.1 += s;
-                entry.2 += s * s;
+        let mut best: Option<(usize, f64)> = None;
+        for (j, &id) in module_ids.iter().enumerate() {
+            let score = quantified.scores[cell_index][j];
+            write!(output, "\t{score:.6}")?;
+            if best.map_or(true, |(_, previous)| score > previous) {
+                best = Some((j, score));
             }
-            match score {
-                Some(s) => write!(output, "\t{s:.6}")?,
-                None => write!(output, "\tNA")?,
-            }
+            let entry = summaries.entry((labels[cell_index].clone(), id)).or_default();
+            entry.0 += 1;
+            entry.1 += score;
+            entry.2 += score * score;
         }
-        writeln!(
-            output,
-            "\t{}\t{}",
-            best.map(|(i, _)| model.clusters[i].name.as_str())
-                .unwrap_or("NA"),
-            labels[cell_index]
-        )?;
+        writeln!(output, "\t{}\t{}", best.map(|(j, _)| module_columns[j].as_str()).unwrap_or("NA"), labels[cell_index])?;
+    }
+    let mut raw = BufWriter::new(File::create(out.join("gene_model_module_means.tsv"))?);
+    write!(raw, "cell")?;
+    for name in &module_columns { write!(raw, "\t{name}")?; }
+    writeln!(raw)?;
+    for (cell, values) in data.cells.iter().zip(&quantified.module_means) {
+        write!(raw, "{cell}")?;
+        for value in values { write!(raw, "\t{value:.6}")?; }
+        writeln!(raw)?;
     }
     let mut summary = BufWriter::new(File::create(out.join("gene_model_condition_scores.tsv"))?);
-    writeln!(
-        summary,
-        "condition_column\tcondition\tmodel_cluster\tn_cells\tmean_score\tsd_score"
-    )?;
-    for ((label, i), (n, sum, sum_sq)) in summaries {
+    writeln!(summary, "condition_column\tcondition\tmodule\tn_cells\tmean_module_score\tsd_module_score")?;
+    for ((label, id), (n, sum, sum_sq)) in summaries {
         let mean = sum / n as f64;
         let sd = (sum_sq / n as f64 - mean * mean).max(0.0).sqrt();
-        writeln!(
-            summary,
-            "{condition}\t{label}\t{}\t{n}\t{mean:.6}\t{sd:.6}",
-            model.clusters[i].name
-        )?;
+        writeln!(summary, "{condition}\t{label}\tmodule_{id}\t{n}\t{mean:.6}\t{sd:.6}")?;
+    }
+    let mut module_coverage = BufWriter::new(File::create(out.join("gene_model_module_coverage.tsv"))?);
+    writeln!(module_coverage, "module\tmodel_genes\tobserved_genes")?;
+    for (id, (total, present)) in quantified.coverage {
+        writeln!(module_coverage, "module_{id}\t{total}\t{present}")?;
     }
     let mut info = BTreeMap::new();
     info.insert("model_genes", model.features.len());
     info.insert("overlapping_genes", shared.len());
     info.insert("cells", data.cells.len());
     serde_json::to_writer_pretty(File::create(out.join("gene_model_coverage.json"))?, &info)?;
-    println!(
-        "Applied {} fixed cluster centroids to {} cells ({:.1}% gene overlap): {}",
-        model.clusters.len(),
-        data.cells.len(),
-        coverage * 100.0,
-        out.display()
-    );
+    println!("Quantified {} frozen modules in {} cells ({:.1}% model gene overlap): {}", module_ids.len(), data.cells.len(), coverage * 100.0, out.display());
     Ok(())
-}
-fn pearson(a: &[f64], b: &[f64]) -> Option<f64> {
-    if a.len() != b.len() || a.is_empty() {
-        return None;
-    }
-    let n = a.len() as f64;
-    let (ma, mb) = (a.iter().sum::<f64>() / n, b.iter().sum::<f64>() / n);
-    let (mut aa, mut bb, mut ab) = (0.0, 0.0, 0.0);
-    for (&x, &y) in a.iter().zip(b) {
-        let (dx, dy) = (x - ma, y - mb);
-        aa += dx * dx;
-        bb += dy * dy;
-        ab += dx * dy;
-    }
-    if aa <= 0.0 || bb <= 0.0 {
-        None
-    } else {
-        Some((ab / (aa * bb).sqrt()).clamp(-1.0, 1.0))
-    }
 }

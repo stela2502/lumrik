@@ -182,11 +182,30 @@ pub fn resolve(
             observed
         );
     };
+    if references.is_empty() || comparisons.is_empty() {
+        anyhow::ensure!(
+            !references.is_empty() || !comparisons.is_empty(),
+            "both reference and comparison labels are empty; nothing to analyze"
+        );
+        if interactive && source != "saved" && old.is_none() {
+            let missing = if references.is_empty() { "reference" } else { "comparison" };
+            print!("No {missing} material selected. Continue with a one-sided analysis? [y/N]: ");
+            io::stdout().flush()?;
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            anyhow::ensure!(matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
+                "one-sided analysis not confirmed");
+        } else if source == "cli" {
+            eprintln!("[traconmech] WARNING: empty condition explicitly provided on CLI; one-sided analysis");
+        } else {
+            eprintln!("[traconmech] WARNING: reusing saved one-sided experiment design");
+        }
+    }
     let ref_set: BTreeSet<_> = references.iter().collect();
     let case_set: BTreeSet<_> = comparisons.iter().collect();
     anyhow::ensure!(
-        !ref_set.is_empty() && !case_set.is_empty() && ref_set.is_disjoint(&case_set),
-        "reference and comparison labels must be nonempty and disjoint"
+        ref_set.is_disjoint(&case_set),
+        "reference and comparison labels must be disjoint"
     );
     for name in ref_set.union(&case_set) {
         anyhow::ensure!(
@@ -238,4 +257,16 @@ pub fn record_references(out: &Path) -> Result<()> {
     }
     fs::write(path, serde_yaml::to_string(&experiment)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod one_sided_tests {
+    use super::labels;
+
+    #[test]
+    fn empty_group_is_explicitly_representable() {
+        assert!(labels("").is_empty());
+        assert!(labels(" , , ").is_empty());
+        assert_eq!(labels("DBA1_3, DBA1_2, DBA1_3"), vec!["DBA1_2", "DBA1_3"]);
+    }
 }

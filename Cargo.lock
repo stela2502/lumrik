@@ -3797,15 +3797,18 @@ dependencies = [
  "anyhow",
  "clap",
  "flate2",
+ "hdf5",
  "hmm",
  "ndarray 0.15.6",
  "ommverse",
+ "plotters",
  "rayon",
  "sc-analysis",
  "sc_anndata",
  "serde",
  "serde_json",
  "serde_yaml",
+ "statrs",
 ]
 
 [[package]]

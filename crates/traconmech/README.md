@@ -53,3 +53,14 @@ cargo run -r -p traconmech -- --list-contracts
 The interactive browser, file attachments, typed Ollama response validation,
 callback execution and persistent approved annotations are **not implemented
 yet**. See [AI_CONTRACT.md](AI_CONTRACT.md) for the normative design.
+
+## Scientific methods handbook
+
+The [TraConMech methods handbook](docs/README.md) documents the implemented
+regulatory investigation, gene-model training and application, module scoring,
+trajectories, Welch tests and Bonferroni correction. See the
+[chapter index](docs/SUMMARY.md) for a book-style reading order.
+
+The handbook distinguishes measured mean log1p module expression from
+background-corrected AddModuleScore-style scores and describes important
+limitations of cell-level inference.

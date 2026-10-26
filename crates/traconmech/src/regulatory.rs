@@ -220,86 +220,28 @@ pub fn run(c: Config<'_>) -> Result<()> {
             entry.1.push(i);
         }
     }
-    // Resolve a WT reference independently for EACH Louvain population.
-    // Prefer its own WT cells; only substitute if fewer than min_wt_cells.
-    // Rank alternatives by their reference-only profiles, never pooled cases.
-    if c.min_wt_cells == 0 {
-        bail!("--min-wt-cells must be positive");
-    }
-    let mut reference_profiles = BTreeMap::new();
-    for (cluster, (_, wt_cells)) in &groups {
-        if wt_cells.len() >= c.min_wt_cells {
-            reference_profiles.insert(cluster.clone(), crate::wt_match::profile(c.data, wt_cells));
-        }
-    }
+    // Never substitute WT cells from another population. A single observed WT
+    // cell is a valid descriptive reference; uncertainty is reported separately.
+    // Populations without either condition cannot yield a within-cluster effect.
     let actual_groups = groups.clone();
     let mut reference_clusters = BTreeMap::new();
-    let mut effective_groups = groups.clone();
     let mut matching = BufWriter::new(File::create(c.out.join("wt_reference_clusters.tsv"))?);
-    writeln!(
-        matching,
-        "cluster\tcase_n\twithin_cluster_wt_n\twt_reference_cluster\twt_reference_n\tmethod\tpearson_log1p_mean"
-    )?;
-    let mut unresolved = Vec::new();
+    writeln!(matching, "cluster\tcase_n\twithin_cluster_wt_n\twt_reference_cluster\twt_reference_n\tmethod\tpearson_log1p_mean")?;
     for (cluster, (case_cells, wt_cells)) in &groups {
-        if case_cells.is_empty() {
-            continue;
-        }
-        let (reference, method, similarity) = if wt_cells.len() >= c.min_wt_cells {
-            (cluster.clone(), "same_cluster", Some(1.0))
+        if case_cells.is_empty() { continue; }
+        if wt_cells.is_empty() {
+            writeln!(matching, "{cluster}\t{}\t0\tNA\t0\tmissing_wt\tNA", case_cells.len())?;
         } else {
-            let source = crate::wt_match::profile(c.data, case_cells);
-            let candidate = groups
-                .iter()
-                .filter(|(other, (_, wt))| *other != cluster && wt.len() >= c.min_wt_cells)
-                .filter_map(|(other, _)| {
-                    let score = crate::wt_match::correlation(&source, &reference_profiles[other])?;
-                    Some((other, score))
-                })
-                .max_by(|(a, sa), (b, sb)| sa.total_cmp(sb).then_with(|| b.cmp(a)));
-            let Some((other, score)) = candidate else {
-                unresolved.push(cluster.clone());
-                writeln!(
-                    matching,
-                    "{cluster}\t{}\t{}\tNA\t0\tunresolved\tNA",
-                    case_cells.len(),
-                    wt_cells.len()
-                )?;
-                continue;
-            };
-            (other.clone(), "nearest_louvain", Some(score))
-        };
-        reference_clusters.insert(cluster.clone(), reference.clone());
-        let reference_cells = &groups[&reference].1;
-        effective_groups
-            .get_mut(cluster)
-            .expect("cluster present")
-            .1 = reference_cells.clone();
-        writeln!(
-            matching,
-            "{cluster}\t{}\t{}\t{reference}\t{}\t{method}\t{}",
-            case_cells.len(),
-            wt_cells.len(),
-            reference_cells.len(),
-            similarity
-                .map(|x| x.to_string())
-                .unwrap_or_else(|| "NA".into())
-        )?;
+            reference_clusters.insert(cluster.clone(), cluster.clone());
+            writeln!(matching, "{cluster}\t{}\t{}\t{cluster}\t{}\tsame_cluster\t1", case_cells.len(), wt_cells.len(), wt_cells.len())?;
+        }
     }
-    // All downstream STRING partner statistics, target effects and gene modules
-    // use the resolved WT references, never the undersampled original WT cells.
-    for cluster in &unresolved {
-        effective_groups.remove(cluster);
-    }
-    if groups.values().any(|(cases, _)| !cases.is_empty())
-        && effective_groups.values().all(|(cases, _)| cases.is_empty())
-    {
-        bail!("no populations have an adequate reference; see wt_reference_clusters.tsv");
-    }
-    let groups = effective_groups;
+    // Preserve every observed measurement; only omit comparisons without both
+    // genotypes, where a numerical effect would be fabricated.
+    groups.retain(|_, (case_cells, wt_cells)| !case_cells.is_empty() && !wt_cells.is_empty());
     for cluster in c.co_variant {
         if !groups.contains_key(cluster) {
-            bail!("unknown or unresolved co-variant cluster {cluster}");
+            bail!("co-variant cluster {cluster} has no within-cluster case/WT comparison");
         }
     }
     // STRING info file: protein_external_id, preferred_name, protein_size, annotation.
@@ -901,7 +843,7 @@ pub fn run(c: Config<'_>) -> Result<()> {
     for (file, description) in [
         (
             "wt_reference_clusters.tsv",
-            "Per-population reference selection and fallback",
+            "Observed within-population WT references (no substitution)",
         ),
         ("closest_wt_clusters.tsv", "Reference candidate ranking"),
         (

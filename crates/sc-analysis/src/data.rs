@@ -153,31 +153,11 @@ impl SingleCellData {
             if let Column::Categorical { categories, .. } = column {
                 categorical_levels.insert(name.clone(), categories.clone());
             }
-            let values = match column {
-                Column::String(values) => values.clone(),
-                Column::F64(values) => values.iter().map(ToString::to_string).collect(),
-                Column::I64(values) => values.iter().map(ToString::to_string).collect(),
-                Column::Bool(values) => values.iter().map(ToString::to_string).collect(),
-                Column::Categorical {
-                    categories, codes, ..
-                } => codes
-                    .iter()
-                    .map(|&code| {
-                        if code == -1 {
-                            Ok("NA".to_string())
-                        } else {
-                            let idx = usize::try_from(code)
-                                .with_context(|| format!("negative categorical code {code}"))?;
-                            categories.get(idx).cloned().with_context(|| {
-                                format!(
-                                    "categorical code {code} exceeds {} levels",
-                                    categories.len()
-                                )
-                            })
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            };
+            // Legacy CellAnnotations stores text only; it uses "NA" for nulls.
+            // Column access itself preserves the distinction between null and literal "NA".
+            let values = (0..column.len())
+                .map(|row| column.get_string(row).unwrap_or_else(|| "NA".to_owned()))
+                .collect();
             columns.push((name.as_str(), values));
         }
         let mut annotations = CellAnnotations::from_columns(columns, n_cells)?;
@@ -356,6 +336,43 @@ mod h5ad_input_tests {
     fn converts_dense_anndata_with_correct_orientation() {
         let x = array![[5.0, 0.0, 2.0], [0.0, 7.0, 0.0]];
         assert_converted(SingleCellData::from_anndata(fixture(Matrix::DenseF32(x))).unwrap());
+    }
+
+    #[test]
+    fn converts_nullable_anndata_columns_without_losing_rows() {
+        let mut data = fixture(Matrix::DenseF32(array![
+            [5.0, 0.0, 2.0],
+            [0.0, 7.0, 0.0],
+        ]));
+        data.obs.add_column("nullable_text", Column::NullableString(vec![
+            Some("erythroid".into()), None,
+        ])).unwrap();
+        data.obs.add_column("nullable_integer", Column::NullableI64(vec![
+            Some(i64::MAX), None,
+        ])).unwrap();
+        data.obs.add_column("nullable_boolean", Column::NullableBool(vec![
+            Some(false), None,
+        ])).unwrap();
+
+        let converted = SingleCellData::from_anndata(data).unwrap();
+        assert_eq!(converted.annotations.column("nullable_text").unwrap(), ["erythroid", "NA"]);
+        assert_eq!(converted.annotations.column("nullable_integer").unwrap(), [i64::MAX.to_string(), "NA".into()]);
+        assert_eq!(converted.annotations.column("nullable_boolean").unwrap(), ["false", "NA"]);
+        assert_eq!(converted.cells, ["c1", "c2"]);
+        assert_eq!(converted.matrix.shape(), (3, 2));
+    }
+
+    #[test]
+    fn preserves_literal_na_and_empty_string_in_nullable_text() {
+        let mut data = fixture(Matrix::DenseF32(array![
+            [5.0, 0.0, 2.0],
+            [0.0, 7.0, 0.0],
+        ]));
+        data.obs.add_column("text", Column::NullableString(vec![
+            Some("NA".into()), Some(String::new()),
+        ])).unwrap();
+        let converted = SingleCellData::from_anndata(data).unwrap();
+        assert_eq!(converted.annotations.column("text").unwrap(), ["NA", ""]);
     }
 
     #[test]

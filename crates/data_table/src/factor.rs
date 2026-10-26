@@ -184,6 +184,15 @@ impl Factor {
     ///
     /// Special cases:
     /// - Empty strings or "NA" → return NaN.
+    /// Register a literal category, including "NA" and ""; missingness is NaN in the value column.
+    pub fn level_to_index_literal(&mut self, value: &str) -> f64 {
+        if let Some(&idx) = self.level_to_index.get(value) { return idx; }
+        let idx = self.levels.len() as f64;
+        self.levels.push(value.to_owned());
+        self.level_to_index.insert(value.to_owned(), idx);
+        self.index_to_level.insert(OrderedFloat(idx), value.to_owned());
+        idx
+    }
     pub fn level_to_index(&mut self, value: &str) -> f64 {
         let trimmed = value.trim();
 

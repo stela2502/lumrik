@@ -63,9 +63,7 @@ pub fn run(
     target: &str,
     min_wt: usize,
 ) -> Result<()> {
-    if min_wt == 0 {
-        bail!("--min-wt-cells must be positive");
-    }
+    let _ = min_wt; // Legacy CLI parameter; no minimum for observed WT cells.
     let clusters = require_annotation(data, cluster_col, "population")?;
     let conditions = require_annotation(data, condition_col, "condition")?;
     let cases = selected(case);
@@ -108,19 +106,11 @@ pub fn run(
             .total_cmp(&a.3.unwrap_or(f64::NEG_INFINITY))
             .then_with(|| a.0.cmp(&b.0))
     });
-    // Within-cluster comparison is always preferred when adequately sampled.
-    let reference = if target_control.len() >= min_wt {
-        target.to_owned()
-    } else {
-        candidates
-            .iter()
-            .filter(|(cluster, _, n, score)| cluster != target && *n >= min_wt && score.is_some())
-            .map(|(cluster, _, _, _)| cluster.clone())
-            .next()
-            .with_context(|| {
-                format!("no other Louvain cluster has >= {min_wt} selected WT cells")
-            })?
-    };
+    // Only observed WT cells from the requested cluster may be used.
+    if target_control.is_empty() {
+        bail!("target cluster {target} has no WT cells; cannot compute a within-cluster effect");
+    }
+    let reference = target.to_owned();
     let (_, reference_wt) = &groups[&reference];
     let wt_profile = profile(data, reference_wt);
     fs::create_dir_all(out)?;
@@ -134,7 +124,7 @@ pub fn run(
             ranks,
             "{target}\t{cluster}\t{case_n}\t{wt_n}\t{}\t{}\t{}",
             score.map(|x| x.to_string()).unwrap_or_else(|| "NA".into()),
-            wt_n >= &min_wt,
+            cluster == &reference,
             cluster == &reference
         )?;
     }
@@ -181,11 +171,7 @@ pub fn run(
         "[traconmech] DBA L{target}: {} cells; WT L{reference}: {} cells ({}); {} genes",
         target_case.len(),
         reference_wt.len(),
-        if reference == target {
-            "within-cluster"
-        } else {
-            "nearest eligible Louvain fallback"
-        },
+        "within-cluster",
         data.features.len()
     );
     Ok(())

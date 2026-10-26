@@ -49,40 +49,12 @@ pub fn summarize(data: &AnnData, grouping: &str, warnings: Vec<String>) -> Resul
         )
     })?;
     let mut groups = BTreeMap::new();
-    match column {
-        Column::Categorical {
-            categories, codes, ..
-        } => {
-            for &code in codes {
-                let label = if code == -1 {
-                    "NA"
-                } else {
-                    categories
-                        .get(code as usize)
-                        .map(String::as_str)
-                        .unwrap_or("NA")
-                };
-                *groups.entry(label.to_owned()).or_insert(0) += 1;
-            }
-        }
-        Column::String(values) => {
-            for value in values {
-                *groups.entry(value.clone()).or_insert(0) += 1;
-            }
-        }
-        Column::I64(values) => {
-            for value in values {
-                *groups.entry(value.to_string()).or_insert(0) += 1;
-            }
-        }
-        Column::Bool(values) => {
-            for value in values {
-                *groups.entry(value.to_string()).or_insert(0) += 1;
-            }
-        }
-        Column::F64(_) => {
-            bail!("grouping {grouping:?} is continuous; select a categorical annotation")
-        }
+    if matches!(column, Column::F64(_)) {
+        bail!("grouping {grouping:?} is continuous; select a categorical annotation");
+    }
+    for row in 0..column.len() {
+        let label = column.get_string(row).unwrap_or_else(|| "NA".to_owned());
+        *groups.entry(label).or_insert(0) += 1;
     }
     let (cells, genes) = data.x.shape();
     Ok(DatasetSummary {

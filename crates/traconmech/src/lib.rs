@@ -14,3 +14,5 @@ pub const TAGLINE: &str = "Trace Context to Mechanism";
 pub mod exprs;
 
 pub mod contracts;
+
+pub mod module_score;

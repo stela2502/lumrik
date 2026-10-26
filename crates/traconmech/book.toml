@@ -1,0 +1,11 @@
+[book]
+title = "TraConMech — Scientific Methods Handbook"
+authors = ["Stefan Lang"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+
+[output.html]
+mathjax-support = true

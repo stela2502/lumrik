@@ -2,6 +2,8 @@ mod cluster_profiles;
 mod experiment;
 mod gene_model;
 mod module_plots;
+mod model_umap;
+mod module_score;
 mod regulatory;
 mod wt_match;
 use anyhow::{Context, Result};
@@ -32,11 +34,11 @@ struct App {
 enum Mode {
     /// Run the existing sc-analyse CLI (all its options are forwarded).
     Analysis(AnalysisCli),
-    /// TP53 -> STRING -> MSigDB regulatory analysis with per-cluster WT fallback.
+    /// TP53 -> STRING -> MSigDB regulatory analysis with observed within-cluster WT.
     Investigate(Cli),
     /// Full investigation with portable gene-model training or fixed-model projection.
     GeneModel(GeneModelCli),
-    /// Compare a case Louvain population to an adequate WT reference.
+    /// Compare a case Louvain population to its observed WT cells.
     MatchWt(Cli),
     /// Export population expression summaries and correlation tables.
     ProfileClusters(Cli),
@@ -81,13 +83,13 @@ struct InspectResultsCli {
 
 #[derive(Debug, Args)]
 struct Cli {
-    /// Compare case cells with WT in the same Louvain cluster; otherwise nearest eligible cluster.
+    /// Compare case cells only with observed WT in the same Louvain cluster.
     #[arg(long)]
     match_wt_clusters: bool,
     /// Louvain cluster containing the DBA population of interest.
     #[arg(long)]
     target_cluster: Option<String>,
-    /// Minimum WT cells required for a reference population.
+    /// Legacy option (ignored): all observed WT cells are used, even one.
     #[arg(long, default_value_t = 100)]
     min_wt_cells: usize,
 
@@ -280,7 +282,7 @@ struct GeneLocus {
 }
 
 fn main() -> Result<()> {
-    let mut cli = match App::parse().mode {
+    let cli = match App::parse().mode {
         Mode::Analysis(args) => {
             return run_analysis(args);
         }
@@ -334,6 +336,10 @@ fn main() -> Result<()> {
                 cli.min_wt_cells,
                 cli.non_interactive,
             )?;
+            let one_sided = design.cases.is_empty() || design.controls.is_empty();
+            if one_sided && !create {
+                eprintln!("[traconmech] WARNING: one condition absent; skipping differential regulatory analysis. Frozen-model scores and available-condition plots will still be generated.");
+            } else {
             regulatory::run(regulatory::Config {
                 gene: cli.investigate_gene.as_deref().unwrap(),
                 index: cli.ommverse.as_deref().unwrap(),
@@ -360,7 +366,10 @@ fn main() -> Result<()> {
                 },
                 ai_primer: cli.ai_primer.as_deref(),
             })?;
-            experiment::record_references(&cli.out)?;
+            }
+            if !one_sided || create {
+                experiment::record_references(&cli.out)?;
+            }
             if create {
                 gene_model::create(
                     &data,
@@ -371,6 +380,9 @@ fn main() -> Result<()> {
                 )?;
             } else {
                 gene_model::apply(&data, &model_path, &cli.condition, &cli.out)?;
+                if input.is_file() {
+                    model_umap::write(&data, input, &cli.out, cli.cluster.as_deref().unwrap_or(&cli.group))?;
+                }
                 gene_model::plot_frozen_modules(
                     &data,
                     &model_path,

@@ -89,25 +89,34 @@ pub(crate) fn resample_surviving(
             let draw = uniform01(&mut state);
             let value = base + i64::from(draw < frac);
             sum += value;
-            // Positive priority: a rounded-up count is easier to decrement
-            // when draw was close to frac; a rounded-down count is easier to
-            // increment when draw was close to frac.
-            rounded.push((g, value, frac - draw));
+            // Store the fractional part: correction minimizes the change in
+            // absolute rounding error, independently of the random draw.
+            rounded.push((g, value, frac, value > base));
         }
         let delta = target as i64 - sum;
         if delta > 0 {
+            // Adding to a rounded-down gene costs 1 - 2*frac in
+            // absolute error; choose the largest fractional parts first.
             rounded.sort_unstable_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
-            for item in rounded.iter_mut().take(delta as usize) {
-                item.1 += 1;
+            let mut need = delta as usize;
+            for item in &mut rounded {
+                if need == 0 { break; }
+                if !item.3 {
+                    item.1 += 1;
+                    need -= 1;
+                }
             }
+            anyhow::ensure!(need == 0, "resampling correction failed for cell {cell}");
         } else if delta < 0 {
+            // Removing from a rounded-up gene costs 2*frac - 1 in
+            // absolute error; choose the smallest fractional parts first.
             rounded.sort_unstable_by(|a, b| a.2.total_cmp(&b.2).then(a.0.cmp(&b.0)));
             let mut need = (-delta) as usize;
             for item in &mut rounded {
                 if need == 0 {
                     break;
                 }
-                if item.1 > 0 {
+                if item.3 {
                     item.1 -= 1;
                     need -= 1;
                 }
@@ -115,7 +124,7 @@ pub(crate) fn resample_surviving(
             anyhow::ensure!(need == 0, "resampling correction failed for cell {cell}");
         }
         debug_assert_eq!(rounded.iter().map(|x| x.1).sum::<i64>(), target as i64);
-        for (g, value, _) in rounded {
+        for (g, value, _, _) in rounded {
             if value > 0 {
                 tri.add_triplet(g, cell, value as f32);
             }

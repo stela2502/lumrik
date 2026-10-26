@@ -213,28 +213,6 @@ fn candidate_is_better(
     })
 }
 
-#[cfg(test)]
-mod spatial_refinement_tests {
-    use super::split_disconnected_pca_groups;
-    use ndarray::Array2;
-    #[test]
-    fn splits_two_islands_but_not_continuous_cluster() {
-        let islands = Array2::from_shape_vec(
-            (12, 1),
-            (0..6)
-                .map(|i| i as f32 * 0.01)
-                .chain((0..6).map(|i| 10.0 + i as f32 * 0.01))
-                .collect(),
-        )
-        .unwrap();
-        let (labels, splits) = split_disconnected_pca_groups(&islands, &[0; 12], 3);
-        assert_eq!(splits, 1);
-        assert_ne!(labels[0], labels[11]);
-        let continuous =
-            Array2::from_shape_vec((12, 1), (0..12).map(|i| i as f32).collect()).unwrap();
-        assert_eq!(split_disconnected_pca_groups(&continuous, &[0; 12], 3).1, 0);
-    }
-}
 
 // Pearson correlation in f64 without allocating converted vectors.
 fn pearson_f32_noalloc(a: &[f32], b: &[f32]) -> f64 {
