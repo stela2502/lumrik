@@ -15,6 +15,7 @@ const TILE_BASES: usize = 48;
 const TILE_STEP: usize = 24;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

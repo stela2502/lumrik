@@ -12,6 +12,7 @@ use nelrune::progress::RunProgress;
 use sc_primer::PrimerCli;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Prepare mapper-ready single-cell FASTQ shards without running STAR")]
 pub struct PrepareFastqsCli {
     #[arg(long, num_args = 1..)]

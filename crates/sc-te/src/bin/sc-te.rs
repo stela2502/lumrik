@@ -10,6 +10,7 @@ use flate2::write::GzEncoder;
 use sc_te::convert_ucsc_rmsk_to_gtf;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "sc-te",
     about = "Utilities for single-cell transposable-element analysis"

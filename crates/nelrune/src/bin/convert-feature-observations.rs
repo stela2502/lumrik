@@ -7,6 +7,7 @@ use clap::Parser;
 /// Convert the legacy observation-only feature file into the self-contained
 /// feature_observations.bin format consumed by current nelrune quant.
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "convert-feature-observations",
     about = "Convert legacy Nelrune feature_observations.bin to the self-contained format"

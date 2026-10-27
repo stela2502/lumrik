@@ -6,6 +6,7 @@ use clap::Parser;
 use sc_vdj::{NelruneIdentityResolver, VdjIndex, VdjIndexBuilder, VdjRunner, VdjRunnerConfig};
 use std::path::PathBuf;
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

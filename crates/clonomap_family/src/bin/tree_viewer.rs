@@ -16,6 +16,10 @@ struct SimpleNode {
 
 /// Entry point
 fn main() -> Result<(), Box<dyn Error>> {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("tree_viewer {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: tree_viewer <tree.newick> [output.svg]");

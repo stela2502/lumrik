@@ -14,6 +14,7 @@ use sc_te::TeIndex;
 use scdata::FeatureIndex;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "nelrune-te-tests",
     about = "Inspect a 10x BAM against a prebuilt TE splice index before TE rescue/EM"

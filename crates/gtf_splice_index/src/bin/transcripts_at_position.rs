@@ -4,6 +4,7 @@ use gtf_splice_index::IdNameKeys;
 use gtf_splice_index::SpliceIndex;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "ommverse",
     about = "Build and explore Lumrik's integrated biological reference model"

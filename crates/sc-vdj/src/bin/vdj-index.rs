@@ -3,6 +3,7 @@ use clap::Parser;
 use sc_vdj::VdjIndexBuilder;
 use std::path::PathBuf;
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

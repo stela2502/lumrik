@@ -52,6 +52,7 @@ impl InsertRead {
 }
 
 #[derive(Debug, Clone, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

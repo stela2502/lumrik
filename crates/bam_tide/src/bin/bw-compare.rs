@@ -36,6 +36,7 @@ type BwReader = BigWigRead<ReopenableFile>;
 /// If --outfile is not given, a report file will be created automatically:
 ///   bw_compare_<rust_basename>_w<bin_width>.txt
 #[derive(Parser, Debug)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

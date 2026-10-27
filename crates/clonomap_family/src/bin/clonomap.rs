@@ -26,6 +26,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Parser, Debug)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "clonomap",
     author,

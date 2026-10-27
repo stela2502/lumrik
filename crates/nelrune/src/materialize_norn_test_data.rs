@@ -18,6 +18,7 @@ const VDJ_GENES: &[&str] = &[
 const LOCUS_SPACER: usize = 101;
 
 #[derive(Parser, Debug)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "nelrune materialize-norn-test-data",
     about = "Materialize the tiny real-biological Norn end-to-end fixture"

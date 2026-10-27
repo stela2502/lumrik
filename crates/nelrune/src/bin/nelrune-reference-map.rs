@@ -7,6 +7,7 @@ use sc_mapper::{MappingCall, StreamingMapper, StreamingMapperCli};
 use std::{fs, path::PathBuf};
 
 #[derive(Parser, Debug)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

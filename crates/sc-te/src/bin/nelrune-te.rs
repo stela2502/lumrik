@@ -14,6 +14,7 @@ use sc_te::{TeCollector, TeIndex};
 use scdata::Scdata;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "nelrune-te",
     about = "Posterior TE rescue from a queryname-sorted 10x BAM"

@@ -16,6 +16,7 @@ use bam_tide::quantification::{
 use gtf_splice_index::{SpliceIndex, SpliceMatchMode};
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

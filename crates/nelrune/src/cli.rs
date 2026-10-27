@@ -9,6 +9,7 @@ use sc_mapper::StreamingMapperCli;
 use sc_primer::PrimerCli;
 
 #[derive(Parser, Debug)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

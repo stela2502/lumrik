@@ -13,6 +13,7 @@ const DEFAULT_BD_AIRR: &str =
     "/home/med-sal/sens05_shared/jyuan/no_backup/giorgia_VDJ_single_cell_2026_06_01/db_pipeline_B_cell_run/B_cells_VDJ_Dominant_Contigs_AIRR.tsv";
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "compare-to-airr-bd",
     about = "Disposable development comparator for Lumrik sc-vdj versus BD Rhapsody AIRR"

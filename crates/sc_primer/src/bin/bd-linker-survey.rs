@@ -10,6 +10,7 @@ const LINKER1: &[u8; 4] = b"GTGA";
 const LINKER2: &[u8; 4] = b"GACA";
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

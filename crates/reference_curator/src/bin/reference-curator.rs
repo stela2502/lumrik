@@ -4,6 +4,7 @@ use reference_curator::{CandidateFilter, ReferenceCurator};
 use std::path::PathBuf;
 
 #[derive(Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "reference-curator",
     about = "Inspect and export Lumrik's persistent reference curation store"

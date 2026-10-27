@@ -3,6 +3,7 @@ use clap::Parser;
 use read_tag_table::{PairStats, ReadTagTable, ReadTagTableCli, Summary};
 
 #[derive(Parser, Debug)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

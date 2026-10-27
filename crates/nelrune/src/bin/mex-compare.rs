@@ -17,6 +17,7 @@ enum OtherProducer {
 }
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "mex-compare",
     about = "Compare a Nelrune Gene Expression MEX matrix with BD Rhapsody or 10x output"

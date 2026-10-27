@@ -18,6 +18,7 @@ use sc_primer::{BdCellVersion, Chemistry, PrimerCli, RhapsodyWhitelist};
 use scdata::QuantData;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Quantify a STAR BAM and integrate FASTQ-derived Nelrune observations")]
 pub struct QuantCli {
     #[arg(long, num_args = 1..)]

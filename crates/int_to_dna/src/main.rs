@@ -2,6 +2,7 @@ use clap::Parser;
 use int_to_dna::int_to_dna::IntToDna;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

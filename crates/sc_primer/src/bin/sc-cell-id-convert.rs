@@ -26,6 +26,7 @@ impl Chemistry {
 }
 
 #[derive(Parser, Debug)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Convert a nucleotide barcode column in a TSV to numeric BD/Rustody cell IDs")]
 struct Args {
     #[arg(long)]

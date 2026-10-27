@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 fn main() -> anyhow::Result<()> {
     let matches = Command::new("generate_json")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Stefan Lang <you@example.com>")
         .about(
             "Convert a Seurat or AnnData 'meta.tsv' file into a JSON description \

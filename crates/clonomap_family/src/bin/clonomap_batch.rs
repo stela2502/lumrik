@@ -12,6 +12,7 @@ use clonomap::ClonoMap;
 // CLI
 // ============================================================
 #[derive(Parser, Debug)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

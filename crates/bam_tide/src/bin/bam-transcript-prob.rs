@@ -14,6 +14,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

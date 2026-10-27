@@ -12,6 +12,7 @@ pub enum AnalysisType {
 
 /// Shared CLI options for coverage exporters (bedGraph / bigWig)
 #[derive(Parser, Debug, Clone)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

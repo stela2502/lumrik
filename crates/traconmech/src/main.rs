@@ -21,6 +21,7 @@ mod ai;
 
 /// Every analysis mode is explicit. No flag can silently select another mode.
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     name = "traconmech",
     about = "Trace biological context to candidate mechanisms"
@@ -31,6 +32,7 @@ struct App {
 }
 
 #[derive(Debug, Subcommand)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 enum Mode {
     /// Run the existing sc-analyse CLI (all its options are forwarded).
     Analysis(AnalysisCli),

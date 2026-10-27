@@ -4,6 +4,7 @@ use sc_primer::PrimerCli;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,

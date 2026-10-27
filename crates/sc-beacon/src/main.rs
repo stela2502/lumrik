@@ -11,6 +11,7 @@ use cli::GuideModelCli;
 use sc_beacon::run_from_scdata;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
     author,
     version,
