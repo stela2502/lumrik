@@ -123,10 +123,9 @@ pub fn write_module_plots_named(
     let mut tsv = BufWriter::new(File::create(
         out.join(format!("module_trajectories{suffix}.tsv")),
     )?);
-    writeln!(
-        tsv,
-        "module\tcluster\tcondition\tgenes\tmean_log1p\tsd\tse\tci95_low\tci95_high\tn_cells\tcase_n\tcontrol_n\tdelta_mut_minus_wt\twelch_t\twelch_df\tp_raw\tp_bonferroni\tbonferroni_factor"
-    )?;
+    // One row per module and category: both plotted groups and the comparison
+    // are kept together, avoiding duplicated test results in a long-form table.
+    writeln!(tsv, "module\tcluster\tgenes\tcontrol_label\tcase_label\tcontrol_mean_log1p\tcontrol_sd\tcontrol_se\tcontrol_ci95_low\tcontrol_ci95_high\tcontrol_count\tcase_mean_log1p\tcase_sd\tcase_se\tcase_ci95_low\tcase_ci95_high\tcase_count\tactual_control_count\tactual_case_count\tdelta_case_minus_control\twelch_t\twelch_df\tp_raw\tp_bonferroni\tbonferroni_factor")?;
     let quantified = crate::module_score::score(data, modules)?;
     // One correction family covers every module x phase in this output run.
     // Include untestable combinations in the factor (conservative and stable).
@@ -149,25 +148,29 @@ pub fn write_module_plots_named(
         let mut highs = means.clone();
         let tests: Vec<_> = values.iter().map(|v| welch_test(&v[0], &v[1])).collect();
         for (i, cluster) in ordered.iter().enumerate() {
-            let (cases, controls) = &groups[cluster];
+            let mut stats = Vec::with_capacity(2);
             for j in 0..2 {
                 let v = &values[i][j];
                 let (mean, sd, se, low, high) = cell_stats(v);
                 means[i][j] = mean;
                 lows[i][j] = low;
                 highs[i][j] = high;
-                let test = tests[i];
-                let adjusted = test.map(|(_, _, _, p)| (p * bonferroni_factor as f64).min(1.0));
-                writeln!(tsv, "{module}\t{cluster}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                    if j == 0 { control_label } else { case_label },
-                    genes.len(), fmt(mean), fmt(sd), fmt(se), fmt(low), fmt(high),
-                    v.len(), cases.len(), controls.len(),
-                    test.map_or("NA".to_owned(), |t| fmt(t.0)),
-                    test.map_or("NA".to_owned(), |t| fmt(t.1)),
-                    test.map_or("NA".to_owned(), |t| fmt(t.2)),
-                    test.map_or("NA".to_owned(), |t| fmt(t.3)),
-                    adjusted.map_or("NA".to_owned(), fmt), bonferroni_factor)?;
+                stats.push([fmt(mean), fmt(sd), fmt(se), fmt(low), fmt(high), v.len().to_string()]);
             }
+            let test = tests[i];
+            let adjusted = test.map(|(_, _, _, p)| (p * bonferroni_factor as f64).min(1.0));
+            let (actual_cases, actual_controls) = actual_groups.get(cluster)
+                .map(|(cases, controls)| (cases.len(), controls.len()))
+                .unwrap_or((0, 0));
+            let mut fields = vec![module.to_string(), cluster.clone(), genes.len().to_string(), control_label.to_owned(), case_label.to_owned()];
+            fields.extend(stats[0].iter().cloned());
+            fields.extend(stats[1].iter().cloned());
+            fields.extend([actual_controls.to_string(), actual_cases.to_string()]);
+            for value in [test.map(|t| t.0), test.map(|t| t.1), test.map(|t| t.2), test.map(|t| t.3), adjusted] {
+                fields.push(value.map_or("NA".to_owned(), fmt));
+            }
+            fields.push(bonferroni_factor.to_string());
+            writeln!(tsv, "{}", fields.join("\t"))?;
         }
         let width = (ordered.len().max(2) as f64 * 115.0 + 190.0).max(660.0);
         // Long population names need vertical space below the plot. Rotate
@@ -217,11 +220,13 @@ pub fn write_module_plots_named(
             svg,
             "<text x=\"{left}\" y=\"51\" font-family=\"sans-serif\" font-size=\"12\" fill=\"#555\">Mean original log1p expression of module genes (including zeros)</text>"
         )?;
+        let tick_step = (ymax - ymin) / 4.0;
+        let precision = (0..=8).find(|&digits| tick_step * 10f64.powi(digits) >= 2.0).unwrap_or(8) as usize;
         for tick in 0..5 {
             let val = ymin + (ymax - ymin) * tick as f64 / 4.0;
             writeln!(
                 svg,
-                "<line x1=\"{left}\" y1=\"{}\" x2=\"{right}\" y2=\"{}\" stroke=\"#eee\"/><text x=\"{}\" y=\"{}\" text-anchor=\"end\" font-family=\"sans-serif\" font-size=\"11\">{val:.1}</text>",
+                "<line x1=\"{left}\" y1=\"{}\" x2=\"{right}\" y2=\"{}\" stroke=\"#eee\"/><text x=\"{}\" y=\"{}\" text-anchor=\"end\" font-family=\"sans-serif\" font-size=\"11\">{val:.precision$}</text>",
                 y(val),
                 y(val),
                 left - 9.0,

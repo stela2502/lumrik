@@ -522,3 +522,56 @@ source_tar:
 		--exclude='*.swp' \
 		"$(PROJECT)"
 	@du -h "$(TARFILE)"
+
+# Deploy the additional Nextflow pipelines using the same release/container
+# conventions as norn-deploy-sens. Do not touch existing analysis outputs.
+MIMIR_DIR := $(ROOT)/mimir
+VIDAR_DIR := $(ROOT)/vidar
+MIMIR_SENS := $(HOME)/sens05_home/mimir
+VIDAR_SENS := $(HOME)/sens05_home/vidar
+
+.PHONY: mimir-deploy-sens vidar-deploy-sens nextflow-deploy-sens
+
+mimir-deploy-sens:
+	@$(MAKE) nextflow-deploy-one PIPELINE=mimir PIPELINE_DIR="$(MIMIR_DIR)" PIPELINE_SENS="$(MIMIR_SENS)"
+
+vidar-deploy-sens:
+	@$(MAKE) nextflow-deploy-one PIPELINE=vidar PIPELINE_DIR="$(VIDAR_DIR)" PIPELINE_SENS="$(VIDAR_SENS)"
+
+# Internal reusable deploy target; the original Norn recipe is unchanged.
+.PHONY: nextflow-deploy-one
+nextflow-deploy-one:
+	@set -eu; \
+	name="$(PIPELINE)"; src="$(PIPELINE_DIR)"; dest="$(PIPELINE_SENS)"; \
+	[ -d "$$src/.git" ] || { echo "ERROR: $$src is not a Git repository"; exit 1; }; \
+	[ -f "$$src/main.nf" ] && [ -f "$$src/nextflow.config" ] || { echo "ERROR: missing Nextflow files in $$src"; exit 1; }; \
+	tag=$$(cd "$(LUMRIK_DIR)" && git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1); \
+	[ -n "$$tag" ] || { echo 'ERROR: no Lumrik release tag found'; exit 1; }; \
+	sif="$(SINGULARITY_LOCAL)/ghcr.io-stela2502-lumrik-$$tag.img"; \
+	[ -f "$$sif" ] || { echo "ERROR: missing container $$sif"; exit 1; }; \
+	config="$$src/nextflow.config"; \
+	current=$$(sed -n 's|.*ghcr.io/stela2502/lumrik:\(v[0-9][0-9.]*\).*|\1|p' "$$config" | head -n1); \
+	[ -n "$$current" ] || { echo "ERROR: no Lumrik version found in $$config"; exit 1; }; \
+	echo "=== Deploying $$name using Lumrik $$tag ==="; \
+	if [ "$$current" != "$$tag" ]; then \
+	  sed -i "s|ghcr.io/stela2502/lumrik:$$current|ghcr.io/stela2502/lumrik:$$tag|g" "$$config"; \
+	fi; \
+	grep -Fq "ghcr.io/stela2502/lumrik:$$tag" "$$config" || { echo 'ERROR: version update failed'; exit 1; }; \
+	cd "$$src"; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+	  git status --short; \
+	  printf 'Commit and push these changes? [y/N] '; read answer; \
+	  case "$$answer" in y|Y|yes|YES) git add -A; git commit -m "Deploy $$name with Lumrik $$tag"; git push origin HEAD ;; *) echo 'Aborted'; exit 1 ;; esac; \
+	fi; \
+	printf 'Deploy $$name to %s? [y/N] ' "$$dest"; read answer; \
+	case "$$answer" in y|Y|yes|YES) ;; *) echo 'Aborted'; exit 1 ;; esac; \
+	mkdir -p "$(SINGULARITY_SENS)" "$$dest"; \
+	rsync -r --progress "$$sif" "$(SINGULARITY_SENS)/"; \
+	rsync -r --delete --progress \
+	  --exclude='.git/' --exclude='.nextflow/' --exclude='.nextflow.log*' \
+	  --exclude='work/' --exclude='results/' --exclude='output/' \
+	  "$$src/" "$$dest/"; \
+	[ -f "$$dest/main.nf" ] && [ -f "$$dest/nextflow.config" ] || { echo 'ERROR: incomplete deployment'; exit 1; }; \
+	echo "Deployed $$name to $$dest"
+
+nextflow-deploy-sens: norn-deploy-sens mimir-deploy-sens vidar-deploy-sens
