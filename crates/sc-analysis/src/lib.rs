@@ -1,5 +1,9 @@
+pub mod split;
+pub mod annotate;
 mod bioinformatics;
 pub mod cli;
+pub mod module_score;
+pub mod cell_cycle;
 mod cluster;
 mod data;
 mod embedding;

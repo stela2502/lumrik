@@ -10,7 +10,7 @@ use plotters::style::TextStyle;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
 use rayon::prelude::*;
 use sc_anndata::{AnnData, Column, Matrix, Table};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -32,6 +32,7 @@ pub(crate) fn write_all(
     clonomap: Option<&ClonomapBlock>,
     pseudo_groups: usize,
     multiplet_fits: &[crate::multiplet::Fit],
+    variable_genes: &[usize],
 ) -> Result<()> {
     fs::create_dir_all(out)?;
     fs::create_dir_all(out.join("stats"))?;
@@ -52,6 +53,7 @@ pub(crate) fn write_all(
         Some(initial),
         Some(out),
     )?;
+    write_marker_expression_stats(&out.join("stats"), norm, labels, variable_genes)?;
     write_spatial_metadata(out, norm, labels, initial, spatial_raw)?;
     write_h5ad(
         out,
@@ -68,6 +70,69 @@ pub(crate) fn write_all(
         clonomap,
         multiplet_fits,
     )?;
+    // Annotation packaging is optional and must not invalidate the H5AD export.
+    if let Err(error) = crate::annotate::package(&out.join("stats")) {
+        eprintln!("WARNING: optional annotation package failed: {error:#}");
+    }
+    Ok(())
+}
+
+
+/// Quantiles are conditional on strictly positive expression. Sparse zeros
+/// contribute to n_cells and detection fractions, never to these quantiles.
+fn write_marker_expression_stats(dir: &Path, d: &SingleCellData, labels: &[usize], hvgs: &[usize]) -> Result<()> {
+    let mut genes: BTreeMap<usize, (bool, bool)> = BTreeMap::new();
+    for &g in hvgs { genes.insert(g, (true, false)); }
+    for filename in ["marker_summary.tsv", "marker_summary_general.tsv", "marker_summary_sparse_strong.tsv", "marker_summary_low_expression.tsv"] {
+        let contents = fs::read_to_string(dir.join(filename))?;
+        let mut lines = contents.lines();
+        let header: Vec<_> = lines.next().unwrap_or("").split('\t').collect();
+        let fields: Vec<usize> = header.iter().enumerate().filter(|(_, h)| h.starts_with("top") && (h.ends_with("_up") || h.ends_with("_down"))).map(|(i, _)| i).collect();
+        let lookup: BTreeMap<&str, usize> = d.features.iter().enumerate().map(|(i, g)| (g.as_str(), i)).collect();
+        for line in lines {
+            let cols: Vec<_> = line.split('\t').collect();
+            for &field in &fields {
+                if let Some(value) = cols.get(field) {
+                    for name in value.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+                        if let Some(&g) = lookup.get(name) { genes.entry(g).or_default().1 = true; }
+                    }
+                }
+            }
+        }
+    }
+    let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+    for (cell, &cluster) in labels.iter().enumerate() { groups.entry(cluster).or_default().push(cell); }
+    let mut writer = BufWriter::new(File::create(dir.join("marker_expression_stats.tsv"))?);
+    writeln!(writer, "cluster\tn_cells\tgene\tgene_source\tn_expressing\tpct_expressing\tmean_expressing\tq10\tq25\tmedian\tq75\tq90")?;
+    for (cluster, cells) in groups {
+        let membership: BTreeSet<usize> = cells.iter().copied().collect();
+        for (&g, &(variable, marker)) in &genes {
+            let mut positives: Vec<f32> = Vec::new();
+            if let Some(row) = d.matrix.outer_view(g) {
+                for (cell, &v) in row.iter() {
+                    if v > 0.0 && membership.contains(&cell) {
+                        positives.push(v);
+                    }
+                }
+            }
+            positives.sort_unstable_by(f32::total_cmp);
+            let n = positives.len();
+            let source = match (variable, marker) { (true, true) => "both", (true, false) => "variable", _ => "marker_summary" };
+            write!(writer, "cluster_{cluster:03}\t{}\t{}\t{}\t{}\t{:.8}\t", cells.len(), d.features[g], source, n, 100.0 * n as f64 / cells.len() as f64)?;
+            if n == 0 { writeln!(writer, "NA\tNA\tNA\tNA\tNA\tNA")?; continue; }
+            let mean = positives.iter().map(|&x| x as f64).sum::<f64>() / n as f64;
+            write!(writer, "{mean:.8}")?;
+            for q in [0.10, 0.25, 0.50, 0.75, 0.90] {
+                let idx = q * (n - 1) as f64;
+                let lo = idx.floor() as usize;
+                let hi = idx.ceil() as usize;
+                let v = positives[lo] as f64 + (positives[hi] as f64 - positives[lo] as f64) * idx.fract();
+                write!(writer, "\t{v:.8}")?;
+            }
+            writeln!(writer)?;
+        }
+    }
+    writer.flush()?;
     Ok(())
 }
 
@@ -159,6 +224,9 @@ fn write_h5ad(
         "spatial_patch_raw",
         "leiden_initial",
         "leiden_merged",
+        "S_score",
+        "G2M_score",
+        "phase",
     ];
     for name in d.annotations.headers() {
         if name == "cell" || generated.contains(&name.as_str()) {
@@ -246,6 +314,15 @@ fn write_h5ad(
         for (header, values) in c.headers.iter().zip(&c.columns) {
             obs.add_column(header.clone(), Column::String(values.clone()))?;
         }
+    }
+    match crate::cell_cycle::score(d) {
+        Ok(cc) => {
+            eprintln!("[sc-analyse] cell cycle: matched {}/43 S and {}/54 G2M genes", cc.s_matched, cc.g2m_matched);
+            obs.add_column("S_score", Column::F64(cc.s))?;
+            obs.add_column("G2M_score", Column::F64(cc.g2m))?;
+            obs.add_column("phase", Column::String(cc.phase))?;
+        }
+        Err(err) => eprintln!("[sc-analyse] WARNING: cell-cycle annotation skipped: {err}"),
     }
     let var = Table::new("_index", d.features.clone());
     let mut obsm = BTreeMap::new();
@@ -604,7 +681,22 @@ pub fn write_group_stats(
         "missing cluster assignment"
     );
     fs::create_dir_all(dir)?;
+    // Group-marker statistics are a standalone operation. In particular, do not
+    // invoke annotate::package(): that optional AI bundle also requires
+    // marker_expression_stats.tsv, which only the full GEX pipeline creates.
     write_stats(dir, data, &labels, pseudo_groups, None, None)?;
+    for name in [
+        "marker_summary.tsv",
+        "marker_summary_general.tsv",
+        "marker_summary_sparse_strong.tsv",
+        "marker_summary_low_expression.tsv",
+    ] {
+        anyhow::ensure!(
+            dir.join(name).is_file(),
+            "group marker statistics did not produce {}",
+            dir.join(name).display()
+        );
+    }
     let mut mapping = BufWriter::new(File::create(dir.join("cluster_labels.tsv"))?);
     writeln!(mapping, "cluster\t{grouping}")?;
     for (idx, name) in names.iter().enumerate() {
@@ -1009,6 +1101,9 @@ pub(crate) fn write_stats(
             root.flush()?;
         }
     }
+    // Make the four summaries available to an AI without requiring a separate script.
+    for file in descriptive_summaries.iter_mut() { file.flush()?; }
+    summary.flush()?;
     Ok(())
 }
 fn marker_score(d: &SingleCellData, genes: &[&str]) -> Vec<f64> {

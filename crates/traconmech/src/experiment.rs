@@ -76,9 +76,32 @@ fn ask(prompt: &str) -> Result<Vec<String>> {
     print!("{prompt}: ");
     io::stdout().flush()?;
     let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
+    anyhow::ensure!(io::stdin().read_line(&mut answer)? != 0, "input closed while selecting labels");
     Ok(labels(&answer))
 }
+// Unknown responses are not decisions: ask again, without losing prior work.
+fn confirm(prompt: &str, default_yes: bool) -> Result<bool> {
+    loop {
+        print!("{prompt} ");
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        anyhow::ensure!(io::stdin().read_line(&mut answer)? != 0, "input closed during confirmation");
+        match parse_confirmation(&answer, default_yes) {
+            Some(accepted) => return Ok(accepted),
+            None => eprintln!("Please answer Y or N."),
+        }
+    }
+}
+
+fn parse_confirmation(answer: &str, default_yes: bool) -> Option<bool> {
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Some(true),
+        "n" | "no" => Some(false),
+        "" => Some(default_yes),
+        _ => None,
+    }
+}
+
 /// Report every loaded /obs header when a requested annotation is unavailable.
 /// This also exposes undecoded H5AD columns, which may not be selectable.
 pub(crate) fn require_annotation<'a>(
@@ -118,7 +141,6 @@ pub fn resolve(
     for value in column {
         *observed.entry(value.clone()).or_insert(0usize) += 1;
     }
-    fs::create_dir_all(out)?;
     let file = out.join("experiment.yaml");
     let old: Option<Experiment> = if file.exists() {
         Some(
@@ -155,64 +177,78 @@ pub fn resolve(
     // Explicit CLI choices override saved selections. Otherwise reuse the
     // scientist-approved experiment.yaml; prompt only for a new experiment.
     let interactive = !non_interactive && io::stdin().is_terminal();
-    let (references, comparisons, source) = if cases.is_some() || controls.is_some() {
-        anyhow::ensure!(
-            cases.is_some() && controls.is_some(),
-            "specify both --case and --control, or neither"
-        );
-        (
-            labels(controls.unwrap()),
-            labels(cases.unwrap()),
-            "cli".to_owned(),
-        )
-    } else if let Some(previous) = &old {
-        (
-            previous.reference_conditions.clone(),
-            previous.comparison_conditions.clone(),
-            previous.decision_source.clone(),
-        )
-    } else if interactive {
-        eprintln!("Observed condition labels (cell counts): {observed:?}");
-        let references = ask("Reference labels (comma-separated, exact)")?;
-        let comparisons = ask("Comparison labels (comma-separated, exact)")?;
-        (references, comparisons, "scientist".to_owned())
-    } else {
-        bail!(
-            "experimental groups must be selected explicitly: run interactively or specify --case and --control (observed: {:?})",
-            observed
-        );
-    };
-    if references.is_empty() || comparisons.is_empty() {
-        anyhow::ensure!(
-            !references.is_empty() || !comparisons.is_empty(),
-            "both reference and comparison labels are empty; nothing to analyze"
-        );
-        if interactive && source != "saved" && old.is_none() {
-            let missing = if references.is_empty() { "reference" } else { "comparison" };
-            print!("No {missing} material selected. Continue with a one-sided analysis? [y/N]: ");
-            io::stdout().flush()?;
-            let mut answer = String::new();
-            io::stdin().read_line(&mut answer)?;
-            anyhow::ensure!(matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
-                "one-sided analysis not confirmed");
-        } else if source == "cli" {
-            eprintln!("[traconmech] WARNING: empty condition explicitly provided on CLI; one-sided analysis");
+    let mut correction = false;
+    let (references, comparisons, source) = loop {
+        let (references, comparisons, source) = if correction {
+            eprintln!("Observed condition labels (cell counts): {observed:?}");
+            (
+                ask("Reference labels (comma-separated, exact)")?,
+                ask("Comparison labels (comma-separated, exact)")?,
+                "scientist".to_owned(),
+            )
+        } else if cases.is_some() || controls.is_some() {
+            // An omitted side is intentionally empty, not a malformed CLI.
+            (
+                labels(controls.unwrap_or("")),
+                labels(cases.unwrap_or("")),
+                "cli".to_owned(),
+            )
+        } else if let Some(previous) = &old {
+            (
+                previous.reference_conditions.clone(),
+                previous.comparison_conditions.clone(),
+                previous.decision_source.clone(),
+            )
+        } else if interactive {
+            eprintln!("Observed condition labels (cell counts): {observed:?}");
+            (
+                ask("Reference labels (comma-separated, exact)")?,
+                ask("Comparison labels (comma-separated, exact)")?,
+                "scientist".to_owned(),
+            )
         } else {
-            eprintln!("[traconmech] WARNING: reusing saved one-sided experiment design");
+            eprintln!("[traconmech] WARNING: no experimental groups supplied; proceeding with empty groups");
+            (Vec::new(), Vec::new(), "batch-unspecified".to_owned())
+        };
+        let ref_set: BTreeSet<_> = references.iter().collect();
+        let case_set: BTreeSet<_> = comparisons.iter().collect();
+        let overlap: Vec<&str> = ref_set.intersection(&case_set).map(|s| s.as_str()).collect();
+        if !overlap.is_empty() {
+            eprintln!("[traconmech] ERROR: reference and comparison labels overlap: {}", overlap.join(", "));
+            if interactive {
+                correction = true;
+                continue;
+            }
+            bail!("reference and comparison labels must be disjoint");
         }
-    }
-    let ref_set: BTreeSet<_> = references.iter().collect();
-    let case_set: BTreeSet<_> = comparisons.iter().collect();
-    anyhow::ensure!(
-        ref_set.is_disjoint(&case_set),
-        "reference and comparison labels must be disjoint"
-    );
-    for name in ref_set.union(&case_set) {
-        anyhow::ensure!(
-            observed.contains_key(*name),
-            "unknown condition label {name:?}"
-        );
-    }
+        let unknown: Vec<&str> = ref_set.union(&case_set)
+            .filter(|name| !observed.contains_key(**name))
+            .map(|s| s.as_str()).collect();
+        if !unknown.is_empty() {
+            eprintln!("[traconmech] WARNING: supplied labels absent from dataset (ignored): {}", unknown.join(", "));
+        }
+        let unassigned: Vec<&str> = observed.keys()
+            .filter(|name| !ref_set.contains(name) && !case_set.contains(name))
+            .map(String::as_str).collect();
+        if !unassigned.is_empty() {
+            eprintln!("[traconmech] WARNING: dataset labels not assigned to either group: {}", unassigned.join(", "));
+        }
+        let effective_references: Vec<String> = references.into_iter()
+            .filter(|name| observed.contains_key(name)).collect();
+        let effective_comparisons: Vec<String> = comparisons.into_iter()
+            .filter(|name| observed.contains_key(name)).collect();
+        if effective_references.is_empty() || effective_comparisons.is_empty() {
+            if interactive {
+                eprintln!("[traconmech] No usable {} group; please select both groups.",
+                    if effective_references.is_empty() { "reference" } else { "comparison" });
+                correction = true;
+                continue;
+            }
+            eprintln!("[traconmech] WARNING: one or both effective groups are empty; continuing in batch mode");
+        }
+        // Preserve the full supplied design in YAML; analyze only observed labels.
+        break (effective_references, effective_comparisons, source);
+    };
     // Keep the scientist's design but recalculate reference matching on each run.
     let experiment = Experiment {
         version: 1,
@@ -225,7 +261,14 @@ pub fn resolve(
         min_reference_cells,
         population_references: Vec::new(),
     };
-    fs::write(&file, serde_yaml::to_string(&experiment)?)?;
+    if let Some(previous) = &old {
+        anyhow::ensure!(previous.reference_conditions == experiment.reference_conditions
+            && previous.comparison_conditions == experiment.comparison_conditions,
+            "experiment design differs from saved {}; choose a new --out directory or review the saved design", file.display());
+    } else {
+        fs::create_dir_all(out)?;
+        fs::write(&file, serde_yaml::to_string(&experiment)?)?;
+    }
     Ok(Design {
         cases: comparisons,
         controls: references,
@@ -261,7 +304,20 @@ pub fn record_references(out: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod one_sided_tests {
-    use super::labels;
+    use super::{labels, parse_confirmation};
+
+    #[test]
+    fn confirmation_accepts_case_insensitive_answers_and_rejects_gibberish() {
+        for answer in ["y", "Y", "yes", "YES", " Yes \n"] {
+            assert_eq!(parse_confirmation(answer, false), Some(true));
+        }
+        for answer in ["n", "N", "no", "NO"] {
+            assert_eq!(parse_confirmation(answer, true), Some(false));
+        }
+        assert_eq!(parse_confirmation("", true), Some(true));
+        assert_eq!(parse_confirmation("", false), Some(false));
+        assert_eq!(parse_confirmation("You do not need to even ask!", true), None);
+    }
 
     #[test]
     fn empty_group_is_explicitly_representable() {

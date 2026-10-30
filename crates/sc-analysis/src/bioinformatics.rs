@@ -638,6 +638,7 @@ fn analyze_loaded_matrix(
         clonomap.as_ref(),
         config.pseudo_samples,
         &cell_multiplet_fits,
+        &selected,
     )?;
     crate::multiplet::write_clusters(
         &config.output_dir.join("cluster_multiplet_explanations.tsv"),

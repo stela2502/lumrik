@@ -116,14 +116,14 @@ struct Cli {
     /// Condition annotation (e.g. sname).
     #[arg(long, default_value = "sname")]
     condition: String,
-    /// Comma-separated case sample values (exact matching).
-    #[arg(long)]
-    case: Option<String>,
-    /// Comma-separated control sample values (exact matching).
-    #[arg(long)]
-    control: Option<String>,
+    /// Case sample names (space-separated or comma-separated; exact matching).
+    #[arg(long, num_args = 1.., value_delimiter = ',')]
+    case: Vec<String>,
+    /// Control sample names (space-separated or comma-separated; exact matching).
+    #[arg(long, num_args = 1.., value_delimiter = ',')]
+    control: Vec<String>,
     /// Do not ask interactive questions; fail if experiment design is ambiguous.
-    #[arg(long)]
+    #[arg(long = "no-interactive", visible_alias = "non-interactive")]
     non_interactive: bool,
     /// Cluster gene targets by their shared MSigDB set membership.
     #[arg(long)]
@@ -275,6 +275,11 @@ struct Cli {
     hmm_validation_output: Option<PathBuf>,
 }
 
+// Keep the existing comma-separated internal API while accepting multiple CLI values.
+fn sample_list(values: &[String]) -> Option<String> {
+    if values.is_empty() { None } else { Some(values.join(",")) }
+}
+
 #[derive(Debug, Clone)]
 struct GeneLocus {
     chromosome: String,
@@ -333,8 +338,8 @@ fn main() -> Result<()> {
                 &cli.out,
                 cli.cluster.as_deref().unwrap_or(&cli.group),
                 &cli.condition,
-                cli.case.as_deref(),
-                cli.control.as_deref(),
+                sample_list(&cli.case).as_deref(),
+                sample_list(&cli.control).as_deref(),
                 cli.min_wt_cells,
                 cli.non_interactive,
             )?;
@@ -422,7 +427,7 @@ fn main() -> Result<()> {
                 "match-wt requires --target-cluster"
             );
             anyhow::ensure!(
-                cli.case.is_some() && cli.control.is_some(),
+                !cli.case.is_empty() && !cli.control.is_empty(),
                 "match-wt requires --case and --control"
             );
             cli.match_wt_clusters = true;
@@ -527,6 +532,8 @@ fn main() -> Result<()> {
         );
     }
 
+    let case_values = sample_list(&cli.case);
+    let control_values = sample_list(&cli.control);
     if cli.match_wt_clusters {
         let path = cli
             .data
@@ -542,12 +549,8 @@ fn main() -> Result<()> {
             &cli.out,
             cli.cluster.as_deref().unwrap_or(&cli.group),
             &cli.condition,
-            cli.case
-                .as_deref()
-                .context("--match-wt-clusters requires --case")?,
-            cli.control
-                .as_deref()
-                .context("--match-wt-clusters requires --control")?,
+            case_values.as_deref().context("--match-wt-clusters requires --case")?,
+            control_values.as_deref().context("--match-wt-clusters requires --control")?,
             cli.target_cluster
                 .as_deref()
                 .context("--match-wt-clusters requires --target-cluster")?,
@@ -570,13 +573,13 @@ fn main() -> Result<()> {
             &data,
             &cli.out,
             cli.cluster.as_deref().unwrap_or(&cli.group),
-            if cli.case.is_some() || cli.control.is_some() {
+            if !cli.case.is_empty() || !cli.control.is_empty() {
                 Some(&cli.condition)
             } else {
                 None
             },
-            cli.case.as_deref().unwrap_or(""),
-            cli.control.as_deref().unwrap_or(""),
+            case_values.as_deref().unwrap_or(""),
+            control_values.as_deref().unwrap_or(""),
             cli.reference_modules.as_deref(),
         );
     }
@@ -601,8 +604,8 @@ fn main() -> Result<()> {
             &cli.out,
             cli.cluster.as_deref().unwrap_or(&cli.group),
             &cli.condition,
-            cli.case.as_deref(),
-            cli.control.as_deref(),
+            case_values.as_deref(),
+            control_values.as_deref(),
             cli.min_wt_cells,
             cli.non_interactive,
         )?;
