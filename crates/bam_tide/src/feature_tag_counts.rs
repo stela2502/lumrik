@@ -149,7 +149,7 @@ impl FeatureTagCounts {
 
         let mut observations = Vec::new();
         for cell in self.data.values() {
-            observations.extend(cell.seen.iter().map(|entry| Observation {
+            observations.extend(cell.seen.keys().map(|entry| Observation {
                 cell: cell.name,
                 feature: entry.0,
                 umi: entry.1,

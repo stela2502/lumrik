@@ -1,0 +1,11 @@
+# The runtime Dockerfile only needs the staged release executables.
+# Never upload target/, .git/, datasets, or other repository files.
+**
+
+# Keep the directory hierarchy required by Dockerfile COPY.
+!containers/
+!containers/lumrik-star/
+!containers/lumrik-star/Dockerfile
+!containers/lumrik-star/runtime-bin/
+!containers/lumrik-star/runtime-bin/**
+!.dockerignore

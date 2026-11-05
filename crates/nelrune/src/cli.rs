@@ -31,6 +31,18 @@ pub struct Cli {
     #[command(flatten)]
     pub primer: PrimerCli,
 
+    /// Diagnose rejected 10x barcode candidates against other built-in whitelists (ONT only).
+    #[arg(long, default_value_t = false)]
+    pub barcode_crosscheck: bool,
+
+    /// Export N highest-entropy no-cassette ONT reads (500-2000 bp, low repeats) per batch.
+    #[arg(long, default_value_t = 0)]
+    pub dump_failed_reads: usize,
+
+    /// Enable expensive, full-population ONT complexity statistics per batch (TSV and stdout).
+    #[arg(long, default_value_t = false)]
+    pub ont_diagnostics: bool,
+
     #[command(flatten)]
     pub mapper: StreamingMapperCli,
 

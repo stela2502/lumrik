@@ -48,8 +48,35 @@ pub struct RunStatus {
     pub feature_tag_matches: usize,
     pub paired_r1_insert_found: usize,
     pub no_usable_paired_r1_insert: usize,
+    pub zero_cassette: usize,
+    pub one_cassette: usize,
+    pub multi_cassette: usize,
+    pub emitted_molecules: usize,
+    pub single_cassette_emitted_molecules: usize,
+    pub multi_cassette_emitted_molecules: usize,
     pub forward_molecules: usize,
     pub reverse_molecules: usize,
+    pub barcode_crosscheck_primary_valid_other_failure: usize,
+    pub barcode_crosscheck_v2_exact: usize,
+    pub barcode_crosscheck_v3_exact: usize,
+    pub barcode_crosscheck_v4_exact: usize,
+    pub barcode_crosscheck_5p_exact: usize,
+    pub barcode_crosscheck_arc_exact: usize,
+    pub barcode_crosscheck_corrected: usize,
+    pub barcode_crosscheck_ambiguous: usize,
+    pub barcode_crosscheck_unmatched: usize,
+    pub cassette_diag_anchor_seed_rejected: usize,
+    pub cassette_diag_anchor_valid: usize,
+    pub cassette_diag_barcode_truncated: usize,
+    pub cassette_diag_barcode_rejected: usize,
+    pub cassette_diag_barcode_valid: usize,
+    pub cassette_diag_umi_truncated: usize,
+    pub cassette_diag_polyt_missing: usize,
+    pub cassette_diag_other_grammar: usize,
+    pub cassette_diag_valid_structure_not_emitted: usize,
+
+    pub low_complexity: usize,
+    pub low_complexity_pct: f64,
     pub no_cell_umi: usize,
     pub no_cell_umi_pct: f64,
     pub duplicates: usize,
@@ -61,6 +88,8 @@ pub struct RunStatus {
     pub unique_yield_pct: f64,
     pub bam_records_seen: usize,
     pub quantified_bam_records: usize,
+    pub quant_gex_provenance: usize,
+    pub quant_pcr_duplicates: usize,
     pub compatible_bam_records: usize,
     pub unmapped_bam_records: usize,
     pub retained_cells: Option<usize>,
@@ -107,8 +136,35 @@ impl Default for RunStatus {
             feature_tag_matches: 0,
             paired_r1_insert_found: 0,
             no_usable_paired_r1_insert: 0,
+            zero_cassette: 0,
+            one_cassette: 0,
+            multi_cassette: 0,
+            emitted_molecules: 0,
+            single_cassette_emitted_molecules: 0,
+            multi_cassette_emitted_molecules: 0,
             forward_molecules: 0,
             reverse_molecules: 0,
+            barcode_crosscheck_primary_valid_other_failure: 0,
+            barcode_crosscheck_v2_exact: 0,
+            barcode_crosscheck_v3_exact: 0,
+            barcode_crosscheck_v4_exact: 0,
+            barcode_crosscheck_5p_exact: 0,
+            barcode_crosscheck_arc_exact: 0,
+            barcode_crosscheck_corrected: 0,
+            barcode_crosscheck_ambiguous: 0,
+            barcode_crosscheck_unmatched: 0,
+            cassette_diag_anchor_seed_rejected: 0,
+            cassette_diag_anchor_valid: 0,
+            cassette_diag_barcode_truncated: 0,
+            cassette_diag_barcode_rejected: 0,
+            cassette_diag_barcode_valid: 0,
+            cassette_diag_umi_truncated: 0,
+            cassette_diag_polyt_missing: 0,
+            cassette_diag_other_grammar: 0,
+            cassette_diag_valid_structure_not_emitted: 0,
+
+            low_complexity: 0,
+            low_complexity_pct: 0.0,
             no_cell_umi: 0,
             no_cell_umi_pct: 0.0,
             duplicates: 0,
@@ -120,6 +176,8 @@ impl Default for RunStatus {
             unique_yield_pct: 0.0,
             bam_records_seen: 0,
             quantified_bam_records: 0,
+            quant_gex_provenance: 0,
+            quant_pcr_duplicates: 0,
             compatible_bam_records: 0,
             unmapped_bam_records: 0,
             retained_cells: None,
@@ -190,7 +248,28 @@ impl RunProgress {
     /// per read.
     pub fn update_from_run_stats(&mut self, info: &RunStats) {
         let reads = info.get_issue_count("reads_processed");
+        let low_complexity = info.get_issue_count("low_complexity");
         let no_cell_umi = info.get_issue_count("no_cell_umi");
+        let barcode_crosscheck_primary_valid_other_failure = info.get_issue_count("barcode_crosscheck_primary_valid_other_failure");
+        let barcode_crosscheck_v2_exact = info.get_issue_count("barcode_crosscheck_v2_exact");
+        let barcode_crosscheck_v3_exact = info.get_issue_count("barcode_crosscheck_v3_exact");
+        let barcode_crosscheck_v4_exact = info.get_issue_count("barcode_crosscheck_v4_exact");
+        let barcode_crosscheck_5p_exact = info.get_issue_count("barcode_crosscheck_5p_exact");
+        let barcode_crosscheck_arc_exact = info.get_issue_count("barcode_crosscheck_arc_exact");
+        let barcode_crosscheck_corrected = info.get_issue_count("barcode_crosscheck_corrected");
+        let barcode_crosscheck_ambiguous = info.get_issue_count("barcode_crosscheck_ambiguous");
+        let barcode_crosscheck_unmatched = info.get_issue_count("barcode_crosscheck_unmatched");
+        let cassette_diag_anchor_seed_rejected = info.get_issue_count("cassette_diag_anchor_seed_rejected");
+        let cassette_diag_anchor_valid = info.get_issue_count("cassette_diag_anchor_valid");
+        let cassette_diag_barcode_truncated = info.get_issue_count("cassette_diag_barcode_truncated");
+        let cassette_diag_barcode_rejected = info.get_issue_count("cassette_diag_barcode_rejected");
+        let cassette_diag_barcode_valid = info.get_issue_count("cassette_diag_barcode_valid");
+        let cassette_diag_umi_truncated = info.get_issue_count("cassette_diag_umi_truncated");
+        let cassette_diag_polyt_missing = info.get_issue_count("cassette_diag_polyt_missing");
+        let cassette_diag_other_grammar = info.get_issue_count("cassette_diag_other_grammar");
+        let cassette_diag_valid_structure_not_emitted = info.get_issue_count("cassette_diag_valid_structure_not_emitted");
+
+
         let duplicates = info.get_issue_count("duplicate");
         let unique_genomic = info.get_issue_count("unique_genomic");
         let unique_feature = info.get_issue_count("unique_feature");
@@ -200,6 +279,12 @@ impl RunProgress {
         let feature_tag_matches = info.get_issue_count("feature_tag_match");
         let paired_r1_insert_found = info.get_issue_count("paired_r1_insert_found");
         let no_usable_paired_r1_insert = info.get_issue_count("no_usable_paired_r1_insert");
+        let zero_cassette = info.get_issue_count("zero_cassette");
+        let one_cassette = info.get_issue_count("one_cassette");
+        let multi_cassette = info.get_issue_count("multi_cassette");
+        let emitted_molecules = info.get_issue_count("emitted_molecules");
+        let single_cassette_emitted_molecules = info.get_issue_count("single_cassette_emitted_molecules");
+        let multi_cassette_emitted_molecules = info.get_issue_count("multi_cassette_emitted_molecules");
         let forward_molecules = info.get_issue_count("forward_molecules");
         let reverse_molecules = info.get_issue_count("reverse_molecules");
 
@@ -210,6 +295,7 @@ impl RunProgress {
                 100.0 * n as f64 / reads as f64
             }
         };
+        let low_complexity_pct = pct(low_complexity);
         let no_cell_umi_pct = pct(no_cell_umi);
         let duplicate_pct = pct(duplicates);
         let unique_genomic_pct = pct(unique_genomic);
@@ -249,8 +335,35 @@ impl RunProgress {
             state.feature_tag_matches = feature_tag_matches;
             state.paired_r1_insert_found = paired_r1_insert_found;
             state.no_usable_paired_r1_insert = no_usable_paired_r1_insert;
+            state.zero_cassette = zero_cassette;
+            state.one_cassette = one_cassette;
+            state.multi_cassette = multi_cassette;
+            state.emitted_molecules = emitted_molecules;
+            state.single_cassette_emitted_molecules = single_cassette_emitted_molecules;
+            state.multi_cassette_emitted_molecules = multi_cassette_emitted_molecules;
             state.forward_molecules = forward_molecules;
             state.reverse_molecules = reverse_molecules;
+            state.barcode_crosscheck_primary_valid_other_failure = barcode_crosscheck_primary_valid_other_failure;
+            state.barcode_crosscheck_v2_exact = barcode_crosscheck_v2_exact;
+            state.barcode_crosscheck_v3_exact = barcode_crosscheck_v3_exact;
+            state.barcode_crosscheck_v4_exact = barcode_crosscheck_v4_exact;
+            state.barcode_crosscheck_5p_exact = barcode_crosscheck_5p_exact;
+            state.barcode_crosscheck_arc_exact = barcode_crosscheck_arc_exact;
+            state.barcode_crosscheck_corrected = barcode_crosscheck_corrected;
+            state.barcode_crosscheck_ambiguous = barcode_crosscheck_ambiguous;
+            state.barcode_crosscheck_unmatched = barcode_crosscheck_unmatched;
+            state.cassette_diag_anchor_seed_rejected = cassette_diag_anchor_seed_rejected;
+            state.cassette_diag_anchor_valid = cassette_diag_anchor_valid;
+            state.cassette_diag_barcode_truncated = cassette_diag_barcode_truncated;
+            state.cassette_diag_barcode_rejected = cassette_diag_barcode_rejected;
+            state.cassette_diag_barcode_valid = cassette_diag_barcode_valid;
+            state.cassette_diag_umi_truncated = cassette_diag_umi_truncated;
+            state.cassette_diag_polyt_missing = cassette_diag_polyt_missing;
+            state.cassette_diag_other_grammar = cassette_diag_other_grammar;
+            state.cassette_diag_valid_structure_not_emitted = cassette_diag_valid_structure_not_emitted;
+
+            state.low_complexity = low_complexity;
+            state.low_complexity_pct = low_complexity_pct;
             state.no_cell_umi = no_cell_umi;
             state.no_cell_umi_pct = no_cell_umi_pct;
             state.duplicates = duplicates;
@@ -266,18 +379,24 @@ impl RunProgress {
         }
 
         self.metrics_line(&format!(
-            "{:.3}\t{}\t{:.3}\t{:.3}\t{:.3}\t{}\t{:.3}\t{}\t{:.3}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}",
+            "{:.3}\t{}\t{:.3}\t{:.3}\t{:.3}\t{}\t{:.3}\t{}\t{:.3}\t{}\t{:.3}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}",
             self.elapsed().as_secs_f64(), reads, rate, self.average_reads_per_second(),
-            self.processing_reads_per_second(), no_cell_umi, pct(no_cell_umi), duplicates, duplicate_pct,
+            self.processing_reads_per_second(), low_complexity, low_complexity_pct, no_cell_umi, pct(no_cell_umi), duplicates, duplicate_pct,
             unique_genomic, unique_feature, unique_yield_pct,
             process_rss_mib, process_peak_rss_mib, system_available_mib,
         ));
         if delta >= self.report_every || self.last_reads == 0 || reads < self.last_reads {
             let message = format!(
-                "{:>12} reads | {:>10.0} reads/s | no cell/UMI {:>10} | duplicate {:>10} | genomic {:>10} | feature {:>10}",
-                reads, rate, no_cell_umi, duplicates, unique_genomic, unique_feature,
+                "{:>12} reads | {:>10.0} reads/s | low complexity {:>10} | no cell/UMI {:>10} | duplicate {:>10} | genomic {:>10} | feature {:>10}",
+                reads, rate, low_complexity, no_cell_umi, duplicates, unique_genomic, unique_feature,
             );
             eprintln!("[nelrune] {message}");
+            if barcode_crosscheck_primary_valid_other_failure + barcode_crosscheck_v2_exact + barcode_crosscheck_v3_exact + barcode_crosscheck_v4_exact + barcode_crosscheck_5p_exact + barcode_crosscheck_arc_exact + barcode_crosscheck_corrected + barcode_crosscheck_ambiguous + barcode_crosscheck_unmatched > 0 {
+                eprintln!("[barcode] primary valid/other failure={} | alternative exact: v2={} v3={} v4={} 5p={} arc={} | corrected={} ambiguous={} unmatched={}", barcode_crosscheck_primary_valid_other_failure, barcode_crosscheck_v2_exact, barcode_crosscheck_v3_exact, barcode_crosscheck_v4_exact, barcode_crosscheck_5p_exact, barcode_crosscheck_arc_exact, barcode_crosscheck_corrected, barcode_crosscheck_ambiguous, barcode_crosscheck_unmatched);
+            }
+            if cassette_diag_anchor_valid + cassette_diag_anchor_seed_rejected > 0 {
+                eprintln!("[cassette] anchor_seed_rejected={} | anchor_valid={} | barcode_truncated={} | barcode_rejected={} | barcode_valid={} | umi_truncated={} | polyt_missing={} | other_grammar={} | valid_structure_not_emitted={}", cassette_diag_anchor_seed_rejected, cassette_diag_anchor_valid, cassette_diag_barcode_truncated, cassette_diag_barcode_rejected, cassette_diag_barcode_valid, cassette_diag_umi_truncated, cassette_diag_polyt_missing, cassette_diag_other_grammar, cassette_diag_valid_structure_not_emitted);
+            }
             self.log_line(&message);
         }
 
@@ -310,7 +429,7 @@ impl RunProgress {
             .with_context(|| format!("opening Nelrune metrics {}", metrics_path.display()))?;
         writeln!(
             metrics,
-            "elapsed_s\treads_processed\treads_per_second\taverage_reads_per_second\tsteady_reads_per_second\tno_cell_umi\tno_cell_umi_pct\tduplicates\tduplicate_pct\tunique_genomic\tunique_feature\tunique_yield_pct\tprocess_rss_mib\tprocess_peak_rss_mib\tsystem_available_mib"
+            "elapsed_s\treads_processed\treads_per_second\taverage_reads_per_second\tsteady_reads_per_second\tlow_complexity\tlow_complexity_pct\tno_cell_umi\tno_cell_umi_pct\tduplicates\tduplicate_pct\tunique_genomic\tunique_feature\tunique_yield_pct\tprocess_rss_mib\tprocess_peak_rss_mib\tsystem_available_mib"
         )?;
         self.metrics = Some(Mutex::new(metrics));
         Ok(())
@@ -382,14 +501,12 @@ impl RunProgress {
         let memory = memory_status();
         if let Ok(mut state) = self.state.write() {
             state.bam_records_seen = report.get_issue_count("bam_records_seen");
-            // During BAM-only quantification the normal FASTQ-side
-            // `candidate_pairs` counter is unused. Reuse the existing server
-            // slot to expose the biologically useful denominator: records
-            // carrying explicit GEX (`|G|`) provenance. Do not include legacy
-            // records or VDJ/custom-capture (`|V|`) records here.
-            state.candidate_pairs = report.get_issue_count("primer provenance GEX");
-            state.quantified_bam_records = report.get_issue_count("quantified_bam_records");
-            state.compatible_bam_records = report.get_issue_count("compatible");
+            // Quantification has its own counters. Never overwrite the
+            // normalization-stage candidate/duplicate/yield statistics.
+            state.quant_gex_provenance = report.get_issue_count("primer provenance GEX");
+            state.quant_pcr_duplicates = report.pcr_duplicates;
+            state.quantified_bam_records = report.get_issue_count("cell_umi from BAM tags");
+            state.compatible_bam_records = report.get_issue_count("Compatible");
             state.unmapped_bam_records = report.get_issue_count("unmapped");
             state.observed_exonic_cells = data.cell_ids(scdata::QuantData::EXONIC).len();
             state.observed_intronic_cells = data.cell_ids(scdata::QuantData::INTRONIC).len();
@@ -399,9 +516,6 @@ impl RunProgress {
                 data.observed_feature_ids(scdata::QuantData::INTRONIC).len();
             state.exonic_umis = data.total_umis(scdata::QuantData::EXONIC);
             state.intronic_umis = data.total_umis(scdata::QuantData::INTRONIC);
-            // Surface post-quantification PCR duplicates from the runner-owned report
-            // through the same server counter used during FASTQ processing.
-            state.duplicates = report.pcr_duplicates;
             state.match_exact_junction_chain = report.get_issue_count("ExactJunctionChain");
             state.match_compatible = report.get_issue_count("Compatible");
             state.match_intronic = report.get_issue_count("Intronic");
@@ -485,6 +599,12 @@ impl RunProgress {
             None => writeln!(yaml, "finished_unix_ms: null")?,
         }
         writeln!(yaml, "reads_processed: {}", state.reads_processed)?;
+        writeln!(yaml, "zero_cassette: {}", state.zero_cassette)?;
+        writeln!(yaml, "one_cassette: {}", state.one_cassette)?;
+        writeln!(yaml, "multi_cassette: {}", state.multi_cassette)?;
+        writeln!(yaml, "emitted_molecules: {}", state.emitted_molecules)?;
+        writeln!(yaml, "single_cassette_emitted_molecules: {}", state.single_cassette_emitted_molecules)?;
+        writeln!(yaml, "multi_cassette_emitted_molecules: {}", state.multi_cassette_emitted_molecules)?;
         writeln!(yaml, "mapper_reads: {}", state.mapper_reads)?;
         writeln!(yaml, "accepted_pairs: {}", state.accepted_pairs)?;
         writeln!(yaml, "failed_pairs: {}", state.failed_pairs)?;
@@ -625,7 +745,7 @@ impl ServerContent for RunStatus {
             }
         };
 
-        ServerSnapshot {
+        let mut snapshot = ServerSnapshot {
             title: "Nelrune".to_string(),
             subtitle: "Live single-cell normalization, mapping and quantification".to_string(),
             started_unix_ms: self.started_unix_ms,
@@ -656,6 +776,17 @@ impl ServerContent for RunStatus {
                     ],
                 ),
                 StatusSection::new(
+                    "ONT cassette detection (per input read)",
+                    vec![
+                        StatusMetric::new("Zero cassettes", format!("{} ({:.2}%)", self.zero_cassette, pct(self.zero_cassette))),
+                        StatusMetric::new("One cassette", format!("{} ({:.2}%)", self.one_cassette, pct(self.one_cassette))),
+                        StatusMetric::new("Multiple cassettes", format!("{} ({:.2}%)", self.multi_cassette, pct(self.multi_cassette))),
+                        StatusMetric::new("Emitted genomic molecules", self.emitted_molecules.to_string()),
+                        StatusMetric::new("  From single-cassette reads", self.single_cassette_emitted_molecules.to_string()),
+                        StatusMetric::new("  From multi-cassette reads", self.multi_cassette_emitted_molecules.to_string()),
+                    ],
+                ),
+                StatusSection::new(
                     "Read routing",
                     vec![
                         StatusMetric::new(
@@ -683,6 +814,10 @@ impl ServerContent for RunStatus {
                             format!("{} ({:.2}%)", self.failed_pairs, pct(self.failed_pairs)),
                         ),
                         StatusMetric::new(
+                            "Low-complexity reads (filtered)",
+                            format!("{} ({:.2}%)", self.low_complexity, self.low_complexity_pct),
+                        ),
+                        StatusMetric::new(
                             "Cell / UMI not detected",
                             format!("{} ({:.2}%)", self.no_cell_umi, self.no_cell_umi_pct),
                         ),
@@ -692,47 +827,20 @@ impl ServerContent for RunStatus {
                     "Molecules",
                     vec![
                         StatusMetric::new(
+                            "Multi-cassette reads",
+                            format!("{} ({:.2}%)", self.multi_cassette, pct(self.multi_cassette)),
+                        ),
+                        StatusMetric::new(
                             "Candidate molecules",
-                            format!(
-                                "{} ({:.2}%)",
-                                self.candidate_pairs,
-                                if self.bam_records_seen > 0 && self.reads_processed == 0 {
-                                    bam_pct(self.candidate_pairs)
-                                } else {
-                                    pct(self.candidate_pairs)
-                                }
-                            ),
+                            format!("{} ({:.2}%)", self.candidate_pairs, pct(self.candidate_pairs)),
                         ),
                         StatusMetric::new(
                             "Duplicates",
-                            format!(
-                                "{} ({:.2}%)",
-                                self.duplicates,
-                                if self.bam_records_seen > 0
-                                    && self.reads_processed == 0
-                                    && self.candidate_pairs > 0
-                                {
-                                    100.0 * self.duplicates as f64 / self.candidate_pairs as f64
-                                } else {
-                                    self.duplicate_pct
-                                }
-                            ),
+                            format!("{} ({:.2}%)", self.duplicates, self.duplicate_pct),
                         ),
                         StatusMetric::new(
                             "Unique molecule yield",
-                            format!(
-                                "{:.2}%",
-                                if self.bam_records_seen > 0
-                                    && self.reads_processed == 0
-                                    && self.candidate_pairs > 0
-                                {
-                                    100.0
-                                        - 100.0 * self.duplicates as f64
-                                            / self.candidate_pairs as f64
-                                } else {
-                                    self.unique_yield_pct
-                                }
-                            ),
+                            format!("{:.2}%", self.unique_yield_pct),
                         ),
                         StatusMetric::new(
                             "Paired R1 insert found",
@@ -760,6 +868,8 @@ impl ServerContent for RunStatus {
                     "Mapper / quantification",
                     vec![
                         StatusMetric::new("BAM records seen", self.bam_records_seen.to_string()),
+                        StatusMetric::new("GEX provenance alignments", self.quant_gex_provenance.to_string()),
+                        StatusMetric::new("Quantification PCR duplicates", self.quant_pcr_duplicates.to_string()),
                         StatusMetric::new(
                             "BAM records with cell / UMI",
                             format!(
@@ -830,6 +940,34 @@ impl ServerContent for RunStatus {
                     ],
                 ),
                 StatusSection::new(
+                    "Cassette failure diagnostics (candidate counts)",
+                    vec![
+                        StatusMetric::new("anchor seed rejected", self.cassette_diag_anchor_seed_rejected.to_string()),
+                        StatusMetric::new("anchor valid", self.cassette_diag_anchor_valid.to_string()),
+                        StatusMetric::new("barcode truncated", self.cassette_diag_barcode_truncated.to_string()),
+                        StatusMetric::new("barcode rejected", self.cassette_diag_barcode_rejected.to_string()),
+                        StatusMetric::new("barcode valid", self.cassette_diag_barcode_valid.to_string()),
+                        StatusMetric::new("umi truncated", self.cassette_diag_umi_truncated.to_string()),
+                        StatusMetric::new("polyt missing", self.cassette_diag_polyt_missing.to_string()),
+                        StatusMetric::new("other grammar", self.cassette_diag_other_grammar.to_string()),
+                        StatusMetric::new("valid structure not emitted", self.cassette_diag_valid_structure_not_emitted.to_string()),
+                    ],
+                ),
+                StatusSection::new(
+                    "Barcode crosscheck (diagnostic; no rescue)",
+                    vec![
+                        StatusMetric::new("Primary barcode valid; other failure", self.barcode_crosscheck_primary_valid_other_failure.to_string()),
+                        StatusMetric::new("v2 exact", self.barcode_crosscheck_v2_exact.to_string()),
+                        StatusMetric::new("v3 exact", self.barcode_crosscheck_v3_exact.to_string()),
+                        StatusMetric::new("v4 exact", self.barcode_crosscheck_v4_exact.to_string()),
+                        StatusMetric::new("5p exact", self.barcode_crosscheck_5p_exact.to_string()),
+                        StatusMetric::new("arc exact", self.barcode_crosscheck_arc_exact.to_string()),
+                        StatusMetric::new("corrected", self.barcode_crosscheck_corrected.to_string()),
+                        StatusMetric::new("ambiguous", self.barcode_crosscheck_ambiguous.to_string()),
+                        StatusMetric::new("unmatched", self.barcode_crosscheck_unmatched.to_string()),
+                    ],
+                ),
+                StatusSection::new(
                     "Memory",
                     vec![
                         StatusMetric::new(
@@ -846,6 +984,15 @@ impl ServerContent for RunStatus {
                     ],
                 ),
             ],
+        };
+        // A standalone quantification run does not execute the FASTQ/ONT
+        // normalization stage. Hide its zero-valued counters instead of
+        // presenting them as meaningful molecule statistics.
+        if self.bam_records_seen > 0 && self.reads_processed == 0 {
+            snapshot.sections.retain(|section| {
+                !matches!(section.title.as_str(), "Read routing" | "Molecules")
+            });
         }
+        snapshot
     }
 }

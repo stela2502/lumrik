@@ -25,6 +25,9 @@ enum Command {
     /// Build an index from a GTF/GFF annotation and write it to disk
     Build(BuildArgs),
 
+    /// Add exon-skipped variants of all eligible isoforms to an annotation index
+    ExonSkip(ExonSkipArgs),
+
     /// Load an index from disk and print summary stats
     Stats(StatsArgs),
 
@@ -35,6 +38,45 @@ enum Command {
     */
     /// Build transcriptome FASTA from genomic annotation + genome FASTA
     Transcriptome(TranscriptomeArgs),
+}
+
+#[derive(Args, Debug)]
+struct ExonSkipArgs {
+    /// Reference GTF/GFF containing the selected transcript
+    #[arg(long)]
+    annotation: PathBuf,
+    /// Gene name whose transcripts may be modified (e.g. TP53).
+    #[arg(long)]
+    gene: String,
+    /// Chromosome containing the variant (e.g. chr17).
+    #[arg(long)]
+    chr: String,
+    /// Genomic 1-based variant position (not an exon boundary).
+    #[arg(long = "variant-pos", alias = "acceptor-pos")]
+    acceptor_pos: u32,
+    /// Reference genome FASTA, matching the annotation assembly.
+    #[arg(long)]
+    genome: PathBuf,
+    /// Expected reference allele at --acceptor-pos.
+    #[arg(long = "ref")]
+    reference: char,
+    /// Alternative allele at --acceptor-pos.
+    #[arg(long)]
+    alt: char,
+    /// Maximum intronic distance from an annotated donor or acceptor boundary.
+    #[arg(long = "splice-window", alias = "acceptor-window", default_value_t = 20)]
+    acceptor_window: u32,
+    /// Output binary splice index
+    #[arg(long)]
+    index: PathBuf,
+    /// Optional augmented GTF for inspection
+    #[arg(long)]
+    out_gtf: Option<PathBuf>,
+    /// Optional transcript modification report (TSV)
+    #[arg(long)]
+    report: Option<PathBuf>,
+    #[arg(long, default_value_t = 1_000_000)]
+    bin_width: u32,
 }
 
 #[derive(Args, Debug)]
@@ -238,6 +280,8 @@ fn main() -> Result<()> {
 
         Command::Transcriptome(args) => build_transcriptome(&args)?,
 
+        Command::ExonSkip(args) => build_exon_skip(&args)?,
+
         Command::Stats(args) => {
             let idx = SpliceIndex::load(&args.index)
                 .with_context(|| format!("reading index {}", args.index.display()))?;
@@ -245,6 +289,205 @@ fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn build_exon_skip(args: &ExonSkipArgs) -> Result<()> {
+    use gtf_splice_index::types::Strand;
+    use std::io::{BufReader, Cursor, Read, Write};
+
+    let source = SpliceIndex::from_path(&args.annotation, args.bin_width, IdNameKeys::default())
+        .with_context(|| format!("loading annotation {}", args.annotation.display()))?;
+    // Select by genomic splice acceptor, not by exon ordinal or full exon interval.
+    // A mutation may affect only transcripts using this exact splice acceptor.
+    if args.acceptor_pos == 0 {
+        return Err(anyhow!("--acceptor-pos must be a 1-based genomic coordinate"));
+    }
+    if args.acceptor_window < 2 || args.acceptor_window > 100 {
+        return Err(anyhow!("--acceptor-window must be 2..=100 bases"));
+    }
+    let ref_base = args.reference.to_ascii_uppercase() as u8;
+    let alt_base = args.alt.to_ascii_uppercase() as u8;
+    if !b"ACGT".contains(&ref_base) || !b"ACGT".contains(&alt_base) || ref_base == alt_base {
+        return Err(anyhow!("--ref and --alt must be distinct A/C/G/T bases"));
+    }
+    let genome = Genome::from_fasta(&args.genome)
+        .with_context(|| format!("reading genome {}", args.genome.display()))?;
+    let genome_chr = genome.chr_id(&args.chr)
+        .ok_or_else(|| anyhow!("chromosome {} missing from genome FASTA", args.chr))?;
+    let actual = genome.base(genome_chr, args.acceptor_pos - 1)
+        .ok_or_else(|| anyhow!("position {}:{} outside genome FASTA", args.chr, args.acceptor_pos))?;
+    if actual != ref_base {
+        return Err(anyhow!("reference mismatch at {}:{}: expected {} but genome has {}; refusing to write index",
+            args.chr, args.acceptor_pos, ref_base as char, actual as char));
+    }
+    eprintln!("Verified variant {}:{} {}>{} against genome", args.chr, args.acceptor_pos, ref_base as char, alt_base as char);
+    let gene_ids: std::collections::HashSet<_> = source.transcripts.iter()
+        .filter(|tx| source.gene_name(tx.gene_id) == Some(args.gene.as_str())
+            && source.chr_names.get(tx.chr_id).is_some_and(|c| c == &args.chr))
+        .map(|tx| tx.gene_id).collect();
+    if gene_ids.is_empty() {
+        return Err(anyhow!("no transcripts for gene {} on {}", args.gene, args.chr));
+    }
+    let chr = &args.chr;
+    let gene_name = &args.gene;
+    // Build catalogs from the original annotation, before synthetic models are added.
+    let mut gene_catalogs = std::collections::HashMap::new();
+    for &gene_id in &gene_ids {
+        let transcripts: Vec<_> = source.transcripts.iter()
+            .filter(|tx| tx.gene_id == gene_id).collect();
+        let regions = gtf_splice_index::transcript_naming::gene_exon_regions(&transcripts)?;
+        gene_catalogs.insert(gene_id, regions);
+    }
+
+    // Preserve all original models; add candidate splice consequences for each matching site.
+    let input = std::fs::File::open(&args.annotation)?;
+    let mut reader: Box<dyn Read> = if args.annotation.extension().is_some_and(|e| e == "gz") {
+        Box::new(flate2::read::GzDecoder::new(input))
+    } else { Box::new(input) };
+    let mut augmented = Vec::new();
+    reader.read_to_end(&mut augmented)?;
+    augmented.push(b'\n');
+    let mut report_rows: Vec<(String, String, String, String, usize, u32, u32, u32, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for tx in &source.transcripts {
+        if !gene_ids.contains(&tx.gene_id)
+            || source.chr_names.get(tx.chr_id) != Some(chr)
+            || tx.strand == Strand::Unknown { continue; }
+        let mut exons = tx.exons().to_vec();
+        if tx.strand == Strand::Minus { exons.reverse(); }
+        if exons.len() < 2 { continue; }
+        let parent = tx.names.first().context("transcript without identifier")?;
+        let regions = gene_catalogs.get(&tx.gene_id).context("missing gene exon catalog")?;
+        let strand = if tx.strand == Strand::Plus { "+" } else { "-" };
+        // Exons are in transcription order; exon.start is zero-based, exon.end exclusive.
+        // For minus-strand TP53 the donor is at the LOW genomic coordinate and
+        // the acceptor is at the HIGH coordinate.
+        // Show the two nearest exon intervals even when no splice site matches.
+        let mut closest: Vec<_> = exons.iter().enumerate().map(|(i, e)| {
+            let start = e.start + 1;
+            let end = e.end;
+            let distance = if args.acceptor_pos < start { start - args.acceptor_pos }
+                else if args.acceptor_pos > end { args.acceptor_pos - end }
+                else { 0 };
+            (distance, i + 1, start, end)
+        }).collect();
+        closest.sort_by_key(|x| x.0);
+        for (distance, ordinal, start, end) in closest.into_iter().take(2) {
+            eprintln!("CLOSEST {parent} exon {ordinal} ({strand}) {chr}:{start}-{end}, interval distance={distance} bp");
+        }
+        for i in 0..exons.len() {
+            for site in ["donor", "acceptor"] {
+                if (site == "donor" && i + 1 == exons.len())
+                    || (site == "acceptor" && i == 0) { continue; }
+                let exon = exons[i];
+                let event = gtf_splice_index::transcript_naming::resolve_gene_exon(tx, i + 1, regions)?;
+                let exon_label = format!("tex{}_gex{}_{}_{}-{}",
+                    i + 1, event.gene_exon, chr, event.genomic_start, event.genomic_end);
+                // Include variants on either side of a splice boundary: the first
+                // exonic bases can disrupt splicing just as intronic bases can.
+                // Distances are 1-based from the first base on the relevant side.
+                let pos = args.acceptor_pos;
+                let (boundary, motif_start, motif_expected, signed_distance) = match (tx.strand, site) {
+                    (Strand::Plus, "donor") =>
+                        (exon.end, exon.end, b"GT".as_slice(), pos as i64 - exon.end as i64),
+                    (Strand::Plus, "acceptor") =>
+                        (exon.start + 1, exon.start.saturating_sub(2), b"AG".as_slice(),
+                         pos as i64 - (exon.start + 1) as i64),
+                    (Strand::Minus, "donor") =>
+                        (exon.start + 1, exon.start.saturating_sub(2), b"AC".as_slice(),
+                         pos as i64 - (exon.start + 1) as i64),
+                    (Strand::Minus, "acceptor") =>
+                        (exon.end, exon.end, b"CT".as_slice(),
+                         pos as i64 - exon.end as i64),
+                    _ => continue,
+                };
+                let intronic = match (tx.strand, site) {
+                    (Strand::Plus, "donor") | (Strand::Minus, "acceptor") => signed_distance > 0,
+                    _ => signed_distance < 0,
+                };
+                let distance = signed_distance.unsigned_abs() as u32;
+                let region = if intronic { "intronic" } else { "exonic/boundary" };
+                // Always print nearby sites, even if outside the model window.
+                if distance <= 100 {
+                    eprintln!("NEAR {parent} {site} exon {} ({strand}) {chr}:{}-{} boundary={boundary} variant={pos} distance={distance} region={region}",
+                        i + 1, exon.start + 1, exon.end);
+                }
+                if distance > args.acceptor_window { continue; }
+                let motif = genome.slice(genome_chr, motif_start, motif_start.saturating_add(2));
+                let motif_label = motif.map(|m| String::from_utf8_lossy(m).to_string())
+                    .unwrap_or_else(|| "unavailable".to_string());
+                let canonical = motif.is_some_and(|m| m == motif_expected);
+                eprintln!("MATCH {parent} {site} exon {} at {chr}:{}-{} ({distance} bp, {region}, genomic motif {motif_label}, canonical={canonical})",
+                    i + 1, exon.start + 1, exon.end);
+
+                // Candidate 1: skip the exon carrying the affected splice site.
+                // Terminal exons cannot be skipped by joining two neighboring exons.
+                if i > 0 && i + 1 < exons.len() {
+                    let synthetic = format!("{parent}_mod_{exon_label}_del");
+                    if seen.insert(synthetic.clone()) {
+                        for (j, e) in exons.iter().enumerate() {
+                            if j == i { continue; }
+                            writeln!(&mut augmented, "{chr}\tgtf_splice_index\texon\t{}\t{}\t.\t{strand}\t.\tgene_id \"{gene_name}\"; gene_name \"{gene_name}\"; transcript_id \"{synthetic}\"; transcript_name \"{synthetic}\";", e.start + 1, e.end)?;
+                        }
+                        report_rows.push((parent.clone(), synthetic, "exon_skip".into(), site.into(), i + 1, exon.start + 1, exon.end, distance, motif_label.clone()));
+                    }
+                }
+                // Candidate 2: retain the intron adjacent to the affected site.
+                // Merge the two flanking exons into a single contiguous exon block.
+                let left = if site == "donor" { i } else { i - 1 };
+                let right = left + 1;
+                let left_exon = exons[left];
+                let right_exon = exons[right];
+                let intron = if left_exon.end <= right_exon.start {
+                    (left_exon.end + 1, right_exon.start)
+                } else {
+                    (right_exon.end + 1, left_exon.start)
+                };
+                if intron.0 > intron.1 { continue; }
+                let synthetic = format!("{parent}_mod_{exon_label}_{}_{}-{}_retain_{site}_{}",
+                    chr, intron.0, intron.1, args.acceptor_pos);
+                if seen.insert(synthetic.clone()) {
+                    let merged_start = exons[left].start.min(exons[right].start);
+                    let merged_end = exons[left].end.max(exons[right].end);
+                    for (j, e) in exons.iter().enumerate() {
+                        if j == right { continue; }
+                        let (s, en) = if j == left { (merged_start + 1, merged_end) }
+                            else { (e.start + 1, e.end) };
+                        writeln!(&mut augmented, "{chr}\tgtf_splice_index\texon\t{s}\t{en}\t.\t{strand}\t.\tgene_id \"{gene_name}\"; gene_name \"{gene_name}\"; transcript_id \"{synthetic}\"; transcript_name \"{synthetic}\";")?;
+                    }
+                    report_rows.push((parent.clone(), synthetic, "intron_retention".into(), site.into(), i + 1, merged_start + 1, merged_end, distance, motif_label));
+                }
+            }
+        }
+    }
+    if report_rows.is_empty() {
+        return Err(anyhow!("no annotated donor/acceptor within {} bases (intronic OR exonic) of variant {chr}:{} for {}; no index created", args.acceptor_window, args.acceptor_pos, args.gene));
+    }
+    eprintln!("NOTE: exon skipping and intron retention are candidate models, not predicted or observed consequences.");
+    let idx = SpliceIndex::new(args.bin_width)
+        .from_reader(BufReader::new(Cursor::new(&augmented)), IdNameKeys::default())
+        .map_err(|e| anyhow!("parsing augmented annotation: {e}"))?;
+    idx.save(&args.index)
+        .with_context(|| format!("writing binary index {}", args.index.display()))?;
+    eprintln!("Binary index: {}", args.index.display());
+    eprintln!("Gene: {gene_name}; variant: {chr}:{}; generated models: {}", args.acceptor_pos, report_rows.len());
+    for (parent, synthetic, consequence, site, ordinal, start, end, distance, motif) in &report_rows {
+        eprintln!("  {parent} -> {synthetic}: {consequence} from {site} exon {ordinal}, {chr}:{start}-{end}, distance {distance} bp, genomic motif {motif}");
+    }
+    if let Some(path) = &args.out_gtf {
+        std::fs::write(path, &augmented)
+            .with_context(|| format!("writing optional GTF {}", path.display()))?;
+    }
+    if let Some(path) = &args.report {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
+        writeln!(out, "parent_transcript\tsynthetic_transcript\tconsequence\tsplice_site\taffected_exon_ordinal\tchromosome\tmodel_start_1based\tmodel_end_1based\tvariant_intronic_distance\tgenomic_motif")?;
+        for (parent, synthetic, consequence, site, ordinal, start, end, distance, motif) in &report_rows {
+            writeln!(out, "{parent}\t{synthetic}\t{consequence}\t{site}\t{ordinal}\t{chr}\t{start}\t{end}\t{distance}\t{motif}")?;
+        }
+        out.flush()?;
+    }
     Ok(())
 }
 

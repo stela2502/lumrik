@@ -50,6 +50,10 @@ impl ExternalMapper for Minimap2 {
             args.push("-a".into());
         }
 
+        if !has_option(&args, "--eqx") {
+            args.push("--eqx".into());
+        }
+
         args.push(self.launch.index.to_string_lossy().into_owned());
 
         let process = if self.launch.paired {

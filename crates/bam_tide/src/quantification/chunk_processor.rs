@@ -8,7 +8,10 @@ use scdata::cell_data::GeneUmiHash;
 use crate::quantification::job::Job;
 use crate::quantification::processor_options::ProcessorOptions;
 use crate::quantification::snp::SnpSideChannel;
-use scdata::QuantData;
+use scdata::{QuantData, SnpUmiEvidence};
+use crate::quantification::new_transcript_data::NewTranscriptData;
+use gtf_splice_index::{RefBlock, Transcript};
+use gtf_splice_index::transcript_naming::{gene_exon_regions, resolve_gene_exon};
 
 pub struct ChunkProcessor<'a> {
     idx: &'a SpliceIndex,
@@ -37,6 +40,7 @@ impl<'a> ChunkProcessor<'a> {
         &self,
         jobs: &[Job],
         merged: &mut QuantData,
+        novel: &mut NewTranscriptData,
         report: &mut RunStats,
     ) -> Result<()> {
         if jobs.is_empty() {
@@ -49,7 +53,7 @@ impl<'a> ChunkProcessor<'a> {
         report.start_counter();
         report.start_timer("bam_tide/multi_cpu/quantify_chunk");
 
-        let partials: Vec<(QuantData, RunStats)> = jobs
+        let partials: Vec<(QuantData, NewTranscriptData, RunStats)> = jobs
             .par_chunks(chunk_size)
             .map(|chunk| self.process_partial(chunk))
             .collect();
@@ -58,7 +62,8 @@ impl<'a> ChunkProcessor<'a> {
         report.stop_multi_processor_time();
 
         report.start_timer("bam_tide/single_cpu/merge_quantification");
-        for (partial_data, partial_report) in partials {
+        for (partial_data, partial_novel, partial_report) in partials {
+            novel.merge(partial_novel)?;
             let merge_report = merged.merge(&partial_data);
             report.merge(&partial_report);
             report.merge(&merge_report);
@@ -69,69 +74,40 @@ impl<'a> ChunkProcessor<'a> {
         Ok(())
     }
 
-    fn process_partial(&self, jobs: &[Job]) -> (QuantData, RunStats) {
+    fn process_partial(&self, jobs: &[Job]) -> (QuantData, NewTranscriptData, RunStats) {
         let mut out = QuantData::standard();
+        let mut novel = NewTranscriptData::new(self.idx.bin_width);
         let mut report = RunStats::new(None, 0.0, jobs.len());
 
         for job in jobs {
-            self.add_hit(job, &mut out, &mut report);
-
-            self.add_snp_hits(job, &mut out, &mut report);
+            let novel_id = self.add_hit(job, &mut out, &mut novel, &mut report);
+            let evidence = self.add_snp_hits(job, &mut out, &mut report);
+            if let Some(id) = novel_id {
+                novel.add_molecule(id, job.cell, job.umi, evidence);
+            }
         }
 
-        (out, report)
+        (out, novel, report)
     }
 
-    fn record_splice_mismatch_histograms(
-        &self,
-        job: &Job,
-        transcript: &gtf_splice_index::Transcript,
-        report: &mut RunStats,
-    ) {
-        const MAX_REPORTED_OFFSET_BP: i32 = 50;
-        for (donor, acceptor) in transcript
-            .junction_mismatch_offsets(&job.spliced, self.match_opts.allowed_intronic_gap_size)
-        {
-            report.observe_signed_histogram(
-                "splice donor offset [bp]",
-                donor,
-                -MAX_REPORTED_OFFSET_BP,
-                MAX_REPORTED_OFFSET_BP,
-            );
-            report.observe_signed_histogram(
-                "splice acceptor offset [bp]",
-                acceptor,
-                -MAX_REPORTED_OFFSET_BP,
-                MAX_REPORTED_OFFSET_BP,
-            );
-            report.observe_signed_histogram(
-                "splice nearest-boundary miss [bp]",
-                donor.abs().max(acceptor.abs()),
-                0,
-                MAX_REPORTED_OFFSET_BP,
-            );
-        }
-    }
-
-    fn add_hit(&self, job: &Job, out: &mut QuantData, report: &mut RunStats) {
+    fn add_hit(&self, job: &Job, out: &mut QuantData, novel: &mut NewTranscriptData, report: &mut RunStats) -> Option<usize> {
         let hits = self.idx.match_features(&job.spliced, self.match_opts);
 
         if hits.is_empty() {
             report.report("no hit");
-            return;
+            return None;
         }
 
         let hit = &hits[0];
         report.report(hit.hit.class.to_string());
 
-        if matches!(
-            hit.hit.class,
-            MatchClass::JunctionMismatch | MatchClass::Intronic | MatchClass::Incompatible
-        ) {
-            self.record_splice_mismatch_histograms(job, hit.transcript, report);
-        }
 
         let feature_umi = GeneUmiHash(hit.feature_id, job.umi);
+        // Only materialize a model when the alignment proves a new junction.
+        // An incomplete read with a subset of reference junctions is NOT novel.
+        let novel_id = if matches!(hit.hit.class, MatchClass::JunctionMismatch | MatchClass::Intronic | MatchClass::Incompatible) {
+            self.discover_novel(job, hit.transcript, novel, report)
+        } else { None };
         if let Some(class) = hit.hit.class.quant_class() {
             let split_name = match class {
                 QuantClass::Exonic => QuantData::EXONIC,
@@ -149,14 +125,74 @@ impl<'a> ChunkProcessor<'a> {
                 &mut exprs_report,
             );
         }
+        novel_id
     }
 
-    fn add_snp_hits(&self, job: &Job, out: &mut QuantData, report: &mut RunStats) {
+    /// Discover exon-skipping isoforms from observed *genomic* junctions.
+    /// Do not infer complete exon boundaries from truncated ONT read blocks.
+    fn discover_novel(
+        &self,
+        job: &Job,
+        reference: &Transcript,
+        novel: &mut NewTranscriptData,
+        report: &mut RunStats,
+    ) -> Option<usize> {
+        let exons = reference.exons();
+        if exons.len() < 3 { return None; }
+        let observed = RefBlock::junctions_from_blocks(
+            &job.spliced.blocks, self.match_opts.allowed_intronic_gap_size,
+        );
+        if observed.is_empty() { return None; }
+        let known = reference.junctions();
+        let mut skip = Vec::new();
+        for (donor, acceptor) in observed {
+            if known.contains(&(donor, acceptor)) { continue; }
+            let left = exons.iter().position(|e| e.end == donor);
+            let right = exons.iter().position(|e| e.start == acceptor);
+            if let (Some(left), Some(right)) = (left, right) {
+                if right > left + 1 {
+                    skip.push((left, right));
+                }
+            }
+        }
+        if skip.len() != 1 { return None; }
+        let (left, right) = skip[0];
+        let mut revised = Vec::with_capacity(exons.len() - (right-left-1));
+        revised.extend_from_slice(&exons[..=left]);
+        revised.extend_from_slice(&exons[right..]);
+        let tx_name = reference.primary_name()?;
+        let gene_name = self.idx.genes.get(reference.gene_id)?.primary_name()?;
+        let chr_name = self.idx.chr_names.get(reference.chr_id)?;
+        let (first, last) = if reference.strand == gtf_splice_index::Strand::Minus {
+            (exons.len() - right + 1, exons.len() - left - 1)
+        } else { (left + 2, right) };
+        // Gene-wide exon IDs are computed from every annotated transcript of
+        // this gene, not from the selected reference isoform alone.
+        let gene_transcripts: Vec<&Transcript> = self.idx.transcripts.iter()
+            .filter(|tx| tx.gene_id == reference.gene_id && tx.chr_id == reference.chr_id
+                && tx.strand == reference.strand)
+            .collect();
+        let regions = gene_exon_regions(&gene_transcripts).ok()?;
+        let affected: Vec<String> = (first..=last).map(|tex| {
+            let event = resolve_gene_exon(reference, tex, &regions).ok()?;
+            Some(format!("tex{tex}_gex{}_{}_{}-{}",
+                event.gene_exon, chr_name, event.genomic_start, event.genomic_end))
+        }).collect::<Option<Vec<_>>>()?;
+        let name = format!("{tx_name}_mod_{}_del", affected.join("__"));
+        match novel.gtf_splice_index.insert_novel_transcript(
+            gene_name, &name, chr_name, reference.strand, &revised,
+        ) {
+            Ok(id) => { report.report("novel exon skip"); Some(id) }
+            Err(err) => { eprintln!("[bam_tide] WARNING: novel transcript insertion: {err}"); None }
+        }
+    }
+
+    fn add_snp_hits(&self, job: &Job, out: &mut QuantData, report: &mut RunStats) -> SnpUmiEvidence {
         let Some(snp) = self.snp else {
-            return;
+            return SnpUmiEvidence::default();
         };
 
-        snp.add_hits(job.aligned.as_ref(), job.cell, job.umi, out, report);
+        snp.add_hits(job.aligned.as_ref(), job.cell, job.umi, out, report)
     }
 }
 
@@ -185,6 +221,31 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         SpliceIndex::new(100)
             .from_reader(Cursor::new(gtf.as_bytes()), IdNameKeys::default())
             .unwrap()
+    }
+
+    #[test]
+    fn novel_exon_skip_is_inserted_and_umi_deduplicated() {
+        let gtf = concat!(
+            "chr14\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transcript_id \"T1\";\n",
+            "chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transcript_id \"T1\";\n",
+            "chr14\tsrc\texon\t301\t350\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transcript_id \"T1\";\n",
+        );
+        let idx = SpliceIndex::new(100)
+            .from_reader(Cursor::new(gtf.as_bytes()), IdNameKeys::default()).unwrap();
+        let mut read = SplicedRead::new(idx.chr_id("chr14").unwrap(), Strand::Plus,
+            vec![RefBlock::new(110, 150), RefBlock::new(300, 340)]);
+        read.finalize();
+        let job = Job { cell: 42, umi: 99, spliced: read, aligned: None };
+        let processor = ChunkProcessor::new(&idx, None, MatchOptions::default(), ProcessorOptions::default());
+        let mut novel = NewTranscriptData::new(idx.bin_width);
+        let mut report = RunStats::new(None, 0.0, 2);
+        let id = processor.discover_novel(&job, &idx.transcripts[0], &mut novel, &mut report).unwrap();
+        assert_eq!(novel.gtf_splice_index.transcripts[id].primary_name(), Some("T1_mod_tex2_gex2_chr14_201-250_del"));
+        novel.add_molecule(id, 42, 99, SnpUmiEvidence::default());
+        novel.add_molecule(id, 42, 99, SnpUmiEvidence::default());
+        let mut observed = 0;
+        novel.scdata.for_each_umi(|_, _, _| observed += 1);
+        assert_eq!(observed, 1);
     }
 
     #[test]
@@ -219,10 +280,11 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         );
 
         let mut merged = QuantData::standard();
+        let mut novel = NewTranscriptData::new(idx.bin_width);
         let mut report = RunStats::new(None, 0.0, 1);
 
         processor
-            .process_into(&[job], &mut merged, &mut report)
+            .process_into(&[job], &mut merged, &mut novel, &mut report)
             .unwrap();
 
         // At minimum: it must not become "no hit".
@@ -265,10 +327,11 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         );
 
         let mut merged = QuantData::standard();
+        let mut novel = NewTranscriptData::new(idx.bin_width);
         let mut report = RunStats::new(None, 0.0, 1);
 
         processor
-            .process_into(&[job], &mut merged, &mut report)
+            .process_into(&[job], &mut merged, &mut novel, &mut report)
             .unwrap();
 
         // At minimum: it must not become "no hit".

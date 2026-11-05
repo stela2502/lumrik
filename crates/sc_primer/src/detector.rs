@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::sync::Arc;
+use crate::single_cell_systems::tenx::{TenxVersion, TenxWhitelist};
 
 #[derive(Debug, Clone)]
 pub struct PrimerDetector {
@@ -27,6 +29,7 @@ pub struct PrimerDetector {
     primer_translation: HashMap<u64, (u64, usize)>,
     umi_translation: HashMap<u64, usize>,
     alternates: Vec<PrimerDetector>,
+    barcode_crosscheck: Option<Arc<Vec<(TenxVersion, TenxWhitelist)>>>,
 }
 
 impl PrimerDetector {
@@ -87,7 +90,241 @@ impl PrimerDetector {
             primer_translation: HashMap::new(),
             umi_translation: HashMap::new(),
             alternates: Vec::new(),
+            barcode_crosscheck: None,
         })
+    }
+
+    /// Load alternative 10x whitelists once; only rejected anchored candidates
+    /// are examined, and no normal detection or assignment is changed.
+    pub fn with_barcode_crosscheck(mut self) -> PrimerResult<Self> {
+        let Some(SingleCellSystem::Tenx(primary)) = &self.single_cell_system else {
+            return Err(PrimerError::invalid_grammar(
+                "--barcode-crosscheck currently requires a TENX_CELL grammar",
+            ));
+        };
+        let versions = [
+            TenxVersion::ThreePrimeV2,
+            TenxVersion::ThreePrimeV3, TenxVersion::ThreePrimeV4,
+            TenxVersion::FivePrime, TenxVersion::MultiomeArcV1,
+        ];
+        let mut alternatives = Vec::new();
+        for version in versions {
+            if version != primary.version() {
+                match TenxWhitelist::builtin(version) {
+                    Ok(whitelist) => alternatives.push((version, whitelist)),
+                    Err(error) => eprintln!(
+                        "[nelrune] barcode crosscheck: skipping unsupported {:?} whitelist: {}",
+                        version, error
+                    ),
+                }
+            }
+        }
+        self.barcode_crosscheck = Some(Arc::new(alternatives));
+        Ok(self)
+    }
+
+    /// Exhaustive independent primer/whitelist diagnostic. Enabled only by
+    /// NELRUNE_NEAREST_BARCODE_DIAG=1 together with --barcode-crosscheck.
+    /// Runs on raw primer matches (not the optimized anchor-seed candidates).
+    /// Limit this to a tiny BAM: each candidate scans the complete whitelist.
+    fn nearest_barcode_diagnostic(&self, seq: &[u8], accepted: &[PrimerMatch]) {
+        if std::env::var_os("NELRUNE_NEAREST_BARCODE_DIAG").as_deref()
+            != Some(std::ffi::OsStr::new("1")) { return; }
+        let Some(SingleCellSystem::Tenx(primary)) = &self.single_cell_system else { return; };
+        let ops = match self.grammar.ops.as_slice() {
+            [GrammarOp::Search { .. }, rest @ ..] => rest,
+            ops => ops,
+        };
+        let [GrammarOp::Fixed { seq: anchor, mismatches }, GrammarOp::TenxCell { version }, ..] = ops else { return; };
+        let orientations = if self.detect_reverse_complement { 2 } else { 1 };
+        let mut reported = 0usize;
+        for strand in 0..orientations {
+            let oriented = if strand == 0 { seq.to_vec() } else { Self::reverse_complement(seq) };
+            if oriented.len() < anchor.len() { continue; }
+            for start in 0..=oriented.len() - anchor.len() {
+                let errors = oriented[start..start + anchor.len()].iter().zip(anchor.iter())
+                    .filter(|(a, b)| !a.eq_ignore_ascii_case(b)).count();
+                if errors > *mismatches { continue; }
+                let barcode_start = start + anchor.len();
+                if barcode_start + version.cell_len() > oriented.len() { continue; }
+                let barcode = &oriented[barcode_start..barcode_start + version.cell_len()];
+                let original_start = if strand == 0 { start } else {
+                    seq.len() - start - anchor.len()
+                };
+                let (distance, closest, ties) = primary.nearest_cell_exhaustive(barcode)
+                    .expect("16bp 10x whitelist");
+                eprintln!(
+                    "[cassette-nearest] pos={} strand={} primer_mm={} observed={} closest={} distance={} ties={}",
+                    original_start, if strand == 0 { '+' } else { '-' }, errors,
+                    String::from_utf8_lossy(barcode), String::from_utf8_lossy(&closest),
+                    distance, ties,
+                );
+                // Probe the *real* grammar matcher at this exact primer position.
+                // Synthetic qualities are safe here: grammar matching checks
+                // quality slice bounds, not quality scores. This is diagnostic
+                // only and cannot change the normalizer's accepted hits.
+                let synthetic_qual = vec![b'I'; oriented.len()];
+                let grammar_result = self.try_from_start(
+                    &oriented, &synthetic_qual, start,
+                    if strand == 0 { Orientation::Forward } else { Orientation::ReverseComplement },
+                );
+                let (grammar, detail) = match grammar_result {
+                    Ok(Some(ref hit)) => ("PASS", format!("cell={} segments={}",
+                        hit.cell_seq.as_ref().map(|v| String::from_utf8_lossy(v).into_owned()).unwrap_or_default(),
+                        hit.segments.len())),
+                    Ok(None) => ("FAIL", "grammar returned no match".to_string()),
+                    Err(ref error) => ("ERROR", format!("{:?}", error)),
+                };
+                let emitted_by_detector = accepted.iter().any(|hit| {
+                    hit.primer_start == original_start
+                        && (if strand == 0 {
+                            hit.orientation == Orientation::Forward
+                        } else {
+                            hit.orientation == Orientation::ReverseComplement
+                        })
+                });
+                eprintln!(
+                    "[cassette-debug] pos={} strand={} primer_mm={} nearest_distance={} ties={} grammar={} detector_accepted={} {}",
+                    original_start, if strand == 0 { '+' } else { '-' }, errors,
+                    distance, ties, grammar, emitted_by_detector, detail
+                );
+                reported += 1;
+                if reported >= 32 {
+                    eprintln!("[cassette-nearest] per-read candidate limit 32 reached");
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Lightweight, non-mutating stage diagnostics for ONT 10x cassettes.
+    /// Enabled by --barcode-crosscheck; each returned label is a candidate,
+    /// not a distinct read. Both orientations are inspected independently.
+    pub fn cassette_failure_diagnostics(&self, seq: &[u8], accepted: &[PrimerMatch]) -> Vec<&'static str> {
+        if self.barcode_crosscheck.is_none() { return Vec::new(); }
+        // self.nearest_barcode_diagnostic(seq, accepted); // opt-in deep debug
+        let ops = match self.grammar.ops.as_slice() {
+            [GrammarOp::Search { .. }, rest @ ..] => rest,
+            ops => ops,
+        };
+        let [GrammarOp::Fixed { seq: anchor, mismatches }, GrammarOp::TenxCell { version }, tail @ ..] = ops else { return Vec::new(); };
+        let Some(SingleCellSystem::Tenx(primary)) = &self.single_cell_system else { return Vec::new(); };
+        let mut results = Vec::new();
+        let orientations = if self.detect_reverse_complement { 2 } else { 1 };
+        for orientation in 0..orientations {
+            let oriented = if orientation == 0 { seq.to_vec() } else { Self::reverse_complement(seq) };
+            let packed = (self.read_wide_primer_search && self.grammar.anchor_search().is_some())
+                .then(|| OneHotSequence::from_iupac_bytes(&oriented));
+            let mut cursor = 0;
+            while let Some(start) = self.next_candidate_start(&oriented, packed.as_ref(), cursor) {
+                cursor = start.saturating_add(1);
+                let original_start = if orientation == 0 { start } else { seq.len().saturating_sub(start + anchor.len()) };
+                if accepted.iter().any(|hit| original_start >= hit.primer_start && original_start < hit.primer_end) { continue; }
+                let valid_anchor = Self::find_fixed(&oriented, packed.as_ref(), start, anchor, *mismatches, (0, 0))
+                    .ok().flatten() == Some(start);
+                if !valid_anchor { results.push("cassette_diag_anchor_seed_rejected"); continue; }
+                results.push("cassette_diag_anchor_valid");
+                let Some(barcode_start) = start.checked_add(anchor.len()) else { continue; };
+                let cell_len = version.cell_len();
+                if !Self::has_range(&oriented, barcode_start, cell_len) {
+                    results.push("cassette_diag_barcode_truncated"); continue;
+                }
+                let barcode = &oriented[barcode_start..barcode_start + cell_len];
+                if primary.index_cell(barcode).is_none() {
+                    results.push("cassette_diag_barcode_rejected"); continue;
+                }
+                results.push("cassette_diag_barcode_valid");
+                let mut pos = barcode_start + cell_len;
+                let mut failed = false;
+                for op in tail {
+                    match op {
+                        GrammarOp::Umi { len } => {
+                            if !Self::has_range(&oriented, pos, *len) {
+                                results.push("cassette_diag_umi_truncated"); failed = true; break;
+                            }
+                            pos += *len;
+                        }
+                        GrammarOp::PolyT { min } => {
+                            let count = Self::count_base(&oriented, pos, b'T');
+                            if count < *min { results.push("cassette_diag_polyt_missing"); failed = true; break; }
+                            pos += count;
+                        }
+                        _ => { results.push("cassette_diag_other_grammar"); failed = true; break; }
+                    }
+                }
+                if !failed { results.push("cassette_diag_valid_structure_not_emitted"); }
+            }
+        }
+        results
+    }
+
+    /// Diagnose primer-anchored candidate barcodes which did not produce an
+    /// accepted cassette. Each candidate is counted once per orientation.
+    /// A hit in more than one alternative whitelist is explicitly ambiguous.
+    pub fn crosscheck_rejected(
+        &self, seq: &[u8], _qual: &[u8], accepted: &[PrimerMatch],
+    ) -> Vec<&'static str> {
+        let Some(models) = &self.barcode_crosscheck else { return Vec::new() };
+        let ops = match self.grammar.ops.as_slice() {
+            [GrammarOp::Search { .. }, rest @ ..] => rest,
+            ops => ops,
+        };
+        let [GrammarOp::Fixed { seq: anchor, mismatches }, GrammarOp::TenxCell { .. }, ..] = ops else {
+            return Vec::new();
+        };
+        let mut results = Vec::new();
+        let orientations = if self.detect_reverse_complement { 2 } else { 1 };
+        for orientation in 0..orientations {
+            let oriented = if orientation == 0 {
+                seq.to_vec()
+            } else {
+                Self::reverse_complement(seq)
+            };
+            let packed = (self.read_wide_primer_search && self.grammar.anchor_search().is_some())
+                .then(|| OneHotSequence::from_iupac_bytes(&oriented));
+            let mut cursor = 0;
+            while let Some(start) = self.next_candidate_start(&oriented, packed.as_ref(), cursor) {
+                cursor = start.saturating_add(1);
+                let original_start = if orientation == 0 { start } else {
+                    seq.len().saturating_sub(start + anchor.len())
+                };
+                if accepted.iter().any(|hit| original_start >= hit.primer_start && original_start < hit.primer_end) {
+                    continue;
+                }
+                // A seed is not a validated primer; never compare random downstream bases.
+                if Self::find_fixed(&oriented, packed.as_ref(), start, anchor, *mismatches, (0, 0))
+                    .ok().flatten() != Some(start) { continue; }
+                if start + anchor.len() + 16 > oriented.len() { continue; }
+                let barcode = &oriented[start + anchor.len()..start + anchor.len() + 16];
+                if let Some(SingleCellSystem::Tenx(primary)) = &self.single_cell_system {
+                    if primary.index_cell(barcode).is_some() {
+                        results.push("barcode_crosscheck_primary_valid_other_failure");
+                        continue;
+                    }
+                }
+                let mut exact = 0;
+                let mut corrected = 0;
+                let mut matched_version = None;
+                for (version, whitelist) in models.iter() {
+                    if whitelist.index_cell(barcode).is_some() {
+                        matched_version = Some(*version);
+                        if whitelist.exact_cell(barcode) { exact += 1; } else { corrected += 1; }
+                    }
+                }
+                let result = if exact + corrected > 1 { "barcode_crosscheck_ambiguous" }
+                    else if exact == 1 { match matched_version.unwrap() {
+                        TenxVersion::ThreePrimeV1 | TenxVersion::ThreePrimeV2 => "barcode_crosscheck_v2_exact",
+                        TenxVersion::ThreePrimeV3 => "barcode_crosscheck_v3_exact",
+                        TenxVersion::ThreePrimeV4 => "barcode_crosscheck_v4_exact",
+                        TenxVersion::FivePrime => "barcode_crosscheck_5p_exact",
+                        TenxVersion::MultiomeArcV1 => "barcode_crosscheck_arc_exact",
+                    }}
+                    else if corrected == 1 { "barcode_crosscheck_corrected" }
+                    else { "barcode_crosscheck_unmatched" };
+                results.push(result);
+            }
+        }
+        results
     }
 
     pub fn with_reverse_complement_detection(mut self, enabled: bool) -> Self {
@@ -109,6 +346,20 @@ impl PrimerDetector {
             detector.read_wide_primer_search = enabled;
         }
         self
+    }
+
+    /// ONT requires an identifiable FIXED anchor in every configured grammar.
+    /// Reject unsupported structures rather than silently reverting to a
+    /// positional search that misses internal long-read cassettes.
+    pub fn with_ont_fixed_search(self) -> PrimerResult<Self> {
+        for grammar in self.grammars() {
+            if grammar.anchor_search().is_none() {
+                return Err(PrimerError::invalid_grammar(
+                    "ONT detection requires a FIXED primer of at least 8 bases in every grammar",
+                ));
+            }
+        }
+        Ok(self.with_read_wide_primer_search(true))
     }
 
     /// Replace/install the cell whitelist from a line-delimited text file.
@@ -369,11 +620,13 @@ impl PrimerDetector {
     fn detect_all_single(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<Vec<PrimerMatch>> {
         Self::validate_read(seq, qual)?;
 
-        let hits = self.detect_all_forward(seq, qual, Orientation::Forward)?;
-        if !hits.is_empty() || !self.detect_reverse_complement {
+        let mut hits = self.detect_all_forward(seq, qual, Orientation::Forward)?;
+        if !self.detect_reverse_complement {
             return Ok(hits);
         }
 
+        // A concatenated ONT read can contain cassettes in both orientations.
+        // A forward hit must not prevent us from discovering reverse hits.
         let rc_seq = Self::reverse_complement(seq);
         let rc_qual = Self::reverse(qual);
         let mut reverse_hits =
@@ -383,7 +636,91 @@ impl PrimerDetector {
             hit.remap_reverse_coordinates(seq.len());
         }
 
-        Ok(reverse_hits)
+        // Prefer forward hits on ambiguous overlapping primer spans. In
+        // particular, never emit two molecules for the same physical cassette.
+        for hit in reverse_hits {
+            if !hits.iter().any(|existing| {
+                hit.primer_start < existing.primer_end
+                    && existing.primer_start < hit.primer_end
+            }) {
+                hits.push(hit);
+            }
+        }
+        hits.sort_by_key(|hit| hit.primer_start);
+
+        // Both orientation-specific searches originally extend inserts up to
+        // the next primer in their own orientation. Restrict those intervals
+        // at *any* adjacent primer, including one on the opposite strand.
+        // Reverse-complement inserts lie to the left of their primer in the
+        // original read coordinates.
+        let spans: Vec<_> = hits
+            .iter()
+            .map(|hit| (hit.primer_start, hit.primer_end))
+            .collect();
+        for hit in &mut hits {
+            match hit.orientation {
+                Orientation::Forward => {
+                    if let Some(next_start) = spans
+                        .iter()
+                        .filter(|(start, _)| *start >= hit.primer_end)
+                        .map(|(start, _)| *start)
+                        .min()
+                    {
+                        hit.insert_end = hit.insert_end.min(next_start);
+                    }
+                }
+                Orientation::ReverseComplement => {
+                    if let Some(previous_end) = spans
+                        .iter()
+                        .filter(|(_, end)| *end <= hit.primer_start)
+                        .map(|(_, end)| *end)
+                        .max()
+                    {
+                        hit.insert_start = hit.insert_start.max(previous_end);
+                    }
+                }
+            }
+        }
+
+        Ok(hits)
+    }
+
+    /// Find the next production cassette at or after `from` in one orientation.
+    /// ONT uses read-wide anchor discovery; short-read detection remains positional.
+    fn detect_next_forward(
+        &self,
+        seq: &[u8],
+        qual: &[u8],
+        orientation: Orientation,
+        packed: Option<&OneHotSequence>,
+        from: usize,
+    ) -> PrimerResult<Option<PrimerMatch>> {
+        let trace = false && std::env::var_os("NELRUNE_NEAREST_BARCODE_DIAG").as_deref()
+                == Some(std::ffi::OsStr::new("1"));
+        let mut cursor = from;
+        while let Some(offset) = self.next_candidate_start(seq, packed, cursor) {
+            let hit = self.try_from_start_with_packed(seq, qual, offset, orientation, packed)?;
+            if trace {
+                eprintln!(
+                    "[cassette-seed] strand={} candidate={} grammar={}",
+                    if matches!(orientation, Orientation::Forward) { '+' } else { '-' },
+                    offset,
+                    if hit.is_some() { "PASS" } else { "FAIL" },
+                );
+            }
+            if hit.is_some() {
+                return Ok(hit);
+            }
+            cursor = offset.saturating_add(1);
+        }
+        if trace {
+            eprintln!(
+                "[cassette-seed] strand={} exhausted_from={} read_len={}",
+                if matches!(orientation, Orientation::Forward) { '+' } else { '-' },
+                from, seq.len(),
+            );
+        }
+        Ok(None)
     }
 
     fn detect_all_forward(
@@ -397,25 +734,11 @@ impl PrimerDetector {
         let packed = (self.read_wide_primer_search && self.grammar.anchor_search().is_some())
             .then(|| OneHotSequence::from_iupac_bytes(seq));
 
-        while let Some(offset) = self.next_candidate_start(seq, packed.as_ref(), cursor) {
-            match self.try_from_start_with_packed(
-                seq,
-                qual,
-                offset,
-                orientation,
-                packed.as_ref(),
-            )? {
-                Some(hit) => {
-                    // A successful match owns the whole primer span. Continue
-                    // at its end instead of re-testing SEARCH shifts or other
-                    // candidate starts inside the primer we just accepted.
-                    cursor = hit.primer_end.max(offset.saturating_add(1));
-                    hits.push(hit);
-                }
-                None => {
-                    cursor = offset.saturating_add(1);
-                }
-            }
+        while let Some(hit) = self.detect_next_forward(
+            seq, qual, orientation, packed.as_ref(), cursor,
+        )? {
+            cursor = hit.primer_end.max(hit.primer_start.saturating_add(1));
+            hits.push(hit);
         }
 
         self.finish_insert_ends(&mut hits, seq.len());
@@ -428,20 +751,9 @@ impl PrimerDetector {
         qual: &[u8],
         orientation: Orientation,
     ) -> PrimerResult<Option<PrimerMatch>> {
-        let mut cursor = 0usize;
         let packed = (self.read_wide_primer_search && self.grammar.anchor_search().is_some())
             .then(|| OneHotSequence::from_iupac_bytes(seq));
-
-        while let Some(offset) = self.next_candidate_start(seq, packed.as_ref(), cursor) {
-            if let Some(hit) =
-                self.try_from_start_with_packed(seq, qual, offset, orientation, packed.as_ref())?
-            {
-                return Ok(Some(hit));
-            }
-            cursor = offset.saturating_add(1);
-        }
-
-        Ok(None)
+        self.detect_next_forward(seq, qual, orientation, packed.as_ref(), 0)
     }
 
     #[inline]
@@ -914,5 +1226,25 @@ impl PrimerDetector {
 
     pub fn version_from_bd_op(version: BdCellVersion) -> BdCellVersion {
         version
+    }
+}
+
+#[cfg(test)]
+mod optional_barcode_crosscheck_tests {
+    use super::*;
+
+    #[test]
+    fn incompatible_optional_whitelist_does_not_abort_v4_detection() {
+        let grammar = Grammar::parse(
+            "ont-v4-crosscheck",
+            "TYPE:GEX+FIXED:CTACACGACGCTCTTCCGATCT:mm=2+TENX_CELL:3p-v4+UMI:12",
+        ).expect("valid v4 grammar");
+        let detector = PrimerDetector::from_grammar(grammar)
+            .expect("valid detector")
+            .with_barcode_crosscheck()
+            .expect("optional models must not abort detector initialization");
+        let models = detector.barcode_crosscheck.as_ref().expect("crosscheck enabled");
+        assert!(models.iter().all(|(_, whitelist)| whitelist.len() > 0));
+        assert!(models.iter().all(|(version, _)| *version != TenxVersion::ThreePrimeV4));
     }
 }

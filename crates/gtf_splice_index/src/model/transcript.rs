@@ -398,47 +398,6 @@ impl Transcript {
         RefBlock::junctions_from_blocks(&self.exons, 0)
     }
 
-    /// For every observed read junction that is not an exact annotated junction,
-    /// return the signed donor and acceptor displacement from the nearest
-    /// annotated junction of this transcript. Coordinates are the native
-    /// 0-based half-open block boundaries used by both the BAM-derived read and
-    /// the splice index. Positive means the observed boundary is at a larger
-    /// genomic coordinate than the annotation.
-    pub fn junction_mismatch_offsets(
-        &self,
-        read: &SplicedRead,
-        allowed_gap_size: u32,
-    ) -> Vec<(i32, i32)> {
-        read.assert_finalized();
-        let read_junctions = RefBlock::junctions_from_blocks(&read.blocks, allowed_gap_size);
-        let tx_junctions = self.junctions();
-        if tx_junctions.is_empty() {
-            return Vec::new();
-        }
-
-        read_junctions
-            .into_iter()
-            .filter(|junction| !tx_junctions.contains(junction))
-            .filter_map(|(read_donor, read_acceptor)| {
-                tx_junctions
-                    .iter()
-                    .min_by_key(|&&(tx_donor, tx_acceptor)| {
-                        read_donor.abs_diff(tx_donor) as u64
-                            + read_acceptor.abs_diff(tx_acceptor) as u64
-                    })
-                    .map(|&(tx_donor, tx_acceptor)| {
-                        (
-                            read_donor as i64 - tx_donor as i64,
-                            read_acceptor as i64 - tx_acceptor as i64,
-                        )
-                    })
-                    .and_then(|(donor, acceptor)| {
-                        Some((i32::try_from(donor).ok()?, i32::try_from(acceptor).ok()?))
-                    })
-            })
-            .collect()
-    }
-
     pub fn match_spliced_read(&self, read: &SplicedRead, opts: MatchOptions) -> MatchHit {
         read.assert_finalized();
         self.match_read_blocks(read.chr_id, read.strand, &read.blocks, opts)
@@ -1240,44 +1199,6 @@ mod tests {
         assert_eq!(
             tx.match_spliced_read(&right, legacy_zero).class,
             MatchClass::OverhangTooLarge
-        );
-    }
-
-    #[test]
-    fn junction_mismatch_offsets_report_signed_one_base_shifts() {
-        let mut tx = Transcript::new(0, 0, "T", 0, Strand::Plus);
-        tx.add_exon(RefBlock::new(100, 150));
-        tx.add_exon(RefBlock::new(200, 250));
-        tx.finalize();
-
-        let mut exact = SplicedRead::new(
-            0,
-            Strand::Plus,
-            vec![RefBlock::new(110, 150), RefBlock::new(200, 240)],
-        );
-        exact.finalize();
-        assert!(tx.junction_mismatch_offsets(&exact, 0).is_empty());
-
-        let mut donor_plus_one = SplicedRead::new(
-            0,
-            Strand::Plus,
-            vec![RefBlock::new(110, 151), RefBlock::new(200, 240)],
-        );
-        donor_plus_one.finalize();
-        assert_eq!(
-            tx.junction_mismatch_offsets(&donor_plus_one, 0),
-            vec![(1, 0)]
-        );
-
-        let mut acceptor_minus_one = SplicedRead::new(
-            0,
-            Strand::Plus,
-            vec![RefBlock::new(110, 150), RefBlock::new(199, 240)],
-        );
-        acceptor_minus_one.finalize();
-        assert_eq!(
-            tx.junction_mismatch_offsets(&acceptor_minus_one, 0),
-            vec![(0, -1)]
         );
     }
 

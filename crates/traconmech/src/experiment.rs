@@ -274,10 +274,61 @@ pub fn resolve(
         controls: references,
     })
 }
+/// Audit the observed case/reference cells in each population without fitting modules.
+/// The same audit is used for model creation and frozen-model application.
+pub fn write_reference_audit(
+    data: &SingleCellData,
+    out: &Path,
+    population: &str,
+    condition: &str,
+    design: &Design,
+) -> Result<()> {
+    let populations = data.annotations.column(population)
+        .with_context(|| format!("missing population column {population}"))?;
+    let conditions = data.annotations.column(condition)
+        .with_context(|| format!("missing condition column {condition}"))?;
+    anyhow::ensure!(populations.len() == conditions.len(),
+        "population and condition annotation lengths differ");
+    let cases: BTreeSet<&str> = design.cases.iter().map(String::as_str).collect();
+    let controls: BTreeSet<&str> = design.controls.iter().map(String::as_str).collect();
+    let mut counts = BTreeMap::<String, (usize, usize)>::new();
+    for (pop, cond) in populations.iter().zip(conditions.iter()) {
+        let entry = counts.entry(pop.clone()).or_default();
+        if cases.contains(cond.as_str()) { entry.0 += 1; }
+        if controls.contains(cond.as_str()) { entry.1 += 1; }
+    }
+    fs::create_dir_all(out)?;
+    let path = out.join("wt_reference_clusters.tsv");
+    let mut audit = String::from("cluster\tcase_n\twithin_cluster_wt_n\twt_reference_cluster\twt_reference_n\tmethod\tpearson_log1p_mean\n");
+    for (pop, (case_n, wt_n)) in counts {
+        if case_n == 0 { continue; }
+        if wt_n == 0 {
+            audit.push_str(&format!("{pop}\t{case_n}\t0\tNA\t0\tmissing_wt\tNA\n"));
+        } else {
+            audit.push_str(&format!("{pop}\t{case_n}\t{wt_n}\t{pop}\t{wt_n}\tsame_cluster\t1\n"));
+        }
+    }
+    fs::write(&path, audit).with_context(|| format!("writing {}", path.display()))?;
+    record_references(out)
+}
+
 pub fn record_references(out: &Path) -> Result<()> {
     let path = out.join("experiment.yaml");
     let mut experiment: Experiment = serde_yaml::from_str(&fs::read_to_string(&path)?)?;
-    let tsv = fs::read_to_string(out.join("wt_reference_clusters.tsv"))?;
+    // Frozen-model application does not run regulatory reference matching, so
+    // it has no wt_reference_clusters.tsv. Preserve the resolved design and
+    // clear any stale reference audit rather than requiring that file.
+    let audit_path = out.join("wt_reference_clusters.tsv");
+    let tsv = match fs::read_to_string(&audit_path) {
+        Ok(tsv) => tsv,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            experiment.population_references.clear();
+            fs::write(&path, serde_yaml::to_string(&experiment)?)
+                .with_context(|| format!("writing {}", path.display()))?;
+            return Ok(());
+        }
+        Err(err) => return Err(err).with_context(|| format!("reading {}", audit_path.display())),
+    };
     experiment.population_references.clear();
     for line in tsv.lines().skip(1) {
         let fields: Vec<_> = line.split('\t').collect();
@@ -298,7 +349,8 @@ pub fn record_references(out: &Path) -> Result<()> {
             },
         });
     }
-    fs::write(path, serde_yaml::to_string(&experiment)?)?;
+    fs::write(&path, serde_yaml::to_string(&experiment)?)
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 

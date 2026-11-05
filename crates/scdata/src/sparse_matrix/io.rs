@@ -11,11 +11,11 @@ use int_to_dna::int_to_dna::IntToDna;
 use run_stats::RunStats;
 
 use crate::cell_data::GeneUmiHash;
-use crate::{FeatureIndex, Scdata};
+use crate::{FeatureIndex, Scdata, UmiEvidence};
 use sc_anndata::{AnnData, Matrix, Table};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-impl Scdata {
+impl<T: UmiEvidence> Scdata<T> {
     /// Write a dense TSV matrix.
     ///
     /// Rows = cells  
@@ -188,6 +188,14 @@ impl Scdata {
         )
         .map_err(|e| format!("Matrix dims write failed: {e}"))?;
 
+        // Resolve feature positions once; iterate stored sparse entries per cell.
+        let feature_rows: HashMap<_, _> = self
+            .feature_ids_with_data
+            .iter()
+            .enumerate()
+            .map(|(row, &feature_id)| (feature_id, row + 1))
+            .collect();
+
         for (cell_id, col_idx) in self.export_cell_ids.iter().zip(1..) {
             let cell = self
                 .get(cell_id)
@@ -197,23 +205,29 @@ impl Scdata {
 
             writeln!(writer_b, "{cell_name}").map_err(|e| format!("Barcode write failed: {e}"))?;
 
-            for (row_idx, feature_id) in self.feature_ids_with_data.iter().enumerate() {
-                if let Some(&value) = cell
-                    .total_reads
-                    .get(feature_id)
-                    .filter(|&&v| Self::is_sparse_export_value(v))
-                {
-                    writeln!(
-                        writer_m,
-                        "{} {} {}",
-                        row_idx + 1,
-                        col_idx,
-                        value_type.format_matrix_market_value(value)?
-                    )
-                    .map_err(|e| format!("Matrix entry write failed: {e}"))?;
+            let mut nonzero: Vec<_> = cell
+                .total_reads
+                .iter()
+                .filter_map(|(feature_id, &value)| {
+                    if !Self::is_sparse_export_value(value) {
+                        return None;
+                    }
+                    feature_rows.get(feature_id).map(|&row| (row, value))
+                })
+                .collect();
+            // Keep the previous deterministic feature-row ordering.
+            nonzero.sort_unstable_by_key(|&(row, _)| row);
 
-                    entries += 1;
-                }
+            for (row, value) in nonzero {
+                writeln!(
+                    writer_m,
+                    "{} {} {}",
+                    row,
+                    col_idx,
+                    value_type.format_matrix_market_value(value)?
+                )
+                .map_err(|e| format!("Matrix entry write failed: {e}"))?;
+                entries += 1;
             }
         }
 
@@ -233,6 +247,9 @@ impl Scdata {
         ))
     }
 
+}
+
+impl Scdata<()> {
     /// Read a 10x-style MatrixMarket directory.
     ///
     /// Returns `(Scdata, FeatureIndex-like data)`

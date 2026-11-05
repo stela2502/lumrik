@@ -156,21 +156,21 @@ chr1\t211\tsnp_210_G_A\tG\tA\t.\tPASS\t.
 fn make_test_reads() -> Vec<AlignedRead> {
     vec![
         // 1: covers SNP 100 as REF A
-        make_linear_read(96, 20, &[(100, b'A')]),
+        make_linear_read(95, 20, &[(100, b'A')]),
         // 2: covers SNP 100 as ALT G
-        make_linear_read(96, 20, &[(100, b'G')]),
+        make_linear_read(95, 20, &[(100, b'G')]),
         // 3: covers SNP 150 as REF C
-        make_linear_read(146, 20, &[(150, b'C')]),
+        make_linear_read(145, 20, &[(150, b'C')]),
         // 4: covers SNP 150 as ALT T
-        make_linear_read(146, 20, &[(150, b'T')]),
+        make_linear_read(145, 20, &[(150, b'T')]),
         // 5: covers SNP 210 as REF G
-        make_linear_read(206, 20, &[(210, b'G')]),
+        make_linear_read(205, 20, &[(210, b'G')]),
         // 6: covers SNP 210 as ALT A
-        make_linear_read(206, 20, &[(210, b'A')]),
+        make_linear_read(205, 20, &[(210, b'A')]),
         // 7: covers SNP 100 and 150: REF at 100, ALT at 150
-        make_linear_read(96, 80, &[(100, b'A'), (150, b'T')]),
+        make_linear_read(95, 80, &[(100, b'A'), (150, b'T')]),
         // 8: covers SNP 100 and 150: ALT at 100, REF at 150
-        make_linear_read(96, 80, &[(100, b'G'), (150, b'C')]),
+        make_linear_read(95, 80, &[(100, b'G'), (150, b'C')]),
         // 9: spliced read, second block covers SNP 210 as REF G
         make_spliced_read_around_210(b'G'),
         // 10: spliced read, second block covers SNP 210 as ALT A
@@ -198,32 +198,32 @@ fn make_linear_read(start0: u32, len: u32, edits: &[(u32, u8)]) -> AlignedRead {
 
 fn make_spliced_read_around_210(base_at_210: u8) -> AlignedRead {
     // Reference:
-    // first block: 100..110
-    // skip:        110..210
-    // second block:210..220
+    // first block: 95..105
+    // skip:        105..205
+    // second block:205..225
     //
     // Read positions:
     // 0..10  first block
-    // 10..20 second block
-    // read_pos 10 maps to ref pos 210
+    // 10..30 second block
+    // read_pos 15 maps to ref pos 210 (five upstream aligned bases)
 
-    let mut seq = vec![b'C'; 20];
-    seq[10] = base_at_210;
+    let mut seq = vec![b'C'; 30];
+    seq[15] = base_at_210;
 
-    for b in &mut seq[11..20] {
+    for b in &mut seq[16..30] {
         *b = b'G';
     }
 
     AlignedRead::new(
         0,
         Strand::Plus,
-        100,
+        95,
         &seq,
-        Some(vec![30; 20]),
+        Some(vec![30; 30]),
         &[
             (ReadOpKind::Match, 10),
             (ReadOpKind::RefSkip, 100),
-            (ReadOpKind::Match, 10),
+            (ReadOpKind::Match, 20),
         ],
     )
 }

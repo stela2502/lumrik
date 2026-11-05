@@ -4,6 +4,8 @@ mod quant;
 mod vdj;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufWriter, Write};
+use std::process::{Command, Stdio};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
@@ -19,7 +21,7 @@ use bam_tide::ont_normalizer::normalizer::OntNormalizerConfig;
 use bam_tide::quantification::bam_collector::BamCollector;
 
 use gtf_splice_index::SpliceIndex;
-use sc_mapper::{MappingCall, StreamingMapper};
+use sc_mapper::{MapperKind, MappingCall, StreamingMapper};
 use scdata::QuantData;
 
 use lumrik_status::{public_hostname, spawn_status_server};
@@ -76,73 +78,104 @@ fn run(args: Cli) -> Result<()> {
     };
 
     progress.stage("loading chemistry");
-    let primer = args
+    let mut primer = args
         .primer
         .detector()
         .map_err(anyhow::Error::msg)
         .context("configuring sc_primer chemistry")?;
+    if args.barcode_crosscheck {
+        primer = primer.with_barcode_crosscheck().map_err(anyhow::Error::msg)?;
+        eprintln!("[barcode] crosscheck enabled (diagnostics only; no rescue)");
+    }
 
     let cell_barcode_len = primer.cell_len();
 
-    progress.stage("starting mapper");
-    let mut mapper = args
-        .mapper
-        .from_cli()
-        .context("starting streaming mapper")?;
     let mapper_bam = args
         .bam_collector
         .bam_out
         .clone()
         .unwrap_or_else(|| args.outpath.join("nelrune.mapper.bam"));
-
     if let Some(parent) = mapper_bam.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating mapper BAM directory {}", parent.display()))?;
     }
 
-    let mut sink = MapperBamSink::new(mapper_bam.clone());
-
-    // Spawning STAR is cheap; loading its index is not.  The first progress
-    // sample below is therefore the useful boundary between mapper warmup and
-    // steady processing.
-    progress.stop_timer("nelrune/startup");
-    progress.start_timer("nelrune/input_and_mapper");
-
-    progress.stage("waiting for mapper / first batch");
-    let (submitted, mut feature_counts) = if let Some(bam_input) = &args.bam {
-        run_ont_input(
-            &args,
-            &primer,
-            bam_input,
-            &mut mapper,
-            &mut sink,
-            &mut progress,
-        )?
+    let (mut feature_counts, submitted) = if args.mapper.mapper == MapperKind::Minimap2 {
+        let bam_input = args.bam.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("two-phase minimap2 currently requires ONT --bam input")
+        })?;
+        let finished = PathBuf::from(format!("{}.finished", mapper_bam.display()));
+        if finished.is_file() && mapper_bam.is_file() {
+            let metadata = fs::read_to_string(&finished)?;
+            let expected = mapping_signature(&args, bam_input)?;
+            if metadata != expected {
+                eprintln!("[nelrune] mapping completion marker mismatch: {}", finished.display());
+                let stored: std::collections::BTreeMap<_, _> = metadata
+                    .lines()
+                    .filter_map(|line| line.split_once('='))
+                    .collect();
+                let current: std::collections::BTreeMap<_, _> = expected
+                    .lines()
+                    .filter_map(|line| line.split_once('='))
+                    .collect();
+                if metadata.lines().next() != expected.lines().next() {
+                    eprintln!("  signature version: stored={:?}, expected={:?}",
+                        metadata.lines().next(), expected.lines().next());
+                }
+                for key in stored.keys().chain(current.keys()).copied().collect::<std::collections::BTreeSet<_>>() {
+                    if stored.get(key) != current.get(key) {
+                        eprintln!("  {key}:");
+                        eprintln!("    stored:   {}", stored.get(key).copied().unwrap_or("<missing>"));
+                        eprintln!("    expected: {}", current.get(key).copied().unwrap_or("<missing>"));
+                    }
+                }
+                bail!("mapping completion marker {} does not match current input/parameters; remove the marker to remap", finished.display());
+            }
+            check_bam(&mapper_bam)?;
+            progress.stage("reusing completed minimap2 BAM");
+            // Feature-tag counts from normalization are not persisted here.
+            // Reusing a BAM must not silently discard them.
+            if !args.additional_features.is_empty() {
+                bail!("BAM reuse with --additional-features is not supported yet (normalization feature counts are not persisted)");
+            }
+            (FeatureTagCounts::default(), 0)
+        } else {
+            if finished.exists() { fs::remove_file(&finished)?; }
+            progress.stage("normalizing ONT into temporary FASTQ");
+            let (count, features) = normalize_ont_fastq(&args, &primer, bam_input, &mut progress)?;
+            if count == 0 { bail!("normalization emitted no mapper-ready reads"); }
+            progress.stage("minimap2 | samtools: writing mapped BAM");
+            map_minimap2_bam(&args, &mapper_bam)?;
+            check_bam(&mapper_bam)?;
+            let signature = mapping_signature(&args, bam_input)?;
+            let marker_tmp = PathBuf::from(format!("{}.finished.partial", mapper_bam.display()));
+            fs::write(&marker_tmp, signature)?;
+            fs::rename(&marker_tmp, &finished)?;
+            let _ = fs::remove_file(args.outpath.join("normalized.minimap2.fastq"));
+            (features, count)
+        }
     } else {
-        run_illumina_input(&args, &primer, &mut mapper, &mut sink, &mut progress)?
+        progress.stage("starting mapper");
+        let mut mapper = args.mapper.from_cli().context("starting streaming mapper")?;
+        let mut sink = MapperBamSink::new(mapper_bam.clone());
+        progress.stage("waiting for mapper / first batch");
+        let (submitted, features) = if let Some(bam_input) = &args.bam {
+            run_ont_input(&args, &primer, bam_input, &mut mapper, &mut sink, &mut progress)?
+        } else {
+            run_illumina_input(&args, &primer, &mut mapper, &mut sink, &mut progress)?
+        };
+        if submitted == 0 { bail!("normalization emitted no mapper-ready reads"); }
+        progress.stage("finishing mapper");
+        sink.ensure_open_blocking(&mut mapper)?;
+        sink.drain_ready(&mut mapper)?;
+        let remaining = mapper.finish().context("finishing streaming mapper")?;
+        sink.write_calls(remaining)?;
+        sink.finish()?;
+        (features, submitted)
     };
-
     progress.clear_input_file();
-
-    progress.stop_timer("nelrune/input_and_mapper");
-
-    // Additional-feature reads are filtered out by bam-tide before the mapper
-    // Tey are also handles by the normalizers.
-
-    if submitted == 0 {
-        bail!("normalization emitted no mapper-ready reads");
-    }
-
-    progress.stage("finishing mapper");
-    progress.start_timer("nelrune/mapper_finish");
-
-    sink.ensure_open_blocking(&mut mapper)?;
-    sink.drain_ready(&mut mapper)?;
-
-    let remaining = mapper.finish().context("finishing streaming mapper")?;
-    sink.write_calls(remaining)?;
-    sink.finish()?;
-    progress.stop_timer("nelrune/mapper_finish");
+    progress.stop_timer("nelrune/startup");
+    if submitted > 0 { eprintln!("[nelrune] submitted {submitted} normalization batches"); }
 
     progress.stage("quantifying mapper BAM");
     progress.start_timer("nelrune/quantification");
@@ -150,9 +183,13 @@ fn run(args: Cli) -> Result<()> {
     let collector = BamCollector::from_cli(args.bam_collector.clone())
         .context("configuring BAM collector")?
         .with_grammar(primer.grammar().clone());
-    let result = collector
-        .run_paths(std::slice::from_ref(&mapper_bam))
+    let mut result = collector
+        .run_paths_with_progress(std::slice::from_ref(&mapper_bam), |data, report| {
+            progress.update_quantification_live(data, report);
+        })
         .context("collecting BAM quantification")?;
+    progress.update_quantification_live(&result.data, &result.report);
+    result.new_transcripts.write_reports(&args.outpath)?;
     let mut data = result.data;
     let mut report = result.report;
     progress.stop_timer("nelrune/quantification");
@@ -191,6 +228,7 @@ fn run(args: Cli) -> Result<()> {
         let retained = calling.retained.clone();
         (retained, Some(calling))
     };
+    progress.stage(format!("cell cutoff complete: {} cells retained; preparing matrix indexes", retained_cells.len()));
     let features = index.feature_index();
     let mut indexes: HashMap<String, &dyn scdata::FeatureIndex> = HashMap::new();
     indexes.insert(QuantData::EXPRS.to_string(), &features);
@@ -200,6 +238,7 @@ fn run(args: Cli) -> Result<()> {
         indexes.insert(QuantData::SNP_REF.to_string(), &snp.index);
         indexes.insert(QuantData::SNP_ALT.to_string(), &snp.index);
     }
+    progress.stage("writing raw and filtered quantification matrices");
     let cell_accounting = data
         .write_raw_and_filtered_for_cells(
             &args.outpath,
@@ -213,9 +252,11 @@ fn run(args: Cli) -> Result<()> {
     // Additional-feature tables have their own feature-type-aware writer.
     // Preserve every observed feature-tag cell under raw/, then retain
     // only the canonical GEX cells under filtered/.
+    progress.stage("writing raw additional-feature tables");
     feature_counts
         .finalize_and_write_all(cell_barcode_len, &args.outpath.join("raw"))
         .context("writing raw additional feature tables")?;
+    progress.stage("writing filtered additional-feature tables");
     feature_counts
         .finalize_and_write(
             &retained_cells,
@@ -223,6 +264,7 @@ fn run(args: Cli) -> Result<()> {
             &args.outpath.join("filtered"),
         )
         .context("writing filtered additional feature tables")?;
+    progress.stage("quantification output files written");
     progress.stop_timer("nelrune/writing");
 
     let bam_records_seen = report.get_issue_count("bam_records_seen");
@@ -295,6 +337,107 @@ fn run(args: Cli) -> Result<()> {
     Ok(())
 }
 
+fn mapping_signature(args: &Cli, input: &Path) -> Result<String> {
+    let input_meta = fs::metadata(input)?;
+    let index_meta = fs::metadata(&args.mapper.mapper_index)?;
+    let modified = |m: &fs::Metadata| -> Result<u128> {
+        Ok(m.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos())
+    };
+    Ok(format!(
+        "nelrune-minimap2-v1\ninput={}\ninput_size={}\ninput_mtime={}\nindex={}\nindex_size={}\nindex_mtime={}\nprimer={:?}\nmapper_options={:?}\nmapper_threads={}\nmax_reads={:?}\nmin_transcript_len={}\nbarcode_crosscheck={}\n",
+        input.canonicalize()?.display(), input_meta.len(), modified(&input_meta)?,
+        args.mapper.mapper_index.canonicalize()?.display(), index_meta.len(), modified(&index_meta)?,
+        args.primer, args.mapper.mapper_options, args.mapper.mapper_threads,
+        args.bam_collector.max_reads, args.min_transcript_len, args.barcode_crosscheck,
+    ))
+}
+
+fn check_bam(path: &Path) -> Result<()> {
+    let status = Command::new("samtools").arg("quickcheck").arg("-v").arg(path)
+        .status().context("running samtools quickcheck")?;
+    if !status.success() { bail!("samtools quickcheck failed for {}", path.display()); }
+    Ok(())
+}
+
+fn normalize_ont_fastq(
+    args: &Cli,
+    primer: &sc_primer::PrimerDetector,
+    bam_input: &Path,
+    progress: &mut RunProgress,
+) -> Result<(usize, FeatureTagCounts)> {
+    let path = args.outpath.join("normalized.minimap2.fastq");
+    let file = fs::File::create(&path)?;
+    let mut output = BufWriter::new(file);
+    let config = OntNormalizerConfig {
+        bam: bam_input.to_path_buf(), dump_failed_reads: args.dump_failed_reads,
+        out: args.outpath.join("normalized.fastq"),
+        read_tags: args.outpath.join("read_tags.tsv"),
+        min_transcript_len: args.min_transcript_len,
+        ont_diagnostics: args.ont_diagnostics,
+        max_reads: args.bam_collector.max_reads,
+        primer: primer.clone().with_ont_fixed_search().map_err(anyhow::Error::msg)?, additional_features: args.additional_features.clone(),
+        additional_feature_min_hits: args.additional_feature_min_hits,
+        threads: args.threads, gzip_level: 1, gzip: false,
+    };
+    let mut normalizer = OntNormalizer::new(config)?;
+    let mut batches = 0usize;
+    progress.input_file(bam_input.to_string_lossy());
+    normalizer.nelrune_run(
+        |reads| {
+            for (_r1, r2) in reads { write!(output, "{r2}")?; }
+            batches += 1;
+            Ok(true)
+        },
+        |stats| progress.update_from_run_stats(stats),
+    )?;
+    output.flush()?;
+    drop(output);
+    progress.report_block(&format!("ONT normalization: {}", bam_input.display()), normalizer.stats());
+    Ok((batches, normalizer.take_feature_tag_counts()))
+}
+
+fn map_minimap2_bam(args: &Cli, output: &Path) -> Result<()> {
+    let fastq = args.outpath.join("normalized.minimap2.fastq");
+    let partial = PathBuf::from(format!("{}.partial", output.display()));
+    if partial.exists() { fs::remove_file(&partial)?; }
+    let launch = args.mapper.launch()?;
+    let options = launch.options.clone();
+    // Match the existing sc-mapper minimap2 defaults without piping FASTQ
+    // back and forth through Nelrune.
+    let mut cleaned = Vec::new();
+    let mut iter = options.into_iter();
+    while let Some(opt) = iter.next() {
+        if opt == "-t" { let _ = iter.next(); continue; }
+        if opt == "-a" || opt == "-c" { continue; }
+        cleaned.push(opt);
+    }
+    let mut options = cleaned;
+    options.extend(["-t".into(), launch.threads.to_string(), "-a".into()]);
+    if !options.iter().any(|option| option == "--eqx") {
+        options.push("--eqx".into());
+    }
+    options.push(launch.index.to_string_lossy().into_owned());
+    options.push(fastq.to_string_lossy().into_owned());
+    let mut minimap = Command::new(&launch.mapper_bin)
+        .args(&options).stdout(Stdio::piped()).spawn()
+        .with_context(|| format!("starting {}", launch.mapper_bin.display()))?;
+    let sam = minimap.stdout.take().context("minimap2 stdout unavailable")?;
+    let mut samtools = match Command::new("samtools")
+        .args(["view", "-b", "-o"]).arg(&partial).arg("-")
+        .stdin(Stdio::from(sam)).spawn() {
+        Ok(child) => child,
+        Err(err) => { let _ = minimap.kill(); let _ = minimap.wait(); return Err(err).context("starting samtools view"); }
+    };
+    let map_status = minimap.wait().context("waiting for minimap2")?;
+    let sam_status = samtools.wait().context("waiting for samtools")?;
+    if !map_status.success() || !sam_status.success() {
+        bail!("minimap2/samtools failed: minimap2={map_status}, samtools={sam_status}; partial BAM retained at {}", partial.display());
+    }
+    check_bam(&partial)?;
+    fs::rename(&partial, output).context("publishing completed mapping BAM")?;
+    Ok(())
+}
+
 fn run_illumina_input(
     args: &Cli,
     primer: &sc_primer::PrimerDetector,
@@ -341,6 +484,12 @@ fn run_illumina_input(
             r2_path,
             |reads| {
                 for (r1, r2) in reads {
+                    // Drain mapping results throughout FASTQ submission, not
+                    // only after the entire normalization batch. Otherwise
+                    // the bounded mapper-output channel can fill, blocking
+                    // the stdout reader while the mapper blocks on stdout
+                    // and this thread blocks writing FASTQ to its stdin/FIFO.
+                    sink.drain_ready(mapper)?;
                     mapper.submit(r2, r1.as_ref())?;
                 }
 
@@ -384,11 +533,13 @@ fn run_ont_input(
 
     let config = OntNormalizerConfig {
         bam: bam_input.to_path_buf(),
+        dump_failed_reads: args.dump_failed_reads,
+        ont_diagnostics: args.ont_diagnostics,
         out: args.outpath.join("normalized.fastq"),
         read_tags: args.outpath.join("read_tags.tsv"),
         min_transcript_len: args.min_transcript_len,
         max_reads: args.bam_collector.max_reads,
-        primer: primer.clone(),
+        primer: primer.clone().with_ont_fixed_search().map_err(anyhow::Error::msg)?,
         additional_features: args.additional_features.clone(),
         additional_feature_min_hits: args.additional_feature_min_hits,
         threads: args.threads,
@@ -404,6 +555,9 @@ fn run_ont_input(
     normalizer.nelrune_run(
         |reads| {
             for (r1, r2) in reads {
+                // Prevent a full mapper-result channel from stalling the
+                // mapper's SAM/BAM stdout while FASTQ input is being sent.
+                sink.drain_ready(mapper)?;
                 mapper.submit(r2, r1.as_ref())?;
             }
 

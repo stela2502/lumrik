@@ -343,10 +343,47 @@ impl SnpIndex {
                 continue;
             };
 
-            if let Some(q) = observed.qual {
-                if q < min_baseq {
-                    continue;
+            // Require a fully aligned 11-base reference window with usable
+            // qualities. Missing qualities and gaps cannot support a SNP call.
+            let Some(window_start) = locus.pos0.checked_sub(5) else {
+                continue;
+            };
+            let mut flank_qualities = [0u8; 10];
+            let mut flank_count = 0;
+            let mut previous_read_pos = None;
+            let mut valid = true;
+            let minimum_quality = min_baseq.max(10);
+            for pos in window_start..=locus.pos0.saturating_add(5) {
+                let Some(base) = read.base_at_ref_pos(pos) else {
+                    valid = false;
+                    break;
+                };
+                let Some(quality) = base.qual else {
+                    valid = false;
+                    break;
+                };
+                if quality < minimum_quality
+                    || previous_read_pos.is_some_and(|prev| base.read_pos != prev + 1)
+                {
+                    valid = false;
+                    break;
                 }
+                previous_read_pos = Some(base.read_pos);
+                if pos != locus.pos0 {
+                    flank_qualities[flank_count] = quality;
+                    flank_count += 1;
+                }
+            }
+            if !valid || flank_count != 10 {
+                continue;
+            }
+            flank_qualities.sort_unstable();
+            // Median of ten values, rounded down. Allow the SNP to be at
+            // most ten Phred points below the neighboring median.
+            let median = (u16::from(flank_qualities[4])
+                + u16::from(flank_qualities[5])) / 2;
+            if u16::from(observed.qual.unwrap_or(0)) + 10 < median {
+                continue;
             }
 
             out.push(ObservedSnp { locus, observed });
@@ -932,10 +969,10 @@ mod tests {
         let read = AlignedRead::new(
             0,
             Strand::Plus,
-            100,
-            b"ATC",
-            Some(vec![30, 30, 30]),
-            &[(ReadOpKind::Match, 3)],
+            95,
+            b"GGGGGATCGGGGG",
+            Some(vec![30; 13]),
+            &[(ReadOpKind::Match, 13)],
         );
 
         let hits = index.observed_snps(&read, 20);
@@ -967,16 +1004,44 @@ mod tests {
         let read = AlignedRead::new(
             0,
             Strand::Plus,
-            100,
-            b"A",
-            Some(vec![10]),
-            &[(ReadOpKind::Match, 1)],
+            95,
+            b"GGGGGAGGGGG",
+            Some(vec![10; 11]),
+            &[(ReadOpKind::Match, 11)],
         );
 
         assert!(index.observed_snps(&read, 20).is_empty());
         assert_eq!(index.observed_snps(&read, 10).len(), 1);
     }
 
+
+    #[test]
+    fn observed_snps_requires_complete_high_quality_context() {
+        let index = SnpIndex::new(
+            &["chrA".to_string()], &[1_000],
+            vec![RawSnpRecord::new(0, 100, b'A', b"T", "variant", "rs1")], 100,
+        ).unwrap();
+        let check = |qualities: Option<Vec<u8>>, ops: &[(ReadOpKind, u32)]| {
+            let read = AlignedRead::new(0, Strand::Plus, 95,
+                b"GGGGGAGGGGG", qualities, ops);
+            index.observed_snps(&read, 5).len()
+        };
+        assert_eq!(check(Some(vec![30; 11]), &[(ReadOpKind::Match, 11)]), 1);
+        assert_eq!(check(None, &[(ReadOpKind::Match, 11)]), 0);
+        let mut low_flank = vec![30; 11];
+        low_flank[2] = 9;
+        assert_eq!(check(Some(low_flank), &[(ReadOpKind::Match, 11)]), 0);
+        let mut low_snp = vec![35; 11];
+        low_snp[5] = 15;
+        assert_eq!(check(Some(low_snp), &[(ReadOpKind::Match, 11)]), 0);
+        let mut acceptable_snp = vec![30; 11];
+        acceptable_snp[5] = 20;
+        assert_eq!(check(Some(acceptable_snp), &[(ReadOpKind::Match, 11)]), 1);
+        assert_eq!(check(Some(vec![30; 11]), &[(ReadOpKind::Match, 5),
+            (ReadOpKind::Del, 1), (ReadOpKind::Match, 6)]), 0);
+        assert_eq!(check(Some(vec![30; 11]), &[(ReadOpKind::Match, 5),
+            (ReadOpKind::Ins, 1), (ReadOpKind::Match, 5)]), 0);
+    }
     #[test]
     fn constructor_rejects_bad_inputs() {
         assert!(SnpIndex::new(&[], &[], vec![], 100).is_err());
@@ -995,209 +1060,67 @@ mod tests {
     }
 
     #[test]
-    fn real_world_stress_test() {
-        let genome = Genome::from_fasta("tests/data/chr17_slice.fa.gz").unwrap();
-        let mut read = AlignedRead::new(
-            0,                  // e.g. 0 for chr17 slice
-            Strand::Minus,         // flag 16
-            1,               // POS-1
-            b"GTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTAGTATTACTGAATTTATTTGTATTCACTTTTTATGTTCAAGACAAGAAAACTCAACTGAAAGAGGAGTATATTAAACCTTTCTTTTCTCCCATACCATGGCCCATTCATTTATACTTTCAATTTGCCCGACTTCCTCCATTAGGGCTCATCCCAAATTCCATTCCACTTCCTCCATTCCCCCTTTTACATTCACAACCCTTGTGCAACATTCCTTTTCTCTCAAGTCAGACCAGACCACATGTTTCAGTGCACATGGATCCCATGTACTCCTGTCTCTTCATACCACTGCTTACTACACGACGCTCTTCCGACCATAGTGAGCAGGTGACGGCACAGGCCATTTTTTTTTTTTTTTTTTTTTTTTTTTCCCAGCTAATTTTGTATTTTTAGTAGAGATGGGGTTTCATCTTGTTGGTCAGGCTAGTCTCCAACTCCTGACCTCAAGTGATCCGCCGGCCTTGGCCTCCCAGAGTGTCGGGATTACAGGCGTGAGCCACCGCGCCCAGCTGCAATTCTCAATCCAGCAATCTATCAGCTCACAAAGAAGGGTTTGGCAGAGTCAGAATGGATCTGAAGCAGCACAGCAGAAATAAAAACAGAGCTAGGGACATAATCTGAGGAAAAGGTTGGGATTGAAAGGGTGGAGGATGGTTGCGTAAAAGGGAGATTTTCTGTTTACTTGAGATCTGCAGAGTAGGGTCCATGTGTCCTCGTCTGTAGGTGAACACACGTGCACACACAAATGGTAACTGTGTGTGATGATGGACGTGCTGATTAATTTGATTGTGAATGGTTTCACAATATACCCCCATATCAAATCATCACACTGCATACCTTGAATGTATGCAATTTTGGGGGATGAATTATGCCCAACAAAGGAAATAAAAAAAATTAAAAAAAAAAAAAAGGAGTCATCAAGGTGACCTGTCTACAGAGGCAAGGACAGGGACTGAGCTTCAGGAGCTCTAGTTTGCCTGTTGGGTAGGGGACAGATGTTTAAGTTAAAAGTCTCTGAAAGAGGTGAAATTCTGGATCTCCTGGGAAGAGTGTTTGGCATTCCCTGGAGTGAGCCCTGCTCCCCCCTGGGCCCTTCTGGAGCCTGGGCATCCTTGAGTTCCAAGGCTGATTCAGCTCTCTGGAACATCTCGAAGCGCTCACGCCCACGGATCTGAAGGGTGAGAGATTCTCCATCCAGCGGTTTCTTCTTTGGCTGGGGAGAGGAGCTGGTGTTGTTGGGCAGTGCTGCTTAGCTCCTGGGGCAGCTCTGTGGTGAGGCTCCCCTTTCTTGCGGACATCTTCTTCCCTCTGTGTGCCTCGGGCCCCTCCCAGGACAGGCACATGCACCTCAAAGCTGTTCCGTCCCAGTACATGACCACTGGAGTCTTCCAGTGTGATGATGGTGAGGATGGGCCTCCGGTTCATGCCGCCCATGCAGGAACTGTTACACATGTAGTTGTAGTGGATGGTGACAGAGTCAGAGCCAACCTCAGGCGGCTCATAGGGCACCACCACACGATGTCGAAGAGTGTTTCTGTCATCCAAATACTCCACACGGAAATTTCCTTCCACGTGCAGAGCCTAGGAGGGCGAGGACGGCCATCTACAGTGCTCACACACGGCGGGGCAGCGCCTCACAGCTCCAGGCCGTGACTGCTTGGGATGGCCATGGCGCGGACGGGCGGGCGCCGGCGGGCGTGGAATCAACCCACAGCTGCACAGGGCAGGTCTTGGCCAGTTGGCAAACATCTTGTTGAGGGCAGGGCAGTATGTGGACATACTTGGCTGTCCCAGAATGCAAGAGAAGCCACGGGAAACCGGAGCCGCCCTGGTAGGTTTTCTGGGAGGGATAGAAGATGACAGGGGCCAGGAGGGGGCTGGTGCAGGGGCCGCCGGTGTAGGAGCTGCTGGTGCAGGGGCCACGGGGAGAGTCCCTCCCGCATTTGTAGTTTCATCCTGACCTGGGTCTTCACCC",
-            Some(b"=>?BBC;74444555554.*.*(((('%%&),8?AECAA@@@EEGGDC97789@@ABFGGE>?=FFHB<:770++-)&(())**+222.-0227=?A999::?>>@@AC@BA@?@<55-)&&&&&&&,00@@@@>A@A65432344463222122266679KHIIGHD<;;:;FDCCCDCD11,,2,+**+*++)'''()+)((()67=;=85-)))*DAAABBHJIEDACDABA??A@ACAA=4;744321+++++++211110/.**,,,,?A@7777)((''((((,+**('''('%%%%%&%%%%%&(>?C>><<;<==;;::553334,,,,,++('&'(*/011159:;?@A@BBCDIHJG<;;;:<<<=7777899887665444320/246;>??GGHHEN@@>@NKSQSSKF554548889KHRPMFCCBB=:99;;BIKKSCBBBDSFKFEDGNLJLIJKSIQHDJFSNKOGI@@@@B>>>=<@@DHF22223;(((()>DCHSJDCABCCGOKSEMHEEEEEDB7732211101.)))+----.66777766?>>EGCA=700001FGIC3212122212222;;===;99:00/0/++++*.---+++1444971234?=>;;8776232222''&&':;.7<//73223110'&&')*13.-00+++1130-++,++34211001277<?>?A85543200*('&))''''(,-)(342(''(-/.44442///14B=;65445557677<532322222679:CGIKNSJNHMEOKJILQSMIJICCCBBC876665....>??:::<>AB;84346654477???>BEIFG@?=AGFHJNIDDEEEHHHJEDCCBBGJDC>>:669:<:78:51,++*),,++-.,+(()))---.,21,*++.3561034661-++*)(&'''$$%&')-...79EEADE=;::656778,,,++7884433577:445668<:1198@AKIEKJRJSKSKNJSG9B=<;*311//0004332122.-*'))&''(+,,-,,,-,/*)'''&'))(+--.+,,0*).**/45;;<??55667?-,8))).?BCEGJAB?<=<;;;;)'''&-//-.+(&&&,++*/0,8:;:;.---34/))))*,*((***+*++,,,)&&&&))//66111.-33444446<=022221,+''(()6./-)(&&&&&&'),----1----.CBE8789;9<=;>??36<::<;=@?@>86888>((('')/./41--,*)))*++)(01-../013***(*--./013334HEA:39774(&&%%%%%&')*0+'&)*(((+0/*(()(&&&&&'((53550198><<,+'%&'(/./.---0.0001::::;B><;:100+*+++<<<=>@BCEGIJGIDFHHHAA@@@@.-,**+0020*,.459==;00../569:43333>>ACEGGGHEISRJIDDAAAGDJGFDDB>977776)(((*)))003478;;<=?BABB975552211155?A@<=>?@DB<,,,,,/..-'&%&&)*)***)'')))))*&44554111151(&&%&&&&&&&,/,'$$#&&&&'(*)*)())''&$##$$##$$&%$$####'&)('(&((,*(('(**+2354343,)('&&('''%%&&%%%%%''(''%&%%%((()*.2210.(((&%('&$&(''((''(()**&&&&&+')')***,....45===?@?A97:87101122678999>>669+)/017:<=?><;;>,9<96)*('&%%$%%,&###$(&'',.89;>:8***+++*)((,,-./-+***,)./032...//////154++,,,----,,-,(*++,--'''''97788=AJLLKECE@@AA@?<43322--++*)+)))))))*2;;<64213++++.237---:0:+*437,0(&%%&%$$%%%%%%%)&%%$%%&'&'%%%&%%%$%%(**8::;?CB?>555".to_vec()),
-            &[
-                (SoftClip, 400),
-                (Match, 249),
-                (Ins, 1),
-                (Match, 79),
-                (Ins, 1),
-                (Match, 18),
-                (Ins, 1),
-                (Match, 17),
-                (Del, 2),
-                (Match, 55),
-                (Del, 2),
-                (Match, 80),
-                (Del, 1),
-                (Match, 10),
-                (Del, 3),
-                (Match, 5),
-                (Del, 1),
-                (Match, 28),
-                (Del, 1),
-                (Match, 73),
-                (Ins, 1),
-                (Match, 38),
-                (Ins, 2),
-                (Match, 35),
-                (RefSkip, 3183),
-                (Match, 33),
-                (Ins, 1),
-                (Match, 28),
-                (Del, 1),
-                (Match, 14),
-                (Ins, 1),
-                (Match, 31),
-                (RefSkip, 2819),
-                (Match, 74),
-                (RefSkip, 92),
-                (Match, 2),
-                (Del, 1),
-                (Match, 5),
-                (Del, 2),
-                (Match, 3),
-                (Del, 1),
-                (Match, 3),
-                (Del, 1),
-                (Match, 10),
-                (Ins, 1),
-                (Match, 35),
-                (Ins, 1),
-                (Match, 12),
-                (Ins, 3),
-                (Match, 19),
-                (Del, 4),
-                (Match, 39),
-                (RefSkip, 343),
-                (Match, 110),
-                (RefSkip, 568),
-                (Match, 84),
-                (Del, 3),
-                (Match, 7),
-                (Del, 1),
-                (Match, 8),
-                (Del, 1),
-                (Match, 6),
-                (Ins, 1),
-                (Match, 3),
-                (RefSkip, 81),
-                (Del, 3),
-                (Match, 8),
-                (Del, 1),
-                (Match, 1),
-                (Del, 1),
-                (Match, 7),
-                (Ins, 4),
-                (Match, 5),
-                (Del, 1),
-                (Match, 16),
-                (Del, 1),
-                (Match, 5),
-                (Del, 3),
-                (Match, 2),
-                (Del, 1),
-                (Match, 1),
-                (Del, 1),
-                (Match, 14),
-                (Del, 1),
-                (Match, 19),
-                (Ins, 2),
-                (Match, 9),
-                (Del, 1),
-                (Match, 3),
-                (Del, 2),
-                (Match, 50),
-                (Del, 1),
-                (Match, 27),
-                (RefSkip, 757),
-                (Match, 4),
-                (Del, 3),
-                (Match, 1),
-                (Del, 2),
-                (Match, 25),
-                (Ins, 2),
-                (Match, 7),
-                (Del, 3),
-                (Match, 2),
-                (Ins, 1),
-                (Match, 33),
-                (Del, 1),
-                (Match, 86),
-                (Ins, 1),
-                (Match, 1),
-                (Del, 2),
-                (Match, 11),
-                (Del, 1),
-                (Match, 1),
-                (Del, 1),
-                (Match, 27),
-                (SoftClip, 3),
+    fn constructed_tp53_ref_alt_and_quality_window() {
+        // Two variants in a synthetic chromosome, separated sufficiently that
+        // each has an independent 5+1+5 reference-aligned context.
+        let index = SnpIndex::new(
+            &["chr17".to_string()], &[1_000],
+            vec![
+                RawSnpRecord::new(0, 100, b'A', b"G", "TP53_ref", "ref"),
+                RawSnpRecord::new(0, 120, b'C', b"T", "TP53_alt", "alt"),
             ],
+            100,
+        ).unwrap();
+        let mut seq = vec![b'G'; 41];
+        seq[5] = b'A';  // reference at position 100
+        seq[25] = b'T'; // alternate at position 120
+        let read = AlignedRead::new(
+            0, Strand::Plus, 95, &seq, Some(vec![30; 41]),
+            &[(ReadOpKind::Match, 41)],
         );
-        let slice_start_1based = 7_666_729u32;
-        let snps = vec![
-            RawSnpRecord::new(
-                0,
-                7_675_994 - slice_start_1based,
-                b'G',
-                b"C",
-                "TP53_c375G>C",
-                "TP53_c375G>C",
-            ),
-            RawSnpRecord::new(
-                0,
-                7_674_894 - slice_start_1based,
-                b'C',
-                b"T",
-                "TP53_c637C>T",
-                "TP53_c637C>T",
-            ),
-            RawSnpRecord::new(
-                0,
-                7_674_953 - slice_start_1based,
-                b'A',
-                b"T",
-                "TP53_c578A>T",
-                "TP53_c637C>T",
-            ),
-        ];
-
-        let pos0 = 7_674_953 - slice_start_1based;
-        let obs = read.base_at_ref_pos(pos0).unwrap();
-        assert_eq!(
-            obs.base, b'A',
-            "base at {}='{}' could be 'A' (in the read))",
-            pos0, obs.base as char
-        );
-
-        read.seq[obs.read_pos as usize] = b'T';
-
-        let obs = read.base_at_ref_pos(pos0).unwrap();
-        assert_eq!(
-            obs.base, b'T',
-            "base at {}='{}' not changed to 'T' (in the read))",
-            pos0, obs.base as char
-        );
-
-        let index = SnpIndex::new(&genome.chr_names(), &genome.chr_lengths(), snps, 1_000_000);
-
-        assert!(
-            index.is_ok(),
-            "SNP index should build for chr17 slice-local SNP coordinates: {:?}",
-            index.err()
-        );
-
-        let index = index.unwrap();
-
-        assert!(
-            read.base_at_ref_pos(7_675_994 - slice_start_1based)
-                .is_none()
-        );
-
-        assert!(
-            read.base_at_ref_pos(7_674_894 - slice_start_1based)
-                .is_some()
-        );
-
-        assert!(
-            read.base_at_ref_pos(7_674_953 - slice_start_1based)
-                .is_some()
-        );
-
-        let (ref_ids, alt_ids, other_ids) = index.get_ref_alt_other_ids_for_read(&read, 0);
-
-        assert_eq!(ref_ids, vec![0u64]);
-        assert_eq!(alt_ids, vec![1u64]);
-        assert!(other_ids.is_empty());
+        let (ref_ids, alt_ids, other_ids) = index.get_ref_alt_other_ids_for_read(&read, 10);
+        assert_eq!(ref_ids, vec![0], "expected REF evidence at position 100");
+        assert_eq!(alt_ids, vec![1], "expected ALT evidence at position 120");
+        assert!(other_ids.is_empty(), "unexpected OTHER evidence");
     }
+
+    #[test]
+    fn constructed_tp53_rejects_bad_snp_context() {
+        let index = SnpIndex::new(
+            &["chr17".to_string()], &[1_000],
+            vec![RawSnpRecord::new(0, 100, b'A', b"T", "TP53", "variant")],
+            100,
+        ).unwrap();
+        let count = |start: u32, seq: &[u8], qualities: Option<Vec<u8>>,
+                     ops: &[(ReadOpKind, u32)]| {
+            let read = AlignedRead::new(0, Strand::Plus, start, seq, qualities, ops);
+            index.observed_snps(&read, 10).len()
+        };
+        let seq = b"GGGGGAGGGGG";
+        assert_eq!(count(95, seq, Some(vec![30; 11]), &[(Match, 11)]), 1,
+            "complete Q30 window must pass");
+        assert_eq!(count(96, &seq[..10], Some(vec![30; 10]), &[(Match, 10)]), 0,
+            "four upstream bases must not suffice");
+        assert_eq!(count(95, &seq[..10], Some(vec![30; 10]), &[(Match, 10)]), 0,
+            "four downstream bases must not suffice");
+        let mut low_flank = vec![30; 11];
+        low_flank[2] = 9;
+        assert_eq!(count(95, seq, Some(low_flank), &[(Match, 11)]), 0,
+            "a single Q9 flank must reject the SNP");
+        let mut low_snp = vec![35; 11];
+        low_snp[5] = 15;
+        assert_eq!(count(95, seq, Some(low_snp), &[(Match, 11)]), 0,
+            "SNP Q15 versus flank median Q35 must reject");
+        let mut borderline = vec![30; 11];
+        borderline[5] = 20;
+        assert_eq!(count(95, seq, Some(borderline), &[(Match, 11)]), 1,
+            "SNP Q20 versus flank median Q30 must pass");
+        assert_eq!(count(95, seq, None, &[(Match, 11)]), 0,
+            "missing quality must reject");
+        assert_eq!(count(95, seq, Some(vec![30; 11]), &[(Match, 5), (Ins, 1), (Match, 5)]), 0,
+            "insertion interrupting the context must reject");
+    }
+
 }
 
 impl fmt::Display for SnpIndex {

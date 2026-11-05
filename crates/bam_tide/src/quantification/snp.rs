@@ -1,7 +1,7 @@
 //snp.rs
 use anyhow::{Context, Result};
 use run_stats::RunStats;
-use scdata::QuantData;
+use scdata::{QuantData, SnpUmiEvidence};
 use scdata::cell_data::GeneUmiHash;
 use snp_index::{AlignedRead, SnpIndex, VcfReadOptions};
 
@@ -35,10 +35,11 @@ impl SnpSideChannel {
         umi: u64,
         data: &mut QuantData,
         report: &mut RunStats,
-    ) {
+    ) -> SnpUmiEvidence {
+        let mut evidence = SnpUmiEvidence::default();
         let Some(read) = aligned else {
             report.report("snp requested but no aligned read");
-            return;
+            return evidence;
         };
 
         //panic!("We use the min SNP quality of {} here!\nSNP index info: {}", self.min_anchor, self.index );
@@ -48,10 +49,11 @@ impl SnpSideChannel {
 
         if ref_ids.is_empty() && alt_ids.is_empty() {
             report.report("no snp hit");
-            return;
+            return evidence;
         }
 
         for snp_id in ref_ids {
+            evidence.add_ref(snp_id);
             data.try_insert(
                 QuantData::SNP_REF,
                 &cell,
@@ -62,6 +64,7 @@ impl SnpSideChannel {
         }
 
         for snp_id in alt_ids {
+            evidence.add_alt(snp_id);
             data.try_insert(
                 QuantData::SNP_ALT,
                 &cell,
@@ -72,6 +75,7 @@ impl SnpSideChannel {
         }
 
         report.report("snp hit");
+        evidence
     }
 
     pub fn is_empty(&self) -> bool {

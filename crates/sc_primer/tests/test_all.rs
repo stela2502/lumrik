@@ -1100,3 +1100,43 @@ fn typed_parser_rejects_conflicting_embedded_type() {
     )
     .is_err());
 }
+
+#[test]
+fn ont_detect_all_collects_mixed_orientation_cassettes() {
+    let grammar = TestData::tenx_3p_v3_grammar("ont-mixed-orientation");
+    let detector = PrimerDetector::from_grammar(grammar.clone())
+        .unwrap()
+        .with_read_wide_primer_search(true);
+    let forward = TestData::synthesized_tenx_read(&grammar);
+    let reverse = TestData::rc(&forward);
+    let seq = TestData::cat(&[&forward, b"NNNNNNNNNNNNNNNN", &reverse]);
+    let qual = TestData::qual(seq.len());
+
+    let hits = detector.detect_all(&seq, &qual).unwrap();
+    assert_eq!(hits.len(), 2, "both orientations must be collected");
+    assert_eq!(hits[0].orientation, Orientation::Forward);
+    assert_eq!(hits[1].orientation, Orientation::ReverseComplement);
+    for hit in &hits {
+        let mut cell = hit.get_cell(&seq, &qual).unwrap().seq;
+        let mut umi = hit.get_umi(&seq, &qual).unwrap().seq;
+        if hit.orientation == Orientation::ReverseComplement {
+            cell = TestData::rc(&cell);
+            umi = TestData::rc(&umi);
+        }
+        assert_eq!(cell, TestData::tenx_cell());
+        assert_eq!(umi, TestData::tenx_umi());
+        assert!(!hit.get_insert(&seq, &qual).unwrap().seq.is_empty());
+    }
+}
+
+#[test]
+fn ont_detect_all_does_not_duplicate_single_cassette_across_strands() {
+    let grammar = TestData::tenx_3p_v3_grammar("ont-no-double-count");
+    let detector = PrimerDetector::from_grammar(grammar.clone())
+        .unwrap()
+        .with_read_wide_primer_search(true);
+    let seq = TestData::synthesized_tenx_read(&grammar);
+    let qual = TestData::qual(seq.len());
+    let hits = detector.detect_all(&seq, &qual).unwrap();
+    assert_eq!(hits.len(), 1);
+}

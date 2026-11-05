@@ -334,6 +334,65 @@ impl SpliceIndex {
         }
     }
 
+    /// Insert a transcript into an independent novel-transcript index.
+    /// Identical names must describe identical genomic exon structures.
+    /// Returns the destination-local transcript ID.
+    pub fn insert_novel_transcript(
+        &mut self,
+        gene_name: &str,
+        transcript_name: &str,
+        chr_name: &str,
+        strand: Strand,
+        exons: &[RefBlock],
+    ) -> Result<TranscriptId> {
+        if exons.is_empty() || exons.iter().any(|e| e.start >= e.end) {
+            bail!("novel transcript must have nonempty valid exon blocks");
+        }
+        if let Some(&id) = self.transcript_by_name.get(transcript_name) {
+            let tx = &self.transcripts[id];
+            if self.chr_names[tx.chr_id] != chr_name || tx.strand != strand || tx.exons() != exons ||
+                self.genes[tx.gene_id].primary_name() != Some(gene_name) {
+                bail!("conflicting novel transcript identity: {transcript_name}");
+            }
+            return Ok(id);
+        }
+        let chr_id = self.intern_chr(chr_name);
+        let gene_id = match self.gene_by_name.get(gene_name) {
+            Some(&id) => id,
+            None => {
+                let id = self.genes.len();
+                self.genes.push(Gene::new(id, gene_name));
+                self.gene_by_name.insert(gene_name.to_owned(), id);
+                id
+            }
+        };
+        let id = self.transcripts.len();
+        let mut tx = Transcript::new(id, gene_id, transcript_name, chr_id, strand);
+        for exon in exons { tx.add_exon(*exon); }
+        let (start, end) = tx.finalize();
+        self.transcripts.push(tx);
+        self.genes[gene_id].add_transcript(id);
+        self.tx_span_start.push(start);
+        self.tx_span_end.push(end);
+        self.chr_buckets[chr_id].add_span(id, start, end);
+        self.chr_buckets[chr_id].finalize_by_start(&self.tx_span_start, &self.tx_span_end);
+        self.transcript_by_name.insert(transcript_name.to_owned(), id);
+        Ok(id)
+    }
+
+    /// Merge another novel-transcript index, returning source -> destination IDs.
+    pub fn merge_novel_transcripts(&mut self, source: &SpliceIndex) -> Result<HashMap<u64, u64>> {
+        let mut mapping = HashMap::new();
+        for tx in &source.transcripts {
+            let name = tx.primary_name().context("unnamed source transcript")?;
+            let gene = source.genes[tx.gene_id].primary_name().context("unnamed source gene")?;
+            let chr = &source.chr_names[tx.chr_id];
+            let destination = self.insert_novel_transcript(gene, name, chr, tx.strand, tx.exons())?;
+            mapping.insert(tx.id as u64, destination as u64);
+        }
+        Ok(mapping)
+    }
+
     /// get all gene names from the index (id == gene_id)
     pub fn gene_names(&self) -> Vec<String> {
         self.genes

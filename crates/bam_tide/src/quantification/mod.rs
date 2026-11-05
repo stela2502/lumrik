@@ -1,3 +1,4 @@
+pub mod new_transcript_data;
 pub mod bam_collector;
 pub mod chunk_processor;
 pub mod cli;

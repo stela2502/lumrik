@@ -15,4 +15,3 @@ pub mod exprs;
 
 pub mod contracts;
 
-pub mod module_score;

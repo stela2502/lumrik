@@ -6,6 +6,8 @@ pub mod cell_hash;
 pub mod feature_index;
 pub mod mtx;
 pub mod quant_data;
+pub mod umi_evidence;
+pub use umi_evidence::{UmiEvidence, SnpUmiEvidence, SnpSupport};
 pub mod sparse_matrix;
 
 pub use crate::cell_data::GeneUmiHash;

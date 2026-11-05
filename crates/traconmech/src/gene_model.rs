@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
-    io::{BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
 
@@ -62,7 +62,7 @@ pub fn create(
     let modules = read_training_modules(&out.join("module_membership.tsv"))?;
     ensure!(
         !modules.is_empty(),
-        "training produced no effect modules; use --effect-cluster during create"
+        "training produced no effect modules"
     );
     let model = Model {
         modules,
@@ -126,7 +126,7 @@ fn read_model(path: &Path) -> Result<Model> {
     Ok(model)
 }
 
-fn read_training_modules(path: &Path) -> Result<BTreeMap<String, usize>> {
+pub(crate) fn read_training_modules(path: &Path) -> Result<BTreeMap<String, usize>> {
     use std::io::{BufRead, BufReader};
     let mut lines = BufReader::new(
         File::open(path).with_context(|| format!("reading training modules {}", path.display()))?,
@@ -176,6 +176,23 @@ fn read_training_modules(path: &Path) -> Result<BTreeMap<String, usize>> {
     Ok(modules)
 }
 
+/// Read a plain-text gene signature; every gene belongs to module 1.
+pub fn read_gene_list(path: &Path) -> Result<BTreeMap<String, usize>> {
+    let reader = BufReader::new(File::open(path).with_context(|| format!("opening {}", path.display()))?);
+    let mut genes = BTreeMap::new();
+    for (line_no, line) in reader.lines().enumerate() {
+        let line = line?;
+        let gene = line.trim();
+        if gene.is_empty() || gene.starts_with('#') { continue; }
+        ensure!(gene.split_whitespace().count() == 1,
+            "{}:{}: expected one gene symbol per line", path.display(), line_no + 1);
+        ensure!(genes.insert(gene.to_owned(), 1).is_none(),
+            "{}:{}: duplicate gene {}", path.display(), line_no + 1, gene);
+    }
+    ensure!(!genes.is_empty(), "gene list {} is empty", path.display());
+    Ok(genes)
+}
+
 /// Plot the external expression of the ORIGINAL training modules; never refit.
 pub fn plot_frozen_modules(
     data: &SingleCellData,
@@ -189,10 +206,16 @@ pub fn plot_frozen_modules(
     count_label_layout: &str,
 ) -> Result<()> {
     let model = read_model(model_path)?;
-    ensure!(
-        !model.modules.is_empty(),
-        "model has no frozen modules; recreate with --effect-cluster"
-    );
+    ensure!(!model.modules.is_empty(), "model has no frozen modules; recreate the model");
+    plot_modules(data, &model.modules, cluster, condition, cases, controls, out, label_angle, count_label_layout)
+}
+
+pub fn plot_modules(
+    data: &SingleCellData,
+    modules: &BTreeMap<String, usize>,
+    cluster: &str, condition: &str, cases: &str, controls: &str,
+    out: &Path, label_angle: Option<f64>, count_label_layout: &str,
+) -> Result<()> {
     let clusters = data
         .annotations
         .column(cluster)
@@ -252,7 +275,7 @@ pub fn plot_frozen_modules(
     crate::module_plots::write_module_plots(
         out,
         data,
-        &model.modules,
+        modules,
         &ordered,
         &groups,
         &groups,
@@ -265,7 +288,7 @@ pub fn plot_frozen_modules(
     let mut report = BufWriter::new(File::create(out.join("frozen_module_coverage.tsv"))?);
     writeln!(report, "module\ttraining_genes\texternal_genes")?;
     let mut totals: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
-    for (gene, id) in &model.modules {
+    for (gene, id) in modules {
         let pair = totals.entry(*id).or_default();
         pair.0 += 1;
         if data.feature_index(gene).is_some() {
@@ -316,8 +339,22 @@ pub fn apply(data: &SingleCellData, model_path: &Path, condition: &str, out: &Pa
         "only {:.1}% of model genes overlap external data (minimum 50%)",
         coverage * 100.0
     );
+    score_modules(data, &model.modules, condition, out)
+}
+
+pub(crate) fn score_modules(data: &SingleCellData, modules: &BTreeMap<String, usize>, condition: &str, out: &Path) -> Result<()> {
+    let labels = data.annotations.column(condition)
+        .with_context(|| format!("missing condition annotation {condition}"))?;
     std::fs::create_dir_all(out)?;
-    let quantified = crate::module_score::score(data, &model.modules)?;
+    // Export frozen assignments once, sorted by numeric module ID then gene.
+    let mut membership = BufWriter::new(File::create(out.join("module_membership.tsv"))?);
+    writeln!(membership, "module\tgene")?;
+    let mut entries: Vec<_> = modules.iter().collect();
+    entries.sort_by(|(gene_a, id_a), (gene_b, id_b)| id_a.cmp(id_b).then_with(|| gene_a.cmp(gene_b)));
+    for (gene, id) in entries {
+        writeln!(membership, "{id}\t{gene}")?;
+    }
+    let quantified = data.module_score(modules)?;
     let module_ids = &quantified.ids;
     let module_columns: Vec<String> = module_ids.iter().map(|id| format!("module_{id}")).collect();
     let mut output = BufWriter::new(File::create(out.join("gene_model_scores.tsv"))?);
@@ -363,10 +400,10 @@ pub fn apply(data: &SingleCellData, model_path: &Path, condition: &str, out: &Pa
         writeln!(module_coverage, "module_{id}\t{total}\t{present}")?;
     }
     let mut info = BTreeMap::new();
-    info.insert("model_genes", model.features.len());
-    info.insert("overlapping_genes", shared.len());
+    info.insert("model_genes", modules.len());
+    info.insert("overlapping_genes", modules.keys().filter(|g| data.feature_index(g).is_some()).count());
     info.insert("cells", data.cells.len());
     serde_json::to_writer_pretty(File::create(out.join("gene_model_coverage.json"))?, &info)?;
-    println!("Quantified {} frozen modules in {} cells ({:.1}% model gene overlap): {}", module_ids.len(), data.cells.len(), coverage * 100.0, out.display());
+    println!("Quantified {} modules in {} cells: {}", module_ids.len(), data.cells.len(), out.display());
     Ok(())
 }

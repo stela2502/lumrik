@@ -18,16 +18,18 @@ fn next_u64(state: &mut u64) -> u64 {
     state.wrapping_mul(0x2545F4914F6CDD1D)
 }
 
-pub fn score(data: &SingleCellData, modules: &BTreeMap<String, usize>) -> Result<ModuleScores> {
+impl SingleCellData {
+    pub fn module_score(&self, modules: &BTreeMap<String, usize>) -> Result<ModuleScores> {
+        let data = self;
     const NBIN: usize = 24;
     const CTRL: usize = 100;
     let n = data.cells.len();
     let ng = data.features.len();
     ensure!(n > 0 && ng > 0, "empty expression matrix");
     let lookup: HashMap<&str, usize> = data.features.iter().enumerate().map(|(i,g)| (g.as_str(),i)).collect();
-    let mut ids: Vec<usize> = modules.values().copied().filter(|&id| id != 0).collect();
+    let mut ids: Vec<usize> = modules.values().copied().collect();
     ids.sort_unstable(); ids.dedup();
-    ensure!(!ids.is_empty(), "no nonzero modules");
+    ensure!(!ids.is_empty(), "no modules");
     let mut coverage = BTreeMap::new();
     let mut members = Vec::new();
     for &id in &ids {
@@ -96,4 +98,6 @@ pub fn score(data: &SingleCellData, modules: &BTreeMap<String, usize>) -> Result
             }).collect()
         }).collect();
     Ok(ModuleScores { ids, scores, module_means, coverage })
+}
+
 }

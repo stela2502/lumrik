@@ -560,11 +560,11 @@ nextflow-deploy-one:
 	cd "$$src"; \
 	if [ -n "$$(git status --porcelain)" ]; then \
 	  git status --short; \
-	  printf 'Commit and push these changes? [y/N] '; read answer; \
-	  case "$$answer" in y|Y|yes|YES) git add -A; git commit -m "Deploy $$name with Lumrik $$tag"; git push origin HEAD ;; *) echo 'Aborted'; exit 1 ;; esac; \
+	  printf 'Commit and push these changes? [Y/n] '; read answer; \
+	  case "$$answer" in ""|y|Y|yes|YES) git add -A; git commit -m "Deploy $$name with Lumrik $$tag"; git push origin HEAD ;; *) echo 'Aborted'; exit 1 ;; esac; \
 	fi; \
-	printf 'Deploy $$name to %s? [y/N] ' "$$dest"; read answer; \
-	case "$$answer" in y|Y|yes|YES) ;; *) echo 'Aborted'; exit 1 ;; esac; \
+	printf 'Deploy $$name to %s? [Y/n] ' "$$dest"; read answer; \
+	case "$$answer" in ""|y|Y|yes|YES) ;; *) echo 'Aborted'; exit 1 ;; esac; \
 	mkdir -p "$(SINGULARITY_SENS)" "$$dest"; \
 	rsync -r --progress "$$sif" "$(SINGULARITY_SENS)/"; \
 	rsync -r --delete --progress \

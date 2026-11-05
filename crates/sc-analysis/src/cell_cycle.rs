@@ -1,5 +1,5 @@
 //! Cell-cycle classification using expression-matched module scores.
-use crate::{module_score, SingleCellData};
+use crate::SingleCellData;
 use anyhow::{ensure, Result};
 use std::collections::BTreeMap;
 
@@ -23,7 +23,7 @@ pub fn score(data: &SingleCellData) -> Result<CellCycleScores> {
     let mut modules = BTreeMap::new();
     for gene in &s { modules.insert((*gene).to_string(), 1); }
     for gene in &g2m { modules.insert((*gene).to_string(), 2); }
-    let result = module_score::score(data, &modules)?;
+    let result = data.module_score(&modules)?;
     let s_index = result.ids.iter().position(|id| *id == 1).expect("S module");
     let g_index = result.ids.iter().position(|id| *id == 2).expect("G2M module");
     let mut s_scores = Vec::with_capacity(result.scores.len());

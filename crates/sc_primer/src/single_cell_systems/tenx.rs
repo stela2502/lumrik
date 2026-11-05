@@ -147,7 +147,11 @@ impl TenxWhitelist {
             PrimerError::invalid_grammar(format!("failed to read 10x whitelist: {e}"))
         })?;
 
-        Ok(Self::from_text(version, &text))
+        Self::from_text_with_mismatches(version, &text, 1).map_err(|error| {
+            PrimerError::invalid_grammar(format!(
+                "invalid 10x {:?} whitelist: {error}", version
+            ))
+        })
     }
 
     pub fn from_text(version: TenxVersion, text: &str) -> Self {
@@ -182,10 +186,42 @@ impl TenxWhitelist {
         self.hash.is_empty()
     }
 
+    pub fn exact_cell(&self, seq: &[u8]) -> bool {
+        self.hash.exact_index(seq).is_some()
+    }
+
     pub fn index_cell(&self, seq: &[u8]) -> Option<u64> {
         self.hash
             .best_match_default(seq)
             .map(|(index, _distance)| index as u64)
+    }
+
+    /// Exhaustive nearest-barcode diagnostic, intentionally expensive.
+    /// Returns the minimum Hamming distance, one nearest barcode and the
+    /// number of whitelist entries tied at that distance.
+    pub fn nearest_cell_exhaustive(&self, observed: &[u8]) -> Option<(usize, Vec<u8>, usize)> {
+        if observed.len() != self.version.cell_len() { return None; }
+        let mut best = usize::MAX;
+        let mut closest = Vec::new();
+        let mut ties = 0;
+        for index in 0..self.len() {
+            let Some(candidate) = self.hash.sequence(index) else { continue; };
+            let mut distance = 0;
+            for (&a, &b) in observed.iter().zip(candidate.iter()) {
+                if !matches!(a, b'A' | b'C' | b'G' | b'T') || a != b {
+                    distance += 1;
+                    if distance > best { break; }
+                }
+            }
+            if distance < best {
+                best = distance;
+                closest = candidate;
+                ties = 1;
+            } else if distance == best {
+                ties += 1;
+            }
+        }
+        (best != usize::MAX).then_some((best, closest, ties))
     }
 
     pub fn cell_id_to_seq(&self, cell_id: u64) -> Option<Vec<u8>> {
@@ -336,5 +372,48 @@ mod tests {
         assert!(wl.cell_id_to_seq(0).is_none());
 
         assert_eq!(wl.cell_id_to_seq(1).unwrap(), b"AAACCCAAGAAACACT".to_vec());
+    }
+}
+
+#[cfg(test)]
+mod crosscheck_tests {
+    use super::*;
+
+    #[test]
+    fn exact_and_corrected_barcodes_are_distinct() {
+        let whitelist = TenxWhitelist::new(
+            TenxVersion::ThreePrimeV4,
+            vec![b"ACGTACGTACGTACGT".to_vec()],
+        );
+        assert!(whitelist.exact_cell(b"ACGTACGTACGTACGT"));
+        assert!(!whitelist.exact_cell(b"ACGTACGTACGTACGA"));
+        assert!(whitelist.index_cell(b"ACGTACGTACGTACGA").is_some());
+        assert!(whitelist.index_cell(b"TTTTTTTTTTTTTTTT").is_none());
+    }
+}
+
+#[cfg(test)]
+mod optional_whitelist_loading_tests {
+    use super::*;
+
+    #[test]
+    fn incompatible_whitelist_is_an_error_not_a_panic() {
+        let invalid = "AAACATACAAAACG\n";
+        assert!(TenxWhitelist::from_text_with_mismatches(
+            TenxVersion::ThreePrimeV2, invalid, 1,
+        ).is_err());
+    }
+
+    #[test]
+    fn optional_builtin_whitelists_are_safe_to_probe() {
+        for version in [
+            TenxVersion::ThreePrimeV2,
+            TenxVersion::ThreePrimeV3,
+            TenxVersion::ThreePrimeV4,
+            TenxVersion::FivePrime,
+            TenxVersion::MultiomeArcV1,
+        ] {
+            let _ = TenxWhitelist::builtin(version);
+        }
     }
 }

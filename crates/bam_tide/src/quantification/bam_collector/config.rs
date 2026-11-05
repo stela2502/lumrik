@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 
 use crate::{
     cli::AnalysisType,
@@ -14,6 +14,12 @@ pub const DEFAULT_MAX_5P_OVERHANG_BP: u32 = 100;
 pub const DEFAULT_MAX_3P_OVERHANG_BP: u32 = 100;
 pub const DEFAULT_ALLOWED_INTRONIC_GAP_SIZE: u32 = 0;
 pub const DEFAULT_SNP_MIN_ANCHOR: u8 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AlignmentSpace {
+    Genomic,
+    Transcriptomic,
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct BamCollectorConfig {
@@ -36,6 +42,10 @@ pub struct BamCollectorConfig {
         help = "Quantification mode."
     )]
     pub quant_mode: QuantMode,
+
+    #[arg(long, value_enum, default_value_t = AlignmentSpace::Genomic,
+        help = "Coordinate space of mapper BAM alignments (genomic or transcriptomic).")]
+    pub alignment_space: AlignmentSpace,
 
     #[arg(
         long,

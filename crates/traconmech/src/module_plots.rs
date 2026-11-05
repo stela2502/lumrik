@@ -126,15 +126,12 @@ pub fn write_module_plots_named(
     // One row per module and category: both plotted groups and the comparison
     // are kept together, avoiding duplicated test results in a long-form table.
     writeln!(tsv, "module\tcluster\tgenes\tcontrol_label\tcase_label\tcontrol_mean_log1p\tcontrol_sd\tcontrol_se\tcontrol_ci95_low\tcontrol_ci95_high\tcontrol_count\tcase_mean_log1p\tcase_sd\tcase_se\tcase_ci95_low\tcase_ci95_high\tcase_count\tactual_control_count\tactual_case_count\tdelta_case_minus_control\twelch_t\twelch_df\tp_raw\tp_bonferroni\tbonferroni_factor")?;
-    let quantified = crate::module_score::score(data, modules)?;
+    let quantified = data.module_score(modules)?;
     // One correction family covers every module x phase in this output run.
     // Include untestable combinations in the factor (conservative and stable).
-    let n_modules = by_module.keys().filter(|&&id| id != 0).count();
+    let n_modules = by_module.len();
     let bonferroni_factor = n_modules * ordered.len();
     for (module, genes) in by_module {
-        if module == 0 {
-            continue;
-        }
         let module_index = quantified.ids.iter().position(|&id| id == module).expect("module id");
         let mut values = vec![vec![Vec::<f64>::new(); 2]; ordered.len()];
         for (i, cluster) in ordered.iter().enumerate() {

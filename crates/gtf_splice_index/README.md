@@ -303,6 +303,74 @@ The returned `MatchHit` always includes measured 5′ and 3′ overhangs.
 
 ---
 
+## Targeted exon-skipping quantification (ONT use case; proposed workflow)
+
+### Why this mode is useful
+
+A splice-acceptor mutation can cause an exon to be skipped. For example, to
+investigate **TP53 exon 5**, the biological question is whether individual ONT
+molecules support **exons 4→5→6 (inclusion)** or **exons 4→6 (skipping)**.
+Counting independent 4→5 and 5→6 junction features would allow a single long
+read spanning 4→5→6 to contribute to both features. Instead, represent the
+**two competing exon chains** as two synthetic transcript models and quantify
+molecules assigned to those models.
+
+This is intentionally **gene-specific**. The index should contain only the
+requested gene and exon event, not all genes or all possible splice junctions.
+It is especially useful when cell identifiers and UMIs are available in BAM
+tags and downstream analysis needs per-cell counts in scData/H5AD.
+
+### Intended usage
+
+1. Choose a **specific reference transcript** for TP53; exon numbers are
+   transcript-dependent. Resolve exons 4, 5, and 6 from the same GTF and
+   record the reference transcript ID and genome assembly.
+2. Construct a small GTF containing **two synthetic transcript records** with
+   the same strand and actual exon coordinates:
+   - `TP53_E4_5_6`: exon 4, exon 5, exon 6 (inclusion).
+   - `TP53_E4_6`: exon 4, exon 6 (skipping).
+3. Build a `SpliceIndex` from that GTF using `AnnotationBuilder`.
+4. Match ONT alignments against the two models. Count only **positive,
+   discriminating splice evidence**; do not count unspliced reads classified
+   `Compatible` as proof of either isoform.
+5. Reuse the downstream BAM quantifier's cell-barcode/UMI handling to produce
+   per-cell inclusion and skipping counts. Reads with insufficient or
+   conflicting evidence should remain unassigned, not silently counted twice.
+
+The two synthetic transcripts are **event models**, not claims that these are
+complete biological TP53 transcript isoforms. An ONT read may also contain
+splice junctions outside the event.
+
+### Existing matcher behavior and limitations
+
+`MatchOptions::require_exact_junction_chain = true` makes the matcher return
+`ExactJunctionChain` when a read's **entire** observed junction chain equals
+that of the synthetic transcript. The `Compatible` class is still possible
+for reads without observed junctions; downstream quantification **must filter
+for `ExactJunctionChain`** if using this strict mode.
+
+Strict equality can exclude otherwise informative ONT reads with additional
+upstream or downstream junctions. A future **event-chain matching** mode should
+instead test the local junction chain around the targeted exon while allowing
+extra junctions outside the event, and require unique assignment to one model.
+This event-local matching mode and automatic synthetic-GTF generation are
+**design proposals, not currently implemented CLI features**.
+
+Large `max_5p_overhang_bp` and `max_3p_overhang_bp` values (for example,
+10,000 bp) relax **outer transcript boundary** checks only; they do not relax
+internal splice-junction coordinates. They also do not by themselves guarantee
+that additional ONT exonic blocks outside a synthetic model will pass the
+existing exon-block compatibility check. Validate this behavior before using
+long-read counts for biological interpretation.
+
+**Suggested output:** one sparse cell × {`TP53_E4_5_6`, `TP53_E4_6`}
+count matrix, with event/transcript metadata and optional read counts alongside
+UMI-deduplicated molecule counts. The skipping fraction is
+`skip / (include + skip)` when the denominator is nonzero; otherwise it is
+missing, not zero.
+
+---
+
 ## Performance characteristics
 
 - Streaming annotation parser

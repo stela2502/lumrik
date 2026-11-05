@@ -3,7 +3,6 @@ mod experiment;
 mod gene_model;
 mod module_plots;
 mod model_umap;
-mod module_score;
 mod regulatory;
 mod wt_match;
 use anyhow::{Context, Result};
@@ -68,7 +67,66 @@ enum GeneModelAction {
     /// Investigate training data and save a reusable model.
     Create(Cli),
     /// Investigate external data and project a frozen model (no refitting).
-    Apply(Cli),
+    Apply(ApplyModelCli),
+    /// Analyze an external candidate gene list using the normal effect-module pipeline.
+    CreateList(CreateListCli),
+}
+
+#[derive(Debug, Args)]
+struct ApplyModelCli {
+    /// H5AD file or MEX directory.
+    #[arg(long)]
+    data: PathBuf,
+    /// Previously trained gene-model JSON.
+    #[arg(long)]
+    model: PathBuf,
+    /// Population annotation for plots (e.g. phase).
+    #[arg(long, default_value = "cell_type")]
+    cluster: String,
+    #[arg(long, default_value = "sname")]
+    condition: String,
+    #[arg(long, num_args = 1.., value_delimiter = ',')]
+    case: Vec<String>,
+    #[arg(long, num_args = 1.., value_delimiter = ',')]
+    control: Vec<String>,
+    #[arg(long)]
+    out: PathBuf,
+    #[arg(long = "no-interactive", visible_alias = "non-interactive")]
+    non_interactive: bool,
+    #[arg(long)]
+    label_angle: Option<f64>,
+}
+
+#[derive(Debug, Args)]
+struct CreateListCli {
+    /// H5AD file or MEX directory.
+    #[arg(long)]
+    data: PathBuf,
+    /// One gene symbol per line (blank lines and # comments ignored).
+    #[arg(long)]
+    gene_list: PathBuf,
+    /// Name of the gene set, stored in the reusable model.
+    #[arg(long, default_value = "ModelX")]
+    name: String,
+    /// Output model JSON (default: OUT/NAME.model.json).
+    #[arg(long)]
+    model: Option<PathBuf>,
+    /// Cluster annotation for trajectory plots.
+    #[arg(long, default_value = "cell_type")]
+    cluster: String,
+    /// Condition annotation.
+    #[arg(long, default_value = "sname")]
+    condition: String,
+    #[arg(long, num_args = 1.., value_delimiter = ',')]
+    case: Vec<String>,
+    #[arg(long, num_args = 1.., value_delimiter = ',')]
+    control: Vec<String>,
+    #[arg(long)]
+    out: PathBuf,
+    #[arg(long)]
+    non_interactive: bool,
+    #[arg(long)]
+    label_angle: Option<f64>,
 }
 
 #[derive(Debug, Args)]
@@ -125,15 +183,9 @@ struct Cli {
     /// Do not ask interactive questions; fail if experiment design is ambiguous.
     #[arg(long = "no-interactive", visible_alias = "non-interactive")]
     non_interactive: bool,
-    /// Cluster gene targets by their shared MSigDB set membership.
-    #[arg(long)]
-    effect_cluster: bool,
     /// X-axis label rotation in degrees (0-85); auto for long names.
     #[arg(long)]
     label_angle: Option<f64>,
-    /// Cell-count placement: horizontal above labels, or rotated with labels.
-    #[arg(long, default_value = "horizontal", value_parser = ["horizontal", "rotated"])]
-    count_label_layout: String,
     /// Biological cluster IDs to compare the WT/DBA effect profiles across.
     #[arg(long, num_args = 1..)]
     co_variant_clusters: Vec<String>,
@@ -296,11 +348,89 @@ fn main() -> Result<()> {
         Mode::InspectResults(args) => {
             return inspect_results(&args);
         }
-        Mode::GeneModel(args) => {
-            let (mut cli, create) = match args.action {
-                GeneModelAction::Create(cli) => (cli, true),
-                GeneModelAction::Apply(cli) => (cli, false),
+        Mode::GeneModel(GeneModelCli { action: GeneModelAction::CreateList(cli) }) => {
+            anyhow::ensure!(!cli.name.trim().is_empty(), "--name must not be empty");
+            let data = if cli.data.is_dir() {
+                SingleCellData::from_mtx_dir(&cli.data)?
+            } else {
+                SingleCellData::from_h5ad(&cli.data)?
             };
+            let design = experiment::resolve(
+                &data, &cli.out, &cli.cluster, &cli.condition,
+                sample_list(&cli.case).as_deref(),
+                sample_list(&cli.control).as_deref(),
+                100, cli.non_interactive,
+            )?;
+            let genes = gene_model::read_gene_list(&cli.gene_list)?;
+            let gene_names: Vec<String> = genes.into_keys().collect();
+            // Feed the external genes into the exact same downstream analysis
+            // used after STRING/MSigDB expansion. No parallel plotting path.
+            regulatory::run(regulatory::Config {
+                gene: &cli.name,
+                candidate_genes: Some(&gene_names),
+                index: std::path::Path::new(""),
+                data: &data,
+                out: &cli.out,
+                string_info: std::path::Path::new(""),
+                string_links: std::path::Path::new(""),
+                cluster: &cli.cluster,
+                condition: &cli.condition,
+                cases: &design.cases.join(","),
+                controls: &design.controls.join(","),
+                effect_cluster: true,
+                label_angle: cli.label_angle,
+                count_label_layout: "horizontal",
+                co_variant: &[],
+                min_score: 0,
+                min_wt_cells: 100,
+                ai_development: false,
+                ai_model: "gpt-oss:20b",
+                ai_url: "",
+                ai_primer: None,
+            })?;
+            experiment::record_references(&cli.out)?;
+            let model_path = cli.model.clone().unwrap_or_else(|| cli.out.join(format!("{}.model.json", cli.name)));
+            gene_model::create(&data, &cli.cluster, &cli.name, &model_path, &cli.out)?;
+            let modules = gene_model::read_training_modules(&cli.out.join("module_membership.tsv"))?;
+            gene_model::score_modules(&data, &modules, &cli.condition, &cli.out)?;
+            if cli.data.is_file() {
+                model_umap::write(&data, &cli.data, &cli.out, &cli.cluster)?;
+            }
+            return Ok(());
+        }
+        Mode::GeneModel(GeneModelCli { action: GeneModelAction::Apply(cli) }) => {
+            let data = if cli.data.is_dir() {
+                SingleCellData::from_mtx_dir(&cli.data)?
+            } else {
+                SingleCellData::from_h5ad(&cli.data)?
+            };
+            // Resolve labels for the NEW grouping; do not rediscover or refit modules.
+            let design = experiment::resolve(
+                &data, &cli.out, &cli.cluster, &cli.condition,
+                sample_list(&cli.case).as_deref(),
+                sample_list(&cli.control).as_deref(),
+                100, cli.non_interactive,
+            )?;
+            gene_model::apply(&data, &cli.model, &cli.condition, &cli.out)?;
+            gene_model::plot_frozen_modules(
+                &data, &cli.model, &cli.cluster, &cli.condition,
+                &design.cases.join(","), &design.controls.join(","),
+                &cli.out, cli.label_angle, "horizontal",
+            )?;
+            if cli.data.is_file() {
+                model_umap::write(&data, &cli.data, &cli.out, &cli.cluster)?;
+            }
+            experiment::write_reference_audit(
+                &data, &cli.out, &cli.cluster, &cli.condition, &design,
+            )?;
+            return Ok(());
+        }
+        Mode::GeneModel(args) => {
+            let mut cli = match args.action {
+                GeneModelAction::Create(cli) => cli,
+                GeneModelAction::Apply(_) | GeneModelAction::CreateList(_) => unreachable!(),
+            };
+            let create = true;
             anyhow::ensure!(cli.investigate_gene.is_some(), "gene-model requires --gene");
             anyhow::ensure!(
                 cli.data.is_some() && cli.ommverse.is_some(),
@@ -327,9 +457,6 @@ fn main() -> Result<()> {
             }
             // The existing investigate path still produces the full reference plots.
             // Apply does not re-fit effect modules: frozen model projection is separate.
-            if !create {
-                cli.effect_cluster = false;
-            }
             cli.model = "gpt-oss:20b".to_owned();
             cli.match_wt_clusters = false;
             cli.profile_clusters = false;
@@ -349,6 +476,7 @@ fn main() -> Result<()> {
             } else {
             regulatory::run(regulatory::Config {
                 gene: cli.investigate_gene.as_deref().unwrap(),
+                candidate_genes: None,
                 index: cli.ommverse.as_deref().unwrap(),
                 data: &data,
                 out: &cli.out,
@@ -358,9 +486,9 @@ fn main() -> Result<()> {
                 condition: &cli.condition,
                 cases: &design.cases.join(","),
                 controls: &design.controls.join(","),
-                effect_cluster: cli.effect_cluster,
+                effect_cluster: true,
                 label_angle: cli.label_angle,
-                count_label_layout: &cli.count_label_layout,
+                count_label_layout: "horizontal",
                 co_variant: &cli.co_variant_clusters,
                 min_score: cli.string_min_score,
                 min_wt_cells: cli.min_wt_cells,
@@ -399,7 +527,7 @@ fn main() -> Result<()> {
                     &design.controls.join(","),
                     &cli.out,
                     cli.label_angle,
-                    &cli.count_label_layout,
+                    "horizontal",
                 )?;
             }
             return Ok(());
@@ -611,6 +739,7 @@ fn main() -> Result<()> {
         )?;
         let result = regulatory::run(regulatory::Config {
             gene,
+            candidate_genes: None,
             index: ommverse_path,
             data: &data,
             out: &cli.out,
@@ -626,9 +755,9 @@ fn main() -> Result<()> {
             condition: &cli.condition,
             cases: &design.cases.join(","),
             controls: &design.controls.join(","),
-            effect_cluster: cli.effect_cluster,
+            effect_cluster: true,
             label_angle: cli.label_angle,
-            count_label_layout: &cli.count_label_layout,
+            count_label_layout: "horizontal",
             co_variant: &cli.co_variant_clusters,
             min_score: cli.string_min_score,
             min_wt_cells: cli.min_wt_cells,

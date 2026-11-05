@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
+use crate::umi_evidence::UmiEvidence;
 
 use crate::ambient_rna_detect::AmbientRnaDetect;
 use crate::cell_data::GeneUmiHash;
@@ -21,11 +22,11 @@ pub struct MultiMapper {
 /// - `total_reads` stores the accumulated per-feature value
 /// - duplicate `(feature_id, umi)` pairs are rejected
 #[derive(Clone, Debug, Default)]
-pub struct CellData {
+pub struct CellData<T: UmiEvidence = ()> {
     pub name: u64,
 
     /// Registry of already seen feature_id + umi pairs.
-    pub seen: HashSet<GeneUmiHash>,
+    pub seen: HashMap<GeneUmiHash, T>,
 
     /// feature_id -> accumulated value / count
     pub total_reads: HashMap<u64, f32>,
@@ -34,7 +35,7 @@ pub struct CellData {
     pub multimapper: HashMap<u64, MultiMapper>,
 }
 
-impl<'a> IntoIterator for &'a CellData {
+impl<'a, T: UmiEvidence> IntoIterator for &'a CellData<T> {
     type Item = (&'a u64, &'a f32);
     type IntoIter = std::collections::hash_map::Iter<'a, u64, f32>;
 
@@ -43,7 +44,7 @@ impl<'a> IntoIterator for &'a CellData {
     }
 }
 
-impl fmt::Display for CellData {
+impl<T: UmiEvidence> fmt::Display for CellData<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "CellData Summary")?;
         writeln!(f, "----------------")?;
@@ -57,7 +58,7 @@ impl fmt::Display for CellData {
         }
 
         writeln!(f, "\nSeen Feature/UMI Registry:")?;
-        for key in &self.seen {
+        for key in self.seen.keys() {
             writeln!(f, "  {:?}", key)?;
         }
 
@@ -74,7 +75,7 @@ impl fmt::Display for CellData {
     }
 }
 
-impl CellData {
+impl CellData<()> {
     /// Create an empty cell container.
     pub fn new(name: u64) -> Self {
         Self {
@@ -83,18 +84,25 @@ impl CellData {
         }
     }
 
+}
+
+impl<T: UmiEvidence> CellData<T> {
+    pub fn new_with_evidence(name: u64) -> Self {
+        Self { name, seen: HashMap::new(), total_reads: HashMap::new(), multimapper: HashMap::new() }
+    }
+
     /// Split this cell into ambient and non-ambient fractions.
     ///
     /// The decision is made per seen feature/UMI observation.
     pub fn split_ambient(&self, ambient: &AmbientRnaDetect) -> (Self, Self) {
-        let mut non_ambient = Self::new(self.name);
-        let mut ambient_data = Self::new(self.name);
+        let mut non_ambient = Self::new_with_evidence(self.name);
+        let mut ambient_data = Self::new_with_evidence(self.name);
 
-        for gh in &self.seen {
+        for (gh, evidence) in &self.seen {
             if ambient.is_ambient(gh) {
-                ambient_data.add(*gh);
+                ambient_data.add_evidence(*gh, evidence.clone());
             } else {
-                non_ambient.add(*gh);
+                non_ambient.add_evidence(*gh, evidence.clone());
             }
         }
 
@@ -104,7 +112,7 @@ impl CellData {
     /// Merge another cell into this one.
     ///
     /// Only previously unseen `(feature_id, umi)` pairs are inserted.
-    pub fn merge(&mut self, other: &CellData) {
+    pub fn merge(&mut self, other: &CellData<T>) {
         let mut mapping = RunStats::new(None, 0.0, 0);
         self.merge_with_mapping(other, &mut mapping);
     }
@@ -114,20 +122,19 @@ impl CellData {
     /// The decision is made exactly where the `(feature_id, umi)` pair is
     /// inserted into `seen`: successful inserts are accepted, failed inserts
     /// are UMI-level duplicates.
-    pub fn merge_with_mapping(&mut self, other: &CellData, mapping: &mut RunStats) {
-        for gh in &other.seen {
-            if !self.seen.insert(*gh) {
-                mapping.pcr_duplicates += 1;
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "Warning: duplicate GeneUmiHash {:?} found during merge for cell {}",
-                    gh, self.name
-                );
-                continue;
+    pub fn merge_with_mapping(&mut self, other: &CellData<T>, mapping: &mut RunStats) {
+        for (gh, evidence) in &other.seen {
+            match self.seen.entry(*gh) {
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().merge(evidence);
+                    mapping.pcr_duplicates += 1;
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(evidence.clone());
+                    mapping.ok_reads += 1;
+                    *self.total_reads.entry(gh.0).or_insert(0.0) += 1.0;
+                }
             }
-
-            mapping.ok_reads += 1;
-            *self.total_reads.entry(gh.0).or_insert(0.0) += 1.0;
         }
     }
 
@@ -136,8 +143,13 @@ impl CellData {
     /// This is intended for disjoint real-valued evidence layers (for example
     /// unique and fractional multimapper TE counts). It preserves f32 totals
     /// instead of reconstructing each observation as 1.0.
-    pub fn merge_values(&mut self, other: CellData) {
-        self.seen.extend(other.seen);
+    pub fn merge_values(&mut self, other: CellData<T>) {
+        for (key, evidence) in other.seen {
+            match self.seen.entry(key) {
+                Entry::Occupied(mut entry) => entry.get_mut().merge(&evidence),
+                Entry::Vacant(entry) => { entry.insert(evidence); }
+            }
+        }
         for (feature_id, value) in other.total_reads {
             *self.total_reads.entry(feature_id).or_insert(0.0) += value;
         }
@@ -148,32 +160,27 @@ impl CellData {
     ///
     /// Returns `false` if this exact feature/UMI pair was already seen.
     pub fn add(&mut self, fh: GeneUmiHash) -> bool {
-        if !self.seen.insert(fh) {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "Warning: duplicate GeneUmiHash {:?} detected in cell {} — ignoring.",
-                fh, self.name
-            );
-            return false;
-        }
-
-        *self.total_reads.entry(fh.0).or_insert(0.0) += 1.0;
-        true
+        self.add_evidence(fh, T::default())
     }
 
-    /// Insert one unique feature/UMI observation with a numeric value.
-    ///
-    /// Duplicate feature/UMI pairs are rejected.
-    pub fn add_value(&mut self, fh: GeneUmiHash, value: f32) -> bool {
-        if !self.seen.insert(fh) {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "Warning: duplicate GeneUmiHash {:?} detected in cell {} — ignoring value insert.",
-                fh, self.name
-            );
-            return false;
+    /// Insert or merge evidence for a feature/UMI without counting duplicates twice.
+    pub fn add_evidence(&mut self, fh: GeneUmiHash, evidence: T) -> bool {
+        match self.seen.entry(fh) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().merge(&evidence);
+                false
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(evidence);
+                *self.total_reads.entry(fh.0).or_insert(0.0) += 1.0;
+                true
+            }
         }
+    }
 
+    pub fn add_value(&mut self, fh: GeneUmiHash, value: f32) -> bool {
+        if self.seen.contains_key(&fh) { return false; }
+        self.seen.insert(fh, T::default());
         *self.total_reads.entry(fh.0).or_insert(0.0) += value;
         true
     }
@@ -194,7 +201,7 @@ impl CellData {
     /// by the number of unique UMIs seen for that feature.
     pub fn get_mean_for_gene(&self, feature_id: &u64) -> Option<f32> {
         let total = *self.total_reads.get(feature_id)?;
-        let n = self.seen.iter().filter(|gh| gh.0 == *feature_id).count();
+        let n = self.seen.keys().filter(|gh| gh.0 == *feature_id).count();
 
         if n > 0 { Some(total / n as f32) } else { None }
     }
@@ -265,32 +272,10 @@ impl CellData {
             ));
         }
 
-        if self.seen != other.seen {
-            let only_left: Vec<_> = self
-                .seen
-                .difference(&other.seen)
-                .take(10)
-                .cloned()
-                .collect();
-
-            let only_right: Vec<_> = other
-                .seen
-                .difference(&self.seen)
-                .take(10)
-                .cloned()
-                .collect();
-
-            return Err(format!(
-                "{label}: cell {cell_id} distinct molecule count differs: left={} right={}
-  sample only-in-left (up to 10): {:?}
-  sample only-in-right (up to 10): {:?}",
-                self.seen.len(),
-                other.seen.len(),
-                only_left,
-                only_right
-            ));
+        if self.seen.len() != other.seen.len()
+            || self.seen.keys().any(|key| !other.seen.contains_key(key)) {
+            return Err(format!("{label}: cell {cell_id} distinct UMI keys differ"));
         }
-
         if self.total_reads.len() != other.total_reads.len() {
             let only_left: Vec<_> = self
                 .total_reads
@@ -368,7 +353,7 @@ mod tests {
 
         assert!(inserted);
         assert_eq!(cell.total_umis(), 1);
-        assert!(cell.seen.contains(&fh));
+        assert!(cell.seen.contains_key(&fh));
         assert_eq!(cell.total_reads.get(&10), Some(&1.0));
     }
 
@@ -394,7 +379,7 @@ mod tests {
         assert!(cell.add_value(fh, 2.0));
         assert!(!cell.add_value(fh, 3.0));
 
-        assert!(cell.seen.contains(&fh));
+        assert!(cell.seen.contains_key(&fh));
         assert_eq!(cell.total_reads.get(&5), Some(&2.0));
         assert_eq!(cell.total_umis(), 1);
     }
@@ -424,8 +409,8 @@ mod tests {
         a.merge(&b);
 
         assert_eq!(a.total_umis(), 2);
-        assert!(a.seen.contains(&fh1));
-        assert!(a.seen.contains(&fh2));
+        assert!(a.seen.contains_key(&fh1));
+        assert!(a.seen.contains_key(&fh2));
         assert_eq!(a.total_reads.get(&1), Some(&1.0));
         assert_eq!(a.total_reads.get(&2), Some(&1.0));
     }
@@ -453,5 +438,39 @@ mod tests {
         let mean = cell.get_mean_for_gene(&1).unwrap();
 
         assert!((mean - 3.0).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+    use crate::umi_evidence::SnpUmiEvidence;
+
+    #[test]
+    fn duplicate_umi_merges_evidence_without_increasing_count() {
+        let mut cell = CellData::<SnpUmiEvidence>::new_with_evidence(42);
+        let key = GeneUmiHash(7, 99);
+        let mut ref_support = SnpUmiEvidence::default();
+        ref_support.add_ref(17);
+        let mut alt_support = SnpUmiEvidence::default();
+        alt_support.add_alt(17);
+        assert!(cell.add_evidence(key, ref_support));
+        assert!(!cell.add_evidence(key, alt_support));
+        assert_eq!(cell.total_umis_4_gene_id(&7), 1.0);
+        assert_eq!(cell.seen[&key].conflicts().count(), 1);
+    }
+
+    #[test]
+    fn merge_across_cells_merges_evidence() {
+        let key = GeneUmiHash(7, 99);
+        let mut left = CellData::<SnpUmiEvidence>::new_with_evidence(42);
+        let mut right = CellData::<SnpUmiEvidence>::new_with_evidence(42);
+        let mut a = SnpUmiEvidence::default(); a.add_ref(17);
+        let mut b = SnpUmiEvidence::default(); b.add_alt(17);
+        left.add_evidence(key, a);
+        right.add_evidence(key, b);
+        left.merge(&right);
+        assert_eq!(left.total_umis(), 1);
+        assert_eq!(left.seen[&key].conflicts().count(), 1);
     }
 }

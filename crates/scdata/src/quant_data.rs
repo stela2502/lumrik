@@ -186,6 +186,7 @@ impl QuantData {
         let accounting = self.cell_accounting();
         let base = base.as_ref();
 
+        eprintln!("[scdata] finalizing raw matrices ({} datasets)", self.data.len());
         // Raw is written first because filtering is intentionally destructive.
         // Finalizing each Scdata against its own cells creates a valid sparse
         // matrix without manufacturing empty barcode columns from other data.
@@ -199,10 +200,14 @@ impl QuantData {
             let observed = data.cell_ids();
             data.finalize_for_cells(&observed, index);
         }
+        eprintln!("[scdata] writing raw matrices");
         self.write_sparse_impl(&base.join("raw"), indexes, cell_barcode_len)?;
+        eprintln!("[scdata] raw matrices complete; finalizing filtered matrices");
 
         self.finalize_for_cells(keep, indexes)?;
+        eprintln!("[scdata] writing filtered matrices");
         self.write_sparse_impl(&base.join("filtered"), indexes, cell_barcode_len)?;
+        eprintln!("[scdata] filtered matrices complete");
 
         Ok(accounting)
     }
@@ -238,6 +243,8 @@ impl QuantData {
                 ));
             };
             let out = base.join(name);
+            eprintln!("[scdata] writing {} -> {}", name, out.display());
+            let started = std::time::Instant::now();
             match cell_barcode_len {
                 Some(len) => data
                     .write_sparse_with_cell_len(&out, index, len)
@@ -246,6 +253,7 @@ impl QuantData {
                     .write_sparse(&out, index)
                     .map_err(|e| format!("writing QuantData dataset '{name}' failed: {e}"))?,
             };
+            eprintln!("[scdata] completed {} in {:.1}s", name, started.elapsed().as_secs_f64());
         }
         Ok(())
     }

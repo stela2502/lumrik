@@ -9,12 +9,14 @@ use anyhow::{Context, Result, anyhow};
 use rust_htslib::bam::{self, Read, Reader, record::Aux};
 
 use crate::cli::AnalysisType;
+use crate::transcriptome_to_genome::BamTranscriptomeMapper;
 use crate::quantification::{
-    bam_collector::{config::BamCollectorConfig, read_group::ReadGroup},
+    bam_collector::{config::{AlignmentSpace, BamCollectorConfig}, read_group::ReadGroup},
     chunk_processor::ChunkProcessor,
     job::{Job, JobBuilder},
     processor_options::ProcessorOptions,
     snp::SnpSideChannel,
+    new_transcript_data::NewTranscriptData,
 };
 
 use scdata::QuantData;
@@ -27,10 +29,12 @@ use gtf_splice_index::{MatchOptions, SpliceIndex};
 use run_stats::RunStats;
 use snp_index::Genome;
 
-const CHUNK: usize = 100_000;
+const CHUNK: usize = 500_000;
+const BAM_DECODE_THREADS: usize = 4;
 
 pub struct BamCollectorResult {
     pub data: QuantData,
+    pub new_transcripts: NewTranscriptData,
     pub report: RunStats,
     pub snp: Option<SnpSideChannel>,
 }
@@ -73,6 +77,10 @@ impl BamCollector {
 
             None => None,
         };
+
+        if config.alignment_space == AlignmentSpace::Transcriptomic && genome.is_none() {
+            anyhow::bail!("--alignment-space transcriptomic requires --genome FASTA for chromosome mapping");
+        }
 
         if config.vcf.is_some() && genome.is_none() {
             anyhow::bail!("--vcf requires --genome");
@@ -149,6 +157,7 @@ impl BamCollector {
         F: FnMut(&QuantData, &RunStats),
     {
         let mut data = QuantData::standard();
+        let mut new_transcripts = NewTranscriptData::new(self.index.bin_width);
         let Some(first_path) = paths.first() else {
             anyhow::bail!("no BAM files supplied");
         };
@@ -172,7 +181,8 @@ impl BamCollector {
 
         let header = reader.header().clone();
 
-        let snp = self.load_snp_side_channel(&header)?;
+        let snp_header = self.genomic_header_if_needed(&header)?;
+        let snp = self.load_snp_side_channel(&snp_header)?;
 
         if !self.config.read_tags.read_tag_table.is_empty()
             && self.config.read_tags.read_tag_table.len() != paths.len()
@@ -204,11 +214,14 @@ impl BamCollector {
 
             let mut reader = Reader::from_path(path)
                 .with_context(|| format!("reading BAM {}", path.display()))?;
+            reader.set_threads(BAM_DECODE_THREADS)
+                .with_context(|| format!("configuring BAM decompression for {}", path.display()))?;
 
             self.collect_reader(
                 &mut reader,
                 snp.as_ref(),
                 &mut data,
+                &mut new_transcripts,
                 &mut report,
                 &mut n_seen,
                 &mut seen_unbarcoded,
@@ -219,15 +232,17 @@ impl BamCollector {
             .with_context(|| format!("collecting BAM {}", path.display()))?;
         }
 
-        Ok(BamCollectorResult { data, report, snp })
+        Ok(BamCollectorResult { data, new_transcripts, report, snp })
     }
 
     fn collect(&self, mut reader: Reader) -> Result<BamCollectorResult> {
         let header = reader.header().clone();
 
-        let snp = self.load_snp_side_channel(&header)?;
+        let snp_header = self.genomic_header_if_needed(&header)?;
+        let snp = self.load_snp_side_channel(&snp_header)?;
 
         let mut data = QuantData::standard();
+        let mut new_transcripts = NewTranscriptData::new(self.index.bin_width);
 
         let mut report = RunStats::new(
             None,
@@ -245,6 +260,7 @@ impl BamCollector {
             &mut reader,
             snp.as_ref(),
             &mut data,
+            &mut new_transcripts,
             &mut report,
             &mut n_seen,
             &mut seen_unbarcoded,
@@ -253,7 +269,7 @@ impl BamCollector {
             &mut no_progress,
         )?;
 
-        Ok(BamCollectorResult { data, report, snp })
+        Ok(BamCollectorResult { data, new_transcripts, report, snp })
     }
 
     fn collect_reader(
@@ -261,6 +277,7 @@ impl BamCollector {
         reader: &mut Reader,
         snp: Option<&SnpSideChannel>,
         data: &mut QuantData,
+        new_transcripts: &mut NewTranscriptData,
         report: &mut RunStats,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
@@ -268,7 +285,21 @@ impl BamCollector {
         bulk_cell_id: u64,
         progress: &mut dyn FnMut(&QuantData, &RunStats),
     ) -> Result<()> {
-        let header = reader.header().clone();
+        let input_header = reader.header().clone();
+        // Select the alignment pipeline once, before reading any records.
+        // The BAM header is transcriptomic; all downstream consumers see
+        // genomic coordinates and a matching genomic header.
+        let mut projector = match self.config.alignment_space {
+            AlignmentSpace::Genomic => None,
+            AlignmentSpace::Transcriptomic => Some(BamTranscriptomeMapper::from_index_and_genome(
+                self.index.clone(),
+                self.genome.as_ref().expect("validated in from_cli").clone(),
+            )?),
+        };
+        let header = match projector.as_ref() {
+            Some(mapper) => bam::HeaderView::from_header(&mapper.make_header(&input_header)?),
+            None => input_header.clone(),
+        };
 
         let processor = ChunkProcessor::new(
             &self.index,
@@ -293,7 +324,13 @@ impl BamCollector {
         let mut current: Option<ReadGroup> = None;
 
         for record_result in reader.records() {
-            let record = record_result.context("BAM/SAM read error")?;
+            let mut record = record_result.context("BAM/SAM read error")?;
+            if let Some(mapper) = projector.as_mut() {
+                if !mapper.map_record_in_place(&mut record, &input_header)? {
+                    report.report("transcript projection skipped");
+                    continue;
+                }
+            }
 
             if let Some(group) = current.as_mut() {
                 if group.qname() == record.qname() {
@@ -310,6 +347,7 @@ impl BamCollector {
                     &processor,
                     &mut jobs,
                     data,
+                    new_transcripts,
                     report,
                     n_seen,
                     seen_unbarcoded,
@@ -332,6 +370,7 @@ impl BamCollector {
                     &processor,
                     &mut jobs,
                     data,
+                    new_transcripts,
                     report,
                     n_seen,
                     seen_unbarcoded,
@@ -341,7 +380,7 @@ impl BamCollector {
             }
         }
 
-        self.flush_jobs(&processor, &mut jobs, data, report)?;
+        self.flush_jobs(&processor, &mut jobs, data, new_transcripts, report)?;
         progress(data, report);
         Ok(())
     }
@@ -355,6 +394,7 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
+        new_transcripts: &mut NewTranscriptData,
         report: &mut RunStats,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
@@ -381,7 +421,7 @@ impl BamCollector {
                     jobs,
                     n_seen,
                 );
-                if self.after_job(processor, jobs, data, report, *n_seen, progress)? {
+                if self.after_job(processor, jobs, data, new_transcripts, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -419,7 +459,7 @@ impl BamCollector {
                 record.push_aux(b"UY", Aux::String(umi_qual))?;
 
                 self.push_job(job_builder.build(record, report)?, jobs, n_seen);
-                if self.after_job(processor, jobs, data, report, *n_seen, progress)? {
+                if self.after_job(processor, jobs, data, new_transcripts, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -468,7 +508,7 @@ impl BamCollector {
                     jobs,
                     n_seen,
                 );
-                if self.after_job(processor, jobs, data, report, *n_seen, progress)? {
+                if self.after_job(processor, jobs, data, new_transcripts, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -480,7 +520,7 @@ impl BamCollector {
         // record-for-record identical to the previous JobBuilder path.
         for record in group.records() {
             self.push_job(job_builder.build(record, report)?, jobs, n_seen);
-            if self.after_job(processor, jobs, data, report, *n_seen, progress)? {
+            if self.after_job(processor, jobs, data, new_transcripts, report, *n_seen, progress)? {
                 return Ok(true);
             }
         }
@@ -500,12 +540,13 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
+        new_transcripts: &mut NewTranscriptData,
         report: &mut RunStats,
         n_seen: usize,
         progress: &mut dyn FnMut(&QuantData, &RunStats),
     ) -> Result<bool> {
         if jobs.len() >= CHUNK {
-            self.flush_jobs(processor, jobs, data, report)?;
+            self.flush_jobs(processor, jobs, data, new_transcripts, report)?;
             progress(data, report);
         }
         Ok(self.config.max_reads.is_some_and(|max| n_seen >= max))
@@ -516,6 +557,7 @@ impl BamCollector {
         processor: &ChunkProcessor<'_>,
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
+        new_transcripts: &mut NewTranscriptData,
         report: &mut RunStats,
     ) -> Result<()> {
         if jobs.is_empty() {
@@ -524,13 +566,47 @@ impl BamCollector {
 
         report.stop_file_io_time();
 
-        processor.process_into(jobs, data, report)?;
+        processor.process_into(jobs, data, new_transcripts, report)?;
+
+        // Always report completed quantification batches, independent of the
+        // caller's progress callback or whether the health server is enabled.
+        // These are cumulative, UMI-deduplicated counts after worker merges.
+        eprintln!(
+            "[bam_tide quant] batch={} BAM={} tagged={} exact={} compatible={} intronic={} incompatible={} junction_mismatch={} exonic_umis={} intronic_umis={} snp_ref_umis={} snp_alt_umis={} novel_transcripts={} novel_umis={}",
+            jobs.len(),
+            report.get_issue_count("bam_records_seen"),
+            report.get_issue_count("cell_umi from BAM tags"),
+            report.get_issue_count("ExactJunctionChain"),
+            report.get_issue_count("Compatible"),
+            report.get_issue_count("Intronic"),
+            report.get_issue_count("Incompatible"),
+            report.get_issue_count("JunctionMismatch"),
+            data.total_umis(QuantData::EXONIC),
+            data.total_umis(QuantData::INTRONIC),
+            data.total_umis(QuantData::SNP_REF),
+            data.total_umis(QuantData::SNP_ALT),
+            new_transcripts.gtf_splice_index.transcripts.len(),
+            new_transcripts.scdata.total_umis(),
+        );
 
         report.stop_single_processor_time();
 
         jobs.clear();
 
         Ok(())
+    }
+
+    fn genomic_header_if_needed(&self, header: &bam::HeaderView) -> Result<bam::HeaderView> {
+        match self.config.alignment_space {
+            AlignmentSpace::Genomic => Ok(header.clone()),
+            AlignmentSpace::Transcriptomic => {
+                let mapper = BamTranscriptomeMapper::from_index_and_genome(
+                    self.index.clone(),
+                    self.genome.as_ref().expect("validated in from_cli").clone(),
+                )?;
+                Ok(bam::HeaderView::from_header(&mapper.make_header(header)?))
+            }
+        }
     }
 
     fn load_snp_side_channel(&self, header: &bam::HeaderView) -> Result<Option<SnpSideChannel>> {

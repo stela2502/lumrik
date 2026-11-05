@@ -6,6 +6,7 @@ use rayon::prelude::*;
 use run_stats::RunStats;
 
 use crate::cell_data::CellData;
+use crate::umi_evidence::UmiEvidence;
 use crate::cell_data::GeneUmiHash;
 use crate::{CellHash, FeatureIndex, MatrixValueType};
 use sprs::{CsMat, TriMat};
@@ -29,9 +30,9 @@ impl ScdataInsertState {
 ///
 /// Cells are partitioned into 256 buckets by the first packed 4-base byte
 /// produced by `IntToDna`. Each bucket stores `CellData` keyed by the full cell id.
-pub struct Scdata {
+pub struct Scdata<T: UmiEvidence = ()> {
     /// Shared 256-bucket cell store.
-    pub(crate) data: CellHash<CellData>,
+    pub(crate) data: CellHash<CellData<T>>,
 
     /// Cached ordered feature ids currently observed in retained cells.
     pub(crate) feature_ids_with_data: Vec<u64>,
@@ -125,14 +126,14 @@ pub struct Scdata {
 ///
 /// assert_eq!(data.passing_cells(), 1);
 /// ```
-impl Default for Scdata {
+impl Default for Scdata<()> {
     /// Create an integer-valued matrix with one default worker thread.
     fn default() -> Self {
         Self::new(1, MatrixValueType::Integer)
     }
 }
 
-impl fmt::Display for Scdata {
+impl<T: UmiEvidence> fmt::Display for Scdata<T> {
     /// Print a short structural summary of the current matrix state.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Scdata Summary")?;
@@ -155,7 +156,7 @@ impl fmt::Display for Scdata {
     }
 }
 
-impl Scdata {
+impl Scdata<()> {
     /// Create a new empty sparse matrix store.
     pub fn new(num_threads: usize, value_type: MatrixValueType) -> Self {
         let data = CellHash::<CellData>::new();
@@ -173,8 +174,17 @@ impl Scdata {
         }
     }
 
+}
+
+impl<T: UmiEvidence> Scdata<T> {
     pub fn n_features(&self) -> usize {
         self.feature_ids_with_data.len()
+    }
+
+    /// Construct a matrix with an optional per-UMI evidence payload.
+    pub fn new_with_evidence(num_threads: usize, value_type: MatrixValueType) -> Self {
+        let data = CellHash::<CellData<T>>::new();
+        Self { data, feature_ids_with_data: Vec::new(), total_feature_data_entries: 0, export_cell_ids: Vec::new(), matrix_feature_ids: Vec::new(), matrix_cell_ids: Vec::new(), checked: false, num_threads, value_type }
     }
 
     /// Materialize all stored counts as an `sprs` feature x cell CSR matrix.
@@ -279,7 +289,7 @@ impl Scdata {
     }
 
     /// Iterate over all currently stored cells across all buckets.
-    pub fn values(&self) -> impl Iterator<Item = &CellData> {
+    pub fn values(&self) -> impl Iterator<Item = &CellData<T>> {
         self.data.iter().flat_map(|map| map.values())
     }
 
@@ -303,12 +313,55 @@ impl Scdata {
     }
 
     /// Get read-only access to one cell by id.
-    pub fn get(&self, key: &u64) -> Option<&CellData> {
+    pub fn get(&self, key: &u64) -> Option<&CellData<T>> {
         self.data.get_cell(key)
     }
 
+    /// Rewrite feature IDs in an owned thread-local matrix before merging.
+    /// The UMI registry and all per-feature counts are updated together.
+    /// The mapping must cover every observed source feature.
+    pub fn remap_feature_ids(&mut self, mapping: &std::collections::HashMap<u64, u64>) -> Result<(), String> {
+        // Validate first: a missing ID must never leave a partially rewritten matrix.
+        for cell in self.values() {
+            for feature in cell.total_reads.keys() {
+                if !mapping.contains_key(feature) {
+                    return Err(format!("missing destination feature ID for {feature}"));
+                }
+            }
+            for pair in cell.seen.keys() {
+                if !mapping.contains_key(&pair.0) {
+                    return Err(format!("missing destination feature ID for {}", pair.0));
+                }
+            }
+            if !cell.multimapper.is_empty() {
+                return Err("cannot remap matrix containing multimapper records".into());
+            }
+        }
+        self.invalidate_export_cache();
+        for bucket in self.data.iter_mut() {
+            for cell in bucket.values_mut() {
+                let seen = std::mem::take(&mut cell.seen);
+                cell.seen = seen.into_iter().fold(std::collections::HashMap::new(), |mut result, (pair, evidence)| {
+                    let new_key = GeneUmiHash(mapping[&pair.0], pair.1);
+                    use std::collections::hash_map::Entry;
+                    match result.entry(new_key) {
+                        Entry::Occupied(mut entry) => entry.get_mut().merge(&evidence),
+                        Entry::Vacant(entry) => { entry.insert(evidence); }
+                    }
+                    result
+                });
+                cell.total_reads.clear();
+                for pair in cell.seen.keys() {
+                    *cell.total_reads.entry(pair.0).or_insert(0.0) += 1.0;
+                }
+            }
+        }
+        self.matrix_feature_ids = self.matrix_feature_ids.iter().map(|id| mapping.get(id).copied().unwrap_or(*id)).collect();
+        Ok(())
+    }
+
     /// Merge another matrix into this one in parallel, bucket by bucket.
-    pub fn merge(&mut self, other: &Scdata) -> RunStats {
+    pub fn merge(&mut self, other: &Scdata<T>) -> RunStats {
         if other.is_empty() {
             return RunStats::new(None, 0.0, 0);
         }
@@ -336,7 +389,7 @@ impl Scdata {
     }
 
     /// Merge another matrix into this one by consuming the source in a single thread.
-    pub fn merge_single_thread(&mut self, mut other: Scdata) {
+    pub fn merge_single_thread(&mut self, mut other: Scdata<T>) {
         if other.is_empty() {
             return;
         }
@@ -361,7 +414,7 @@ impl Scdata {
     /// Unlike `merge`, this does not reconstruct observations as unit counts.
     /// It is therefore suitable for combining independently computed real-valued
     /// matrices such as unique and fractional multimapper evidence.
-    pub fn merge_values(&mut self, mut other: Scdata) {
+    pub fn merge_values(&mut self, mut other: Scdata<T>) {
         if other.is_empty() {
             return;
         }
@@ -391,13 +444,32 @@ impl Scdata {
 
         let cell_info = self.data[index]
             .entry(*name)
-            .or_insert_with(|| CellData::new(*name));
+            .or_insert_with(|| CellData::<T>::new_with_evidence(*name));
 
         if cell_info.add(data) {
             ScdataInsertState::Inserted
         } else {
             ScdataInsertState::Duplicate
         }
+    }
+
+    /// Insert a UMI observation with evidence; duplicate keys merge their payload.
+    /// Visit raw UMI observations without materializing an expression matrix.
+    pub fn for_each_umi(&self, mut visit: impl FnMut(u64, GeneUmiHash, &T)) {
+        for bucket in &self.data {
+            for (&cell_id, cell) in bucket {
+                for (&key, evidence) in &cell.seen {
+                    visit(cell_id, key, evidence);
+                }
+            }
+        }
+    }
+
+    pub fn try_insert_evidence(&mut self, name: &u64, data: GeneUmiHash, evidence: T) -> ScdataInsertState {
+        let index = self.to_key(name);
+        self.invalidate_export_cache();
+        let cell = self.data[index].entry(*name).or_insert_with(|| CellData::<T>::new_with_evidence(*name));
+        if cell.add_evidence(data, evidence) { ScdataInsertState::Inserted } else { ScdataInsertState::Duplicate }
     }
 
     /// Insert or accumulate a numeric value for one feature/UMI observation.
@@ -413,7 +485,7 @@ impl Scdata {
 
         let cell_info = self.data[index]
             .entry(*name)
-            .or_insert_with(|| CellData::new(*name));
+            .or_insert_with(|| CellData::<T>::new_with_evidence(*name));
 
         report.ok_reads += 1;
 
@@ -554,17 +626,17 @@ impl Scdata {
     ///
     /// Also establishes deterministic export column order.
     fn restrict_to_cells(&mut self, keep: &HashSet<u64>) {
-        for bucket in &mut self.data {
+        self.data.par_iter_mut().for_each(|bucket| {
             bucket.retain(|cell_id, _| keep.contains(cell_id));
-        }
+        });
 
         let mut export_cell_ids: Vec<u64> = self
             .data
-            .iter()
-            .flat_map(|bucket| bucket.keys().copied())
+            .par_iter()
+            .flat_map_iter(|bucket| bucket.keys().copied())
             .collect();
 
-        export_cell_ids.sort_unstable();
+        export_cell_ids.par_sort_unstable();
 
         self.export_cell_ids = export_cell_ids;
     }
@@ -577,9 +649,9 @@ impl Scdata {
     /// Useful for workflows such as ambient-background estimation
     /// where both called cells and non-cell droplets are required.
     pub fn split_by_cells(self, keep: &HashSet<u64>) -> (Self, Self) {
-        let mut kept = Self::new(self.num_threads, self.value_type.clone());
+        let mut kept = Self::new_with_evidence(self.num_threads, self.value_type.clone());
 
-        let mut rejected = Self::new(self.num_threads, self.value_type);
+        let mut rejected = Self::new_with_evidence(self.num_threads, self.value_type);
 
         for (bucket_idx, bucket) in self.data.into_iter().enumerate() {
             for (cell_id, cell_data) in bucket {
@@ -649,7 +721,7 @@ impl Scdata {
                     .total_reads
                     .retain(|feature_id, _| keep.contains(feature_id));
 
-                cell_data.seen.retain(|gene_umi| keep.contains(&gene_umi.0));
+                cell_data.seen.retain(|gene_umi, _| keep.contains(&gene_umi.0));
 
                 cell_data
                     .multimapper

@@ -9,6 +9,8 @@ use std::path::Path;
 
 pub struct Config<'a> {
     pub gene: &'a str,
+    /// Override STRING/MSigDB candidate discovery with an explicit gene set.
+    pub candidate_genes: Option<&'a [String]>,
     pub index: &'a Path,
     pub data: &'a SingleCellData,
     pub out: &'a Path,
@@ -244,6 +246,24 @@ pub fn run(c: Config<'_>) -> Result<()> {
             bail!("co-variant cluster {cluster} has no within-cluster case/WT comparison");
         }
     }
+    // Both input paths converge here: the downstream effect trajectories,
+    // module clustering, statistics and plots are identical.
+    let mut partners = BTreeMap::<String, u32>::new();
+    let mut targets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if let Some(genes) = c.candidate_genes {
+        anyhow::ensure!(!genes.is_empty(), "external gene list is empty");
+        for gene in genes {
+            targets.entry(gene.clone()).or_default();
+        }
+        let mut coverage = BufWriter::new(File::create(c.out.join("gene_list_coverage.tsv"))?);
+        writeln!(coverage, "gene\tpresent\texpressed")?;
+        for gene in targets.keys() {
+            let index = c.data.feature_index(gene);
+            let expressed = index.and_then(|i| c.data.matrix.outer_view(i))
+                .is_some_and(|row| row.iter().any(|(_, v)| *v > 0.0));
+            writeln!(coverage, "{gene}\t{}\t{}", u8::from(index.is_some()), u8::from(expressed))?;
+        }
+    } else {
     // STRING info file: protein_external_id, preferred_name, protein_size, annotation.
     let mut proteins = HashMap::<String, String>::new();
     let mut seed_ids = HashSet::new();
@@ -269,7 +289,6 @@ pub fn run(c: Config<'_>) -> Result<()> {
     // these associations as experimentally established isoform interactions.
     // Both protein.links (3 columns) and protein.links.full (16 columns) are
     // supported. Never interpret `neighborhood` as `combined_score`.
-    let mut partners = BTreeMap::<String, u32>::new();
     let mut score_column: Option<usize> = None;
     let mut seed_edges = 0usize;
     let mut passing_edges = 0usize;
@@ -371,7 +390,6 @@ pub fn run(c: Config<'_>) -> Result<()> {
         partner_out,
         "partner\tstring_score\tcluster\tcase_mean\tcase_sd\tcase_detected\tcontrol_mean\tcontrol_sd\tcontrol_detected\tregulatory_sets"
     )?;
-    let mut targets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut sets_out = BufWriter::new(File::create(c.out.join("regulatory_sets.tsv"))?);
     writeln!(sets_out, "regulator\tset\tsource\tgenes")?;
     let regulatory_sets = ommverse::msigdb::all_sets(c.index)?;
@@ -421,6 +439,7 @@ pub fn run(c: Config<'_>) -> Result<()> {
                 matching.len()
             )?;
         }
+    }
     }
     // The requested order is a biological trajectory, not BTreeMap key order.
     let ordered: Vec<String> = if c.co_variant.is_empty() {
@@ -711,8 +730,7 @@ pub fn run(c: Config<'_>) -> Result<()> {
     writeln!(readme, "## Hypothesis\n")?;
     writeln!(
         readme,
-        "A perturbation associated with `{}` may change expression of genes annotated to its STRING-associated partners. Population-specific expression patterns can suggest mechanisms worth testing, but neither STRING association nor gene-set membership establishes causal regulation.\n",
-        c.gene
+        "The selected genes are analyzed for population-specific expression effects. STRING/MSigDB relationships, when used, are candidate associations rather than proof of causation.\n"
     )?;
     writeln!(readme, "## Experimental comparison\n")?;
     writeln!(
@@ -723,6 +741,9 @@ pub fn run(c: Config<'_>) -> Result<()> {
         c.effect_cluster
     )?;
     writeln!(readme, "## Method\n")?;
+    if c.candidate_genes.is_some() {
+        writeln!(readme, "Input: external gene list (no STRING/MSigDB expansion). Downstream effect clustering and plotting use the standard regulatory pipeline.\n")?;
+    }
     writeln!(
         readme,
         "1. Find direct STRING partners of `{}` above the configured combined-score threshold. STRING measures association, not physical binding or direction of regulation.\n",

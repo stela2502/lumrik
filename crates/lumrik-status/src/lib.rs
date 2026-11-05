@@ -492,11 +492,13 @@ const DASHBOARD_HTML: &str = r##"<!doctype html>
 <title>Lumrik</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0e1116;color:#e8edf3;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1040px;margin:0 auto;padding:32px 22px 48px}header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:20px}h1{margin:0 0 5px;font-size:1.9rem;letter-spacing:-.025em}.subtitle{margin:0;color:#95a0ad}.badge{font-size:.78rem;color:#a9b4c0;border:1px solid #2a3440;border-radius:999px;padding:6px 10px;white-space:nowrap}.summary{display:grid;grid-template-columns:minmax(0,2fr) minmax(130px,1fr);gap:12px;margin:18px 0 20px}.summary>div,.panel{background:#151a21;border:1px solid #262e39;border-radius:10px}.summary>div{padding:13px 15px}.summary span{display:block;color:#8995a3;font-size:.76rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}.summary strong{font-size:1rem;font-weight:650}.sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.panel{overflow:hidden}.panel h2{font-size:.9rem;margin:0;padding:12px 14px;border-bottom:1px solid #252d37;color:#c7d0da;background:#171d25}.rows{padding:3px 0}.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:8px 14px;border-bottom:1px solid #202731;align-items:baseline}.row:last-child{border-bottom:0}.label{color:#909ba8;font-size:.84rem}.metric{font-variant-numeric:tabular-nums;text-align:right;font-weight:620;font-size:.88rem;overflow-wrap:anywhere}footer{margin-top:22px;color:#66717e;font-size:.78rem}@media(max-width:760px){main{padding:22px 14px 36px}.sections{grid-template-columns:1fr}.summary{grid-template-columns:1fr}header{display:block}.badge{display:inline-block;margin-top:10px}.row{grid-template-columns:1fr;gap:3px}.metric{text-align:left}}
+a{color:#8ac6ff;text-decoration:none}a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
 <main>
 <header><div><h1 id="title">Lumrik</h1><p class="subtitle" id="subtitle">Live processing status</p></div><div class="badge" id="status-badge">live</div></header>
+<nav aria-label="Status navigation" style="display:flex;gap:12px;flex-wrap:wrap;margin:0 0 16px"><a href="/">Dashboard</a><a href="/status" target="_blank" rel="noopener">Live JSON statistics</a><a href="/health" target="_blank" rel="noopener">Health check</a><a href="#sections">Statistics panels</a></nav>
 <div class="summary"><div><span>Stage</span><strong id="stage">startup</strong></div><div><span>Elapsed</span><strong id="elapsed">00:00:00</strong></div></div>
 <div class="sections" id="sections"></div>
 <footer id="updated">Waiting for status...</footer>

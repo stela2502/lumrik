@@ -49,6 +49,8 @@ fn run(args: QuantCli) -> Result<()> {
 
         quant_mode: args.quant_mode,
 
+        alignment_space: bam_tide::quantification::bam_collector::config::AlignmentSpace::Genomic,
+
         min_mapq: args.min_mapq,
 
         max_reads: args.max_reads,
@@ -90,10 +92,11 @@ fn run(args: QuantCli) -> Result<()> {
         collector = collector.with_grammar(grammar);
     }
 
-    let result = collector
+    let mut result = collector
         .run_paths(&args.bam)
         .context("collecting BAM quantification")?;
 
+    result.new_transcripts.write_reports(&args.outpath)?;
     let mut data = result.data;
     let mut report = result.report;
     let snp = result.snp;
