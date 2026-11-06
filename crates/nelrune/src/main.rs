@@ -93,7 +93,8 @@ fn run(args: Cli) -> Result<()> {
     let mapper_bam = args
         .bam_collector
         .bam_out
-        .clone()
+        .as_ref()
+        .map(|path| path.to_path_buf())
         .unwrap_or_else(|| args.outpath.join("nelrune.mapper.bam"));
     if let Some(parent) = mapper_bam.parent() {
         fs::create_dir_all(parent)
@@ -108,7 +109,7 @@ fn run(args: Cli) -> Result<()> {
         if finished.is_file() && mapper_bam.is_file() {
             let metadata = fs::read_to_string(&finished)?;
             let expected = mapping_signature(&args, bam_input)?;
-            if metadata != expected {
+            if !mapping_signatures_compatible(&metadata, &expected) {
                 eprintln!("[nelrune] mapping completion marker mismatch: {}", finished.display());
                 let stored: std::collections::BTreeMap<_, _> = metadata
                     .lines()
@@ -352,6 +353,64 @@ fn mapping_signature(args: &Cli, input: &Path) -> Result<String> {
     ))
 }
 
+// A completed mapping with a larger input-read budget can serve a smaller
+// quantification run. The collector enforces the requested --max-reads.
+// A smaller cached mapping cannot serve a larger request.
+fn mapping_signatures_compatible(stored: &str, expected: &str) -> bool {
+    fn split(signature: &str) -> Option<(String, Option<usize>)> {
+        let mut lines = signature.lines();
+        let version = lines.next()?;
+        let mut rest = String::from(version);
+        let mut limit = None;
+        let mut found = false;
+        for line in lines {
+            if let Some(value) = line.strip_prefix("max_reads=") {
+                if found { return None; }
+                found = true;
+                limit = if value == "None" {
+                    None
+                } else {
+                    Some(value.strip_prefix("Some(")?.strip_suffix(')')?.parse().ok()?)
+                };
+            } else {
+                rest.push('\n');
+                rest.push_str(line);
+            }
+        }
+        if !found { return None; }
+        Some((rest, limit))
+    }
+    let (stored_base, stored_limit) = match split(stored) { Some(v) => v, None => return false };
+    let (expected_base, expected_limit) = match split(expected) { Some(v) => v, None => return false };
+    stored_base == expected_base && match (stored_limit, expected_limit) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(available), Some(requested)) => available >= requested,
+    }
+}
+
+#[cfg(test)]
+mod mapping_marker_tests {
+    use super::mapping_signatures_compatible;
+
+    fn signature(limit: &str) -> String {
+        format!("nelrune-minimap2-v1\ninput=example.bam\nmax_reads={limit}\nindex=example.mmi\n")
+    }
+
+    #[test]
+    fn full_mapping_can_serve_limited_quantification() {
+        assert!(mapping_signatures_compatible(&signature("None"), &signature("Some(1000000)")));
+        assert!(mapping_signatures_compatible(&signature("Some(2000000)"), &signature("Some(1000000)")));
+    }
+
+    #[test]
+    fn insufficient_mapping_budget_cannot_be_reused() {
+        assert!(!mapping_signatures_compatible(&signature("Some(1000000)"), &signature("None")));
+        assert!(!mapping_signatures_compatible(&signature("Some(1000000)"), &signature("Some(2000000)")));
+        assert!(!mapping_signatures_compatible(&signature("Some(1000000)"), &signature("Some(1000000)").replace("index=example.mmi", "index=other.mmi")));
+    }
+}
+
 fn check_bam(path: &Path) -> Result<()> {
     let status = Command::new("samtools").arg("quickcheck").arg("-v").arg(path)
         .status().context("running samtools quickcheck")?;
@@ -480,8 +539,8 @@ fn run_illumina_input(
         progress.input_file(r1_path.to_string_lossy());
 
         normalizer.nelrune_run(
-            r1_path,
-            r2_path,
+            &r1_path.to_path_buf(),
+            &r2_path.to_path_buf(),
             |reads| {
                 for (r1, r2) in reads {
                     // Drain mapping results throughout FASTQ submission, not

@@ -36,10 +36,9 @@
 //! ```
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use lumrik_clap::{Parser, ReadableFile, OutputFile};
 use rust_htslib::bam;
 use rust_htslib::bam::{Read, Reader, Writer};
-use std::path::PathBuf;
 
 use bam_tide::transcriptome_to_genome::BamTranscriptomeMapper;
 
@@ -49,23 +48,23 @@ use bam_tide::transcriptome_to_genome::BamTranscriptomeMapper;
 struct Cli {
     /// Input BAM/SAM/CRAM aligned to transcriptome reference names.
     #[arg(short = 'b', long = "bam")]
-    bam: PathBuf,
+    bam: ReadableFile,
 
     /// GTF/GFF annotation used to build the transcriptome FASTA.
     ///
     /// Transcript IDs in this annotation must match the input BAM reference names.
     #[arg(short = 'g', long = "gtf")]
-    gtf: PathBuf,
+    gtf: ReadableFile,
 
     /// Genome FASTA used to build the transcriptome FASTA.
     ///
     /// The chromosome names must match the annotation seqnames.
     #[arg(short = 'f', long = "genome")]
-    genome: PathBuf,
+    genome: ReadableFile,
 
     /// Output genome-coordinate BAM.
     #[arg(short = 'o', long = "out")]
-    out: PathBuf,
+    out: OutputFile,
 
     /// Number of BAM reader/writer threads.
     #[arg(short = 't', long = "threads", default_value_t = 4)]
@@ -85,6 +84,8 @@ fn run(cli: Cli) -> Result<()> {
     if cli.threads == 0 {
         anyhow::bail!("--threads must be at least 1");
     }
+
+    cli.out.prepare().with_context(|| format!("preparing --out {}", cli.out.display()))?;
 
     let mut reader = Reader::from_path(&cli.bam)
         .with_context(|| format!("opening input BAM/SAM/CRAM {}", cli.bam.display()))?;

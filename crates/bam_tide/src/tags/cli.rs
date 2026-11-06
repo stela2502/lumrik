@@ -34,7 +34,7 @@ pub struct TagCli {
     )]
     pub tag_set: BuiltinTagSet,
 
-    #[arg(
+    #[arg(value_parser = lumrik_clap::parse_readable_file, 
         long,
         value_name = "TSV/FASTA",
         help = "Optional custom DNA tag file. TSV format: name<TAB>sequence. FASTA is also accepted."
@@ -50,7 +50,7 @@ pub struct TagCli {
     )]
     pub search_read: TagRead,
 
-    #[arg(
+    #[arg(value_parser = lumrik_clap::parse_readable_file, 
         long,
         default_value = "feature_tags",
         value_name = "DIR",

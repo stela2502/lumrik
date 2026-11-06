@@ -1,7 +1,7 @@
 use clap::Parser;
 use fast_tag_mapper::FastMapperCli;
 use sc_primer::PrimerCli;
-use std::path::PathBuf;
+use lumrik_clap::{ReadableFile, OutputFile};
 
 #[derive(Debug, Clone, Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -47,7 +47,7 @@ pub struct Cli {
         value_name = "BAM",
         help = "Input Dorado/ONT BAM file. The BAM may be unmapped; query sequence and qualities are used."
     )]
-    pub bam: PathBuf,
+    pub bam: ReadableFile,
 
     #[arg(
         long,
@@ -55,7 +55,7 @@ pub struct Cli {
         value_name = "FASTQ[.GZ]",
         help = "Output normalized FASTQ file. By default this is gzip-compressed unless --no-gzip is set."
     )]
-    pub out: PathBuf,
+    pub out: OutputFile,
 
     #[arg(
         long,
@@ -63,7 +63,7 @@ pub struct Cli {
         value_name = "TSV",
         help = "Output molecule metadata TSV. Contains one row per emitted molecule with CB/UMI, qualities, coordinates, orientation, and status."
     )]
-    pub read_tags: PathBuf,
+    pub read_tags: OutputFile,
 
     #[command(flatten)]
     pub primer: PrimerCli,

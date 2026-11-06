@@ -26,15 +26,15 @@ const LOCUS_SPACER: usize = 101;
 struct Args {
     /// Ommverse index whose source genome supplies the fixture chromosomes.
     #[arg(long)]
-    ommverse_index: PathBuf,
+    ommverse_index: lumrik_clap::ReadableFile,
 
     /// Output directory for genome.fa, genes.gtf, R1.fastq and R2.fastq.
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_output_file, long)]
     out: PathBuf,
 
     /// Rich one-cell VDJ BAM whose read/UMI evidence is rehydrated as raw BD reads.
     #[arg(long)]
-    vdj_bam: PathBuf,
+    vdj_bam: lumrik_clap::ReadableFile,
 
     /// GEX genes to include. Defaults to Actb and Gapdh.
     #[arg(long, num_args = 1..)]

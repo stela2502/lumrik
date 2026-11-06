@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -45,11 +44,11 @@ type BwReader = BigWigRead<ReopenableFile>;
 struct Args {
     /// Python-generated BigWig (reference)
     #[arg(long, short = 'a', value_name = "FILE")]
-    python_bw: PathBuf,
+    python_bw: lumrik_clap::ReadableFile,
 
     /// Rust-generated BigWig (to be validated)
     #[arg(long, short = 'b', value_name = "FILE")]
-    rust_bw: PathBuf,
+    rust_bw: lumrik_clap::ReadableFile,
 
     /// Bin width used during coverage generation (must match both files)
     #[arg(long, default_value_t = 50, value_name = "INT")]
@@ -64,7 +63,7 @@ struct Args {
     ///
     /// If not provided, the report is written to STDOUT
     #[arg(long, short, value_name = "FILE")]
-    outfile: Option<PathBuf>,
+    outfile: Option<lumrik_clap::OutputFile>,
 }
 
 fn main() -> Result<()> {

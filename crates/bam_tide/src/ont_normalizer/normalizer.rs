@@ -230,6 +230,8 @@ impl OntNormalizer {
     }
 
     pub fn from_cli(cli: Cli) -> Result<Self> {
+        cli.out.prepare()?;
+        cli.read_tags.prepare()?;
         let mut additional_features = Vec::new();
         if let Some(species) = cli.feature_tags.species {
             additional_features.push(match species {
@@ -238,15 +240,15 @@ impl OntNormalizer {
             });
         }
         if let Some(path) = cli.feature_tags.tags {
-            additional_features.push(AdditionalFeatureSource::Fasta(path));
+            additional_features.push(AdditionalFeatureSource::Fasta(path.into_path_buf()));
         }
 
         Self::new(OntNormalizerConfig {
-            bam: cli.bam,
+            bam: cli.bam.into_path_buf(),
             dump_failed_reads: 0,
             ont_diagnostics: false,
-            out: cli.out,
-            read_tags: cli.read_tags,
+            out: cli.out.into_path_buf(),
+            read_tags: cli.read_tags.into_path_buf(),
             min_transcript_len: cli.min_transcript_len,
             max_reads: cli.max_reads,
             primer: cli

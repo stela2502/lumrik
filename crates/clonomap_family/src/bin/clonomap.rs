@@ -36,10 +36,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 struct Cli {
     /// Lumrik/nelrune-vdj output directory containing airr_rearrangements.tsv and vdj_calls.tsv
     #[arg(long, num_args = 1..)]
-    vdj_out: Vec<PathBuf>,
+    vdj_out: Vec<lumrik_clap::ReadableDir>,
     /// Output directory for family, mutation, model-space and plot reports
     #[arg(long)]
-    out: PathBuf,
+    out: lumrik_clap::OutputDir,
     /// Single-cell chemistry/chemistries used to identify and clip known technical sequence.
     #[arg(long, value_enum, num_args = 1.., default_values_t = [Chemistry::BdV2_384, Chemistry::BdV2_384Vdj])]
     chemistry: Vec<Chemistry>,
@@ -63,7 +63,7 @@ struct Cli {
     reference_curator: Option<PathBuf>,
     /// Generic Ommverse amino-acid model vault. When supplied, add speculative family model-space trajectories.
     #[arg(long)]
-    vault: Option<PathBuf>,
+    vault: Option<lumrik_clap::ReadableFile>,
     /// Skip the default family SVG plots.
     #[arg(long)]
     no_plots: bool,
@@ -420,7 +420,8 @@ fn run(args: Cli) -> Result<()> {
         "discovering inputs",
         "Resolving VDJ output directories",
     );
-    let sources = input_sources(&args.vdj_out)?;
+    let vdj_paths: Vec<PathBuf> = args.vdj_out.iter().map(|p| p.to_path_buf()).collect();
+    let sources = input_sources(&vdj_paths)?;
     set_status(
         &status,
         "loading receptors",

@@ -4,7 +4,6 @@ mod evidence_report;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use sc_vdj::{NelruneIdentityResolver, VdjIndex, VdjIndexBuilder, VdjRunner, VdjRunnerConfig};
-use std::path::PathBuf;
 #[derive(Debug, Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
@@ -15,17 +14,17 @@ use std::path::PathBuf;
 )]
 struct Cli {
     #[arg(long)]
-    bam: PathBuf,
+    bam: lumrik_clap::ReadableFile,
     #[arg(long)]
-    index: Option<PathBuf>,
+    index: Option<lumrik_clap::ReadableFile>,
     #[arg(long)]
-    gtf: Option<PathBuf>,
+    gtf: Option<lumrik_clap::ReadableFile>,
     #[arg(long)]
-    genome: Option<PathBuf>,
+    genome: Option<lumrik_clap::ReadableFile>,
     #[arg(long)]
-    out: Option<PathBuf>,
+    out: Option<lumrik_clap::OutputDir>,
     #[arg(long)]
-    exonic: Option<PathBuf>,
+    exonic: Option<lumrik_clap::ReadableDir>,
     #[arg(long, default_value_t = 12)]
     min_sequence_overlap: usize,
 

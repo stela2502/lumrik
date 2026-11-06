@@ -5,6 +5,7 @@ edition = "2021"
 description = "Fast BD/FASTA feature-id mapper for bam_tide"
 
 [dependencies]
+lumrik_clap = { path = "../lumrik_clap" }
 anyhow = "1.0.102"
 clap = { workspace = true }
 flate2 = "1"

@@ -9,6 +9,7 @@ description = "Single-cell transposable-element quantification from multimapping
 [dependencies]
 bam_tide = { path = "../bam_tide" }
 clap = { workspace = true }
+lumrik_clap = { path = "../lumrik_clap" }
 gtf_splice_index = { path = "../gtf_splice_index" }
 anyhow = "1"
 int-to-dna = { path = "../int_to_dna" }

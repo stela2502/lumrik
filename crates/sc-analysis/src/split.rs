@@ -8,13 +8,13 @@ use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};
 pub struct SplitCli {
     /// Source H5AD; never modified.
     #[arg(long)]
-    data: PathBuf,
+    data: lumrik_clap::ReadableFile,
     /// obs column whose distinct values define the outputs.
     #[arg(long)]
     by: String,
     /// Destination directory; existing files are never overwritten.
     #[arg(long, default_value = "split")]
-    out: PathBuf,
+    out: lumrik_clap::OutputDir,
 }
 
 fn subset_column(c: &Column, rows: &[usize]) -> Column {

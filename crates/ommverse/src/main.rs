@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use lumrik_clap::{Parser, Subcommand, ReadableFile, OutputPrefix};
 use lumrik_status::{
     ServerContent, ServerSnapshot, StatusMetric, StatusSection, memory_status, public_hostname,
     spawn_status_server,
@@ -34,20 +34,20 @@ enum Command {
     Build {
         /// Existing downloaded reference root. Mutually exclusive with --assembly.
         #[arg(long, conflicts_with = "assembly")]
-        reference: Option<PathBuf>,
+        reference: Option<lumrik_clap::ReadableDir>,
         /// Fetch supported sources for this assembly into --cache and build them.
         #[arg(long, conflicts_with = "reference")]
         assembly: Option<String>,
         #[arg(long, default_value = ".ommverse-cache")]
-        cache: PathBuf,
+        cache: lumrik_clap::OutputDir,
         /// Use this GTF exactly. Disables automatic GENCODE annotation selection.
         #[arg(long, conflicts_with_all = ["reference", "gencode_release"])]
-        gtf: Option<PathBuf>,
+        gtf: Option<lumrik_clap::ReadableFile>,
         /// Pin a GENCODE release (for example 50 or M38). Defaults to latest when supported.
         #[arg(long, conflicts_with_all = ["reference", "gtf"])]
         gencode_release: Option<String>,
         /// Output Ommverse index. Defaults to <cache>/<assembly>/<assembly>.ommverse in --assembly mode.
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_output_file, long)]
         out: Option<PathBuf>,
         #[arg(long)]
         debug_failed_mappings: bool,
@@ -62,19 +62,19 @@ enum Command {
     IngestInterpro {
         /// One Ommverse index. Mutually exclusive with --index-dir.
         #[arg(long, conflicts_with = "index_dir")]
-        index: Option<PathBuf>,
+        index: Option<lumrik_clap::ReadableFile>,
         /// Recursively enrich every base *.ommverse index below this directory in one InterPro pass.
         #[arg(long, conflicts_with = "index")]
-        index_dir: Option<PathBuf>,
+        index_dir: Option<lumrik_clap::ReadableDir>,
         #[arg(long)]
-        protein2ipr: PathBuf,
+        protein2ipr: lumrik_clap::ReadableFile,
         #[arg(long)]
-        entry_list: PathBuf,
+        entry_list: lumrik_clap::ReadableFile,
         /// Optional InterPro ParentChildTreeFile.txt; stored once in each enriched index.
         #[arg(long)]
-        parent_child_tree: Option<PathBuf>,
+        parent_child_tree: Option<lumrik_clap::ReadableFile>,
         /// Output path for single-index mode. Directory mode writes <stem>.interpro.ommverse beside each input.
-        #[arg(long, requires = "index")]
+        #[arg(value_parser = lumrik_clap::parse_output_file, long, requires = "index")]
         out: Option<PathBuf>,
         #[arg(long, default_value_t = 8787)]
         health_port: u16,
@@ -86,39 +86,39 @@ enum Command {
     /// Import one or more MSigDB GMT files into a compact, queryable sidecar.
     /// Download licensed MSigDB collections separately; no redistribution is performed.
     IngestMsigdb {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         /// Optional local GMT files. If omitted, download Hallmark, C2 and C3.
         #[arg(long, num_args = 1..)]
-        gmt: Vec<PathBuf>,
+        gmt: Vec<lumrik_clap::ReadableFile>,
         /// MSigDB human release, pinned for reproducibility.
         #[arg(long, default_value = "2026.1.Hs")]
         release: String,
         /// Download cache directory (default: <index parent>/MSigDB).
         #[arg(long)]
-        cache_dir: Option<PathBuf>,
+        cache_dir: Option<lumrik_clap::OutputDir>,
     },
     /// Look up MSigDB sets containing a gene symbol, without loading the genome index.
     MsigdbGene {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         gene: String,
     },
     /// Retrieve members of a named MSigDB set, without loading the genome index.
     MsigdbSet {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         set: String,
     },
     /// Query the biological reference model with the Ommverse query language.
     Query {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         query: String,
     },
     /// Print the small capability schema without opening the Ommverse index.
     Schema {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         /// Create or replace the tiny schema sidecar for an existing index.
         /// This opens the Ommverse once; later schema reads and query validation do not.
@@ -127,29 +127,29 @@ enum Command {
     },
     /// Inspect serialized core composition and external reference storage without changing either.
     Inspect {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
     },
     /// Probe whether STRING contains interaction profiles that differ across InterPro feature architectures.
     StringProbe {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         #[arg(long)]
-        info: PathBuf,
+        info: lumrik_clap::ReadableFile,
         #[arg(long)]
-        links: PathBuf,
-        #[arg(long)]
+        links: lumrik_clap::ReadableFile,
+        #[arg(value_parser = lumrik_clap::parse_output_file, long)]
         out: PathBuf,
     },
     Protein {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         accession: String,
         #[arg(long)]
         sequence: bool,
     },
     Gene {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         symbol: String,
     },
@@ -162,7 +162,7 @@ enum Command {
     /// Residues outside the selected feature remain in the examples as background.
     /// This command validates/describes the corpus; it does not train a model.
     TrainingCorpus {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         #[arg(long)]
         feature: String,
@@ -184,11 +184,11 @@ enum Command {
     /// window (default 10 aa). With --scan-unannotated the frozen model is then
     /// applied to proteins lacking the selected annotation; they never train it.
     TrainExactAa {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         #[arg(long)]
         feature: String,
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_output_file, long)]
         out: PathBuf,
         /// Number of residues immediately outside each curated feature assigned to PRE/POST states.
         #[arg(long, default_value_t = 10)]
@@ -209,18 +209,18 @@ enum Command {
     /// model is evaluated against the target index's curated annotations. This is the
     /// cross-reference / cross-species transfer test.
     EvaluateModelVault {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         vault: PathBuf,
     },
 
     /// Apply a previously trained exact-AA feature model to unannotated proteins.
     ScanExactAa {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
         #[arg(long)]
-        model: PathBuf,
+        model: lumrik_clap::ReadableFile,
     },
 }
 
@@ -228,9 +228,9 @@ enum Command {
 enum ModelVaultCommand {
     /// Train all supported amino-acid feature HMMs and write <vault>.info beside the vault.
     Train {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         index: PathBuf,
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_output_file, long)]
         out: PathBuf,
         #[arg(long, default_value_t = 10)]
         flank_width: usize,
@@ -240,7 +240,7 @@ enum ModelVaultCommand {
     },
     /// Show provenance and held-out metrics stored with a model vault.
     Info {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         vault: PathBuf,
     },
     /// Apply every frozen model to arbitrary amino-acid FASTA sequences.
@@ -249,13 +249,13 @@ enum ModelVaultCommand {
     /// and <out>.features.tsv (0-based half-open predicted intervals). HMM raw scores are
     /// never labelled as p-values; calibrated_p_value remains empty until null calibration exists.
     Predict {
-        #[arg(long)]
+        #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
         vault: PathBuf,
         #[arg(long)]
-        fasta: PathBuf,
+        fasta: lumrik_clap::ReadableFile,
         /// Output prefix for .responses.tsv and .features.tsv.
         #[arg(long)]
-        out: PathBuf,
+        out: OutputPrefix,
     },
 }
 
@@ -969,13 +969,19 @@ enum PlotCommand {
     /// Plot genomic transcript structures, CDSs and InterPro architecture for one or more genes.
     Genome {
         #[arg(long)]
-        index: PathBuf,
-        /// Output directory or filename prefix.
+        index: ReadableFile,
+        /// Filename prefix; each gene produces <prefix><gene>.svg.
         #[arg(long)]
-        out: PathBuf,
+        out: OutputPrefix,
         /// Gene symbols to plot. The Ommverse reference is loaded only once.
         #[arg(required = true, num_args = 1..)]
         genes: Vec<String>,
+        /// VCF containing SNPs to mark on each gene plot.
+        #[arg(long)]
+        vcf: Option<ReadableFile>,
+        /// Highlight a UCSC 1-based inclusive interval, e.g. chr17:7673207-7673266.
+        #[arg(long)]
+        highlight: Option<String>,
     },
 }
 
@@ -1058,7 +1064,7 @@ fn main() -> Result<()> {
                 (None, Some(assembly)) => {
                     let annotation = ommverse::sources::AnnotationOptions {
                         gencode_release,
-                        explicit_gtf: gtf,
+                        explicit_gtf: gtf.map(|p| p.into_path_buf()),
                     };
                     Ommverse::fetch_and_build_with_annotation_and_progress(
                         &assembly, &cache, annotation, update,
@@ -1306,7 +1312,8 @@ fn main() -> Result<()> {
             }
         }
         Command::Plot { plot } => match plot {
-            PlotCommand::Genome { index, out, genes } => {
+            PlotCommand::Genome { index, out, genes, vcf, highlight } => {
+                out.prepare()?;
                 eprintln!("[ommverse] loading reference for genome plots...");
                 let omm = Ommverse::load(&index)?;
                 eprintln!(
@@ -1314,7 +1321,7 @@ fn main() -> Result<()> {
                     genes.len()
                 );
                 for (i, gene) in genes.iter().enumerate() {
-                    let plot_out = ommverse::plot::gene_plot_output_path(&out, gene);
+                    let plot_out = out.with_suffix(&format!("{gene}.svg"));
                     if let Some(parent) = plot_out.parent() {
                         if !parent.as_os_str().is_empty() {
                             std::fs::create_dir_all(parent)?;
@@ -1327,7 +1334,18 @@ fn main() -> Result<()> {
                         gene,
                         plot_out.display()
                     );
-                    ommverse::plot::plot_gene_transcripts(&omm, gene, &plot_out)?;
+                    let highlight_range = highlight.as_deref().map(|s| -> anyhow::Result<(String,u32,u32)> {
+                        let (chr, range) = s.split_once(':').context("highlight must be chr:start-end")?;
+                        let (start, end) = range.split_once('-').context("highlight must be chr:start-end")?;
+                        let start: u32 = start.replace(',', "").parse()?;
+                        let end: u32 = end.replace(',', "").parse()?;
+                        anyhow::ensure!(start > 0 && end >= start, "invalid highlight interval");
+                        Ok((chr.to_owned(), start, end))
+                    }).transpose()?;
+                    let options = ommverse::plot::GeneTranscriptPlotOptions {
+                        vcf: vcf.as_ref().map(|path| path.as_path().to_path_buf()), highlight: highlight_range, ..Default::default()
+                    };
+                    ommverse::plot::plot_gene_transcripts_with_options(&omm, gene, &plot_out, &options)?;
                 }
                 eprintln!("[ommverse] wrote {} genome plot(s)", genes.len());
             }
@@ -1339,7 +1357,7 @@ fn main() -> Result<()> {
             cache_dir,
         } => {
             let paths = if gmt.is_empty() {
-                let cache = cache_dir.unwrap_or_else(|| {
+                let cache = cache_dir.map(|p| p.into_path_buf()).unwrap_or_else(|| {
                     index
                         .parent()
                         .unwrap_or(std::path::Path::new("."))
@@ -1347,7 +1365,7 @@ fn main() -> Result<()> {
                 });
                 ommverse::msigdb::download_collections(&cache, &release)?
             } else {
-                gmt
+                gmt.into_iter().map(|p| p.into_path_buf()).collect()
             };
             let count = ommverse::msigdb::ingest(&index, &paths, &release)?;
             println!(
@@ -1666,8 +1684,9 @@ fn main() -> Result<()> {
         } => {
             let vault = AaModelVault::load(&vault)?;
             let sequences = read_aa_fasta(&fasta)?;
-            let responses_path = PathBuf::from(format!("{}.responses.tsv", out.display()));
-            let features_path = PathBuf::from(format!("{}.features.tsv", out.display()));
+            out.prepare()?;
+            let responses_path = out.with_suffix(".responses.tsv");
+            let features_path = out.with_suffix(".features.tsv");
             let mut responses = String::from(
                 "sequence_id\tmodel_id\tmodel_name\tmodel_kind\traw_log_likelihood\theldout_precision\theldout_recall\theldout_f1\n",
             );

@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, ValueEnum};
+use lumrik_clap::{Parser, ValueEnum, ReadableDir, OutputDir};
 use int_to_dna::IntToDna;
 use sc_primer::{BdCellVersion, RhapsodyWhitelist};
 use scdata::{MexFeatureIndex, load_mtx_feature_matrix, read_mtx_barcodes};
@@ -25,11 +25,11 @@ enum OtherProducer {
 struct Cli {
     /// Nelrune Gene Expression MEX directory. Cell labels must be DNA barcodes.
     #[arg(long)]
-    nelrune: PathBuf,
+    nelrune: ReadableDir,
 
     /// External Gene Expression MEX directory to compare with Nelrune.
     #[arg(long)]
-    other: PathBuf,
+    other: ReadableDir,
 
     /// Producer of the second matrix. BD numeric ids are expanded through the
     /// Rhapsody whitelist; 10x barcode labels are packed directly.
@@ -41,7 +41,7 @@ struct Cli {
     bd_version: String,
 
     #[arg(long, default_value = "mex_compare")]
-    out: PathBuf,
+    out: OutputDir,
 
     #[arg(long, default_value_t = 4)]
     threads: usize,
@@ -58,7 +58,7 @@ struct MatrixInput {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
+    cli.out.prepare().with_context(|| format!("creating {}", cli.out.display()))?;
 
     let nelrune = load_nelrune(&cli.nelrune, cli.threads)?;
     let other = load_other(&cli.other, cli.other_producer, &cli.bd_version, cli.threads)?;

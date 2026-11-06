@@ -379,6 +379,8 @@ impl IlluminaNormalizer {
     }
 
     pub fn from_cli(cli: Cli) -> Result<Self> {
+        cli.out.prepare()?;
+        cli.read_tags.prepare()?;
         let mut additional_features = Vec::new();
         if let Some(species) = cli.feature_tags.species {
             additional_features.push(match species {
@@ -387,12 +389,12 @@ impl IlluminaNormalizer {
             });
         }
         if let Some(path) = cli.feature_tags.tags {
-            additional_features.push(AdditionalFeatureSource::Fasta(path));
+            additional_features.push(AdditionalFeatureSource::Fasta(path.into_path_buf()));
         }
 
         Self::new(IlluminaNormalizerConfig {
-            out: cli.out,
-            read_tags: cli.read_tags,
+            out: cli.out.into_path_buf(),
+            read_tags: cli.read_tags.into_path_buf(),
             primer_read: cli.primer_read,
             insert_read: cli.insert_read,
             primer: cli.primer.detector().map_err(anyhow::Error::msg)?,

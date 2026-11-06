@@ -79,7 +79,7 @@ struct ApplyModelCli {
     data: PathBuf,
     /// Previously trained gene-model JSON.
     #[arg(long)]
-    model: PathBuf,
+    model: lumrik_clap::ReadableFile,
     /// Population annotation for plots (e.g. phase).
     #[arg(long, default_value = "cell_type")]
     cluster: String,
@@ -89,7 +89,7 @@ struct ApplyModelCli {
     case: Vec<String>,
     #[arg(long, num_args = 1.., value_delimiter = ',')]
     control: Vec<String>,
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_output_dir, long)]
     out: PathBuf,
     #[arg(long = "no-interactive", visible_alias = "non-interactive")]
     non_interactive: bool,
@@ -104,13 +104,13 @@ struct CreateListCli {
     data: PathBuf,
     /// One gene symbol per line (blank lines and # comments ignored).
     #[arg(long)]
-    gene_list: PathBuf,
+    gene_list: lumrik_clap::ReadableFile,
     /// Name of the gene set, stored in the reusable model.
     #[arg(long, default_value = "ModelX")]
     name: String,
     /// Output model JSON (default: OUT/NAME.model.json).
     #[arg(long)]
-    model: Option<PathBuf>,
+    model: Option<lumrik_clap::OutputFile>,
     /// Cluster annotation for trajectory plots.
     #[arg(long, default_value = "cell_type")]
     cluster: String,
@@ -121,7 +121,7 @@ struct CreateListCli {
     case: Vec<String>,
     #[arg(long, num_args = 1.., value_delimiter = ',')]
     control: Vec<String>,
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_output_dir, long)]
     out: PathBuf,
     #[arg(long)]
     non_interactive: bool,
@@ -132,7 +132,8 @@ struct CreateListCli {
 #[derive(Debug, Args)]
 struct InspectResultsCli {
     /// Existing TraConMech investigation folder.
-    results: PathBuf,
+    #[arg(value_parser = lumrik_clap::parse_readable_dir)]
+    results: lumrik_clap::ReadableDir,
     /// Only print genes from this module (default: all modules).
     #[arg(long)]
     module: Option<usize>,
@@ -158,16 +159,16 @@ struct Cli {
     profile_clusters: bool,
     /// Reuse gene module assignments from an earlier effect_clusters.tsv.
     #[arg(long)]
-    reference_modules: Option<PathBuf>,
+    reference_modules: Option<lumrik_clap::ReadableFile>,
     /// Seed gene for deterministic regulatory-module analysis (e.g. TP53).
     #[arg(long = "gene", visible_alias = "investigate-gene")]
     investigate_gene: Option<String>,
     /// STRING protein info table (protein ID to preferred gene symbol).
     #[arg(long)]
-    string_info: Option<PathBuf>,
+    string_info: Option<lumrik_clap::ReadableFile>,
     /// STRING protein links table (protein1 protein2 combined_score).
     #[arg(long)]
-    string_links: Option<PathBuf>,
+    string_links: Option<lumrik_clap::ReadableFile>,
     /// Population annotation for regulatory projection.
     #[arg(long = "cluster")]
     cluster: Option<String>,
@@ -211,7 +212,7 @@ struct Cli {
     no_developmental_ai: bool,
 
     /// Investigation directory (conversation.md, evidence.jsonl, error.log).
-    #[arg(long, default_value = "investigation")]
+    #[arg(value_parser = lumrik_clap::parse_output_dir, long, default_value = "investigation")]
     out: PathBuf,
 
     /// Ollama model used for evidence-driven investigation.
@@ -232,7 +233,7 @@ struct Cli {
 
     /// Inspect an H5AD expression analysis and exit (no AI inference).
     #[arg(long)]
-    inspect_h5ad: Option<PathBuf>,
+    inspect_h5ad: Option<lumrik_clap::ReadableFile>,
 
     /// Grouping annotation for H5AD inspection.
     #[arg(long)]
@@ -244,7 +245,7 @@ struct Cli {
 
     /// Ommverse reference to use for the genomic projection.
     #[arg(long)]
-    ommverse: Option<PathBuf>,
+    ommverse: Option<lumrik_clap::ReadableFile>,
 
     /// H5AD expression file or sc-analysis directory (expression.mtx.gz, genes.tsv.gz, cells.tsv.gz).
     #[arg(long)]
@@ -253,7 +254,7 @@ struct Cli {
     /// Raw Nelrune/10x exonic MEX folder. When supplied, sc-analysis performs
     /// log-normalization, PCA, over-clustering, correlation merging, and a
     /// within-cluster top-UMI pseudo-deep holdout before TraConMech runs.
-    #[arg(long, conflicts_with = "data")]
+    #[arg(value_parser = lumrik_clap::parse_readable_dir, long, conflicts_with = "data")]
     exon_matrix: Option<PathBuf>,
 
     /// Cell annotation used to define expression populations for pre-analysed --data.
@@ -278,7 +279,7 @@ struct Cli {
 
     /// Output directory for normalized matrix, annotations, statistics and plots.
     #[arg(long, default_value = "sc_analysis")]
-    analysis_output: PathBuf,
+    analysis_output: lumrik_clap::OutputDir,
 
     /// Highest-UMI fraction held out within each merged cluster as pseudo-deep validation cells.
     #[arg(long, default_value_t = 0.10)]
@@ -295,11 +296,11 @@ struct Cli {
 
     /// Genomically ordered gene light table. Defaults to ./lights.tsv.
     #[arg(long)]
-    output: Option<PathBuf>,
+    output: Option<lumrik_clap::OutputFile>,
 
     /// Genomic nearest-neighbour table. Defaults to ./genomic_neighbors.tsv.
     #[arg(long)]
-    neighbor_output: Option<PathBuf>,
+    neighbor_output: Option<lumrik_clap::OutputFile>,
 
     /// Number of nearest genes to connect to each gene on the same chromosome.
     #[arg(long, default_value_t = 5)]
@@ -315,7 +316,7 @@ struct Cli {
 
     /// Per-bin HMM output. Defaults to ./hmm_bins.tsv.
     #[arg(long)]
-    hmm_output: Option<PathBuf>,
+    hmm_output: Option<lumrik_clap::OutputFile>,
 
     /// Hold one technology out of HMM fitting and use it as an independent
     /// dropout-recovery validation set, e.g. --hmm-holdout-tech smartseq2.
@@ -324,7 +325,7 @@ struct Cli {
 
     /// Held-out HMM validation table. Defaults to ./hmm_holdout_validation.tsv.
     #[arg(long)]
-    hmm_validation_output: Option<PathBuf>,
+    hmm_validation_output: Option<lumrik_clap::OutputFile>,
 }
 
 // Keep the existing comma-separated internal API while accepting multiple CLI values.
@@ -389,7 +390,7 @@ fn main() -> Result<()> {
                 ai_primer: None,
             })?;
             experiment::record_references(&cli.out)?;
-            let model_path = cli.model.clone().unwrap_or_else(|| cli.out.join(format!("{}.model.json", cli.name)));
+            let model_path = cli.model.as_ref().map(|p| p.to_path_buf()).unwrap_or_else(|| cli.out.join(format!("{}.model.json", cli.name)));
             gene_model::create(&data, &cli.cluster, &cli.name, &model_path, &cli.out)?;
             let modules = gene_model::read_training_modules(&cli.out.join("module_membership.tsv"))?;
             gene_model::score_modules(&data, &modules, &cli.condition, &cli.out)?;
@@ -590,7 +591,7 @@ fn main() -> Result<()> {
             cli.ai = true;
             cli
         }
-        Mode::Inspect(mut cli) => {
+        Mode::Inspect(cli) => {
             anyhow::ensure!(
                 cli.inspect_h5ad.is_some(),
                 "inspect requires --inspect-h5ad"
@@ -845,7 +846,7 @@ fn main() -> Result<()> {
             merge_pearson: cli.analysis_merge_pearson,
             holdout_fraction: cli.analysis_holdout_fraction,
             pseudo_samples: 5,
-            output_dir: cli.analysis_output.clone(),
+            output_dir: cli.analysis_output.to_path_buf(),
             ..AnalysisConfig::default()
         };
         println!(
@@ -990,7 +991,8 @@ fn run_lights(
 
     let output = cli
         .output
-        .clone()
+        .as_ref()
+        .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("lights.tsv"));
     let mut writer = BufWriter::new(File::create(&output)?);
     write!(writer, "chromosome\tstart\tend\tgene")?;
@@ -1049,7 +1051,8 @@ fn run_lights(
 
     let neighbor_output = cli
         .neighbor_output
-        .clone()
+        .as_ref()
+        .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("genomic_neighbors.tsv"));
     let mut neighbor_writer = BufWriter::new(File::create(&neighbor_output)?);
     writeln!(
@@ -1498,7 +1501,8 @@ fn run_splice_bin_hmm(
 
     let hmm_output = cli
         .hmm_output
-        .clone()
+        .as_ref()
+        .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("hmm_bins.tsv"));
     let mut writer = BufWriter::new(File::create(&hmm_output)?);
     writeln!(
@@ -1681,7 +1685,8 @@ fn write_holdout_validation(
         .collect::<Vec<_>>();
     let output = cli
         .hmm_validation_output
-        .clone()
+        .as_ref()
+        .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("hmm_holdout_validation.tsv"));
     let mut writer = BufWriter::new(File::create(&output)?);
     writeln!(

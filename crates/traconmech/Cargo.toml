@@ -7,6 +7,7 @@ authors.workspace = true
 description = "Trace biological context to candidate mechanisms"
 
 [dependencies]
+lumrik_clap = { path = "../lumrik_clap" }
 anyhow = "1"
 ai_llm_con = { path = "../ai_llm_con" }
 clap = { workspace = true }

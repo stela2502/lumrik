@@ -4,7 +4,7 @@ use clap::Parser;
 use rust_htslib::bam;
 use sc_mapper::{MappingCall, StreamingMapper, StreamingMapperCli};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -18,18 +18,18 @@ struct Cli {
     mapper: StreamingMapperCli,
 
     #[arg(long)]
-    r1: PathBuf,
+    r1: lumrik_clap::ReadableFile,
 
     #[arg(long)]
-    r2: Option<PathBuf>,
+    r2: Option<lumrik_clap::ReadableFile>,
 
     /// Optional debug table, one line per received mapping call.
     #[arg(long)]
-    out_tsv: Option<PathBuf>,
+    out_tsv: Option<lumrik_clap::OutputFile>,
 
     /// BAM output containing all SAM/BAM records returned by the mapper.
     #[arg(long)]
-    out_bam: PathBuf,
+    out_bam: lumrik_clap::OutputFile,
 }
 
 fn main() -> Result<()> {

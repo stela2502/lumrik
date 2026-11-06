@@ -17,13 +17,13 @@ pub struct AnalysisCli {
 
     /// Output directory for normalized matrix, annotations, statistics, and plots.
     #[arg(short, long, default_value = "sc_analysis")]
-    out: PathBuf,
+    out: lumrik_clap::OutputDir,
 
     /// FIRST gene filter: retain only genes listed in FILE (one gene symbol per line).
     /// Applied before MT/ribosomal/optional IG/TR exclusion, cell QC, --min-umi-count,
     /// resampling, normalization, PCA, UMAP, and clustering. The UMI threshold
     /// therefore counts only surviving target-gene UMIs. Without this, no target filter.
-    #[arg(long, value_name = "FILE", verbatim_doc_comment)]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long, value_name = "FILE", verbatim_doc_comment)]
     target_gene_list: Option<PathBuf>,
 
     /// Minimum surviving UMIs per cell, and exact fixed-depth resampling target.
@@ -156,7 +156,7 @@ pub fn run_analysis(cli: AnalysisCli) -> Result<()> {
         pseudo_samples: cli.pseudo_samples,
         multiplet_min_parent_fraction: cli.multiplet_min_parent_fraction,
         multiplet_min_improvement: cli.multiplet_min_improvement,
-        output_dir: cli.out.clone(),
+        output_dir: cli.out.to_path_buf(),
     };
 
     eprintln!("sc-analyse");

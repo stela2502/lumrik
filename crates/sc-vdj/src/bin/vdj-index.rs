@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use sc_vdj::VdjIndexBuilder;
-use std::path::PathBuf;
+use lumrik_clap::{ReadableFile, OutputFile};
 #[derive(Debug, Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(
@@ -12,14 +12,15 @@ use std::path::PathBuf;
 )]
 struct Cli {
     #[arg(long)]
-    gtf: PathBuf,
+    gtf: ReadableFile,
     #[arg(long)]
-    genome: PathBuf,
+    genome: ReadableFile,
     #[arg(long)]
-    out: PathBuf,
+    out: OutputFile,
 }
 fn main() -> Result<()> {
     let c = Cli::parse();
+    c.out.prepare()?;
     let idx = VdjIndexBuilder::default()
         .build(&c.gtf, &c.genome)
         .context("building VDJ index")?;

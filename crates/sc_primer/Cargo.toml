@@ -16,6 +16,7 @@ exclude = ["target/", ".github/", "*.tmp"]
 
 [dependencies]
 clap = { workspace = true }
+lumrik_clap = { path = "../lumrik_clap" }
 flate2 = "1"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

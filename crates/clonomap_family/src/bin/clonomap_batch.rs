@@ -37,7 +37,7 @@ struct Args {
 
     /// Output directory
     #[arg(short, long)]
-    outdir: Option<PathBuf>,
+    outdir: Option<lumrik_clap::OutputDir>,
 
     /// Enable SVG plotting
     #[arg(long)]
@@ -67,7 +67,7 @@ fn main() -> anyhow::Result<()> {
 
     // --- determine output directory ---
     let outdir = match &args.outdir {
-        Some(p) => p.clone(),
+        Some(p) => p.to_path_buf(),
         None => {
             if args.input.is_dir() {
                 args.input.clone()

@@ -7,6 +7,18 @@ impl UmiEvidence for () {
     fn merge(&mut self, _other: &Self) {}
 }
 
+/// Gene-wide observed-exon bitmap carried by one feature/UMI observation.
+/// Repeated observations combine without counting an exon twice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExonMaskEvidence(pub u64);
+
+impl UmiEvidence for ExonMaskEvidence {
+    #[inline]
+    fn merge(&mut self, other: &Self) {
+        self.0 |= other.0;
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SnpSupport {
     pub snp_id: u64,
@@ -47,6 +59,14 @@ impl SnpUmiEvidence {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exon_masks_merge_by_or() {
+        let mut evidence = ExonMaskEvidence(0b0011);
+        evidence.merge(&ExonMaskEvidence(0b0110));
+        assert_eq!(evidence.0, 0b0111);
+        evidence.merge(&ExonMaskEvidence(0b0110));
+        assert_eq!(evidence.0, 0b0111);
+    }
     #[test]
     fn saturates_and_detects_conflicts() {
         let mut evidence = SnpUmiEvidence::default();

@@ -622,7 +622,7 @@ impl BamCollector {
             .map(|tid| header.target_len(tid).unwrap_or(0) as u32)
             .collect();
 
-        SnpSideChannel::from_vcf_path(vcf, chr_names, chr_lengths, self.config.snp_min_anchor)
+        SnpSideChannel::from_vcf_path(vcf, chr_names, chr_lengths, self.config.snp_min_anchor, self.config.snp_flank)
             .map(Some)
     }
 

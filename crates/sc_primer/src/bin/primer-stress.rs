@@ -1,4 +1,4 @@
-use clap::Parser;
+use lumrik_clap::{Parser, ReadableFile};
 use fast_tag_mapper::{BuiltinTagSet, FastTagMapper};
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
@@ -9,7 +9,7 @@ use run_stats::RunStats;
 use sc_primer::{Chemistry, Grammar, PrimerDetector};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -27,11 +27,11 @@ enum FeatureSet {
 )]
 struct Cli {
     #[arg(long)]
-    r1: PathBuf,
+    r1: ReadableFile,
 
     /// R2 is required for molecule_identity(), because the hard UMI key includes R2 bases.
     #[arg(long)]
-    r2: Option<PathBuf>,
+    r2: Option<ReadableFile>,
 
     #[arg(long, value_enum, num_args = 1.., default_values_t = [Chemistry::BdV2_384])]
     chemistry: Vec<Chemistry>,

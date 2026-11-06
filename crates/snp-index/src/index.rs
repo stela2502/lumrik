@@ -332,6 +332,17 @@ impl SnpIndex {
         read: &'a AlignedRead,
         min_baseq: u8,
     ) -> Vec<ObservedSnp<'a>> {
+        self.observed_snps_with_flank(read, min_baseq, 5)
+    }
+
+    /// SNP observations with a configurable number of required aligned flank bases.
+    /// With flank=0 only the SNP base and its Phred quality are checked.
+    pub fn observed_snps_with_flank<'a>(
+        &'a self,
+        read: &'a AlignedRead,
+        min_baseq: u8,
+        flank: u8,
+    ) -> Vec<ObservedSnp<'a>> {
         let mut out = Vec::new();
 
         let Some((start0, end0)) = read.ref_span() else {
@@ -343,47 +354,33 @@ impl SnpIndex {
                 continue;
             };
 
-            // Require a fully aligned 11-base reference window with usable
-            // qualities. Missing qualities and gaps cannot support a SNP call.
-            let Some(window_start) = locus.pos0.checked_sub(5) else {
-                continue;
-            };
-            let mut flank_qualities = [0u8; 10];
-            let mut flank_count = 0;
-            let mut previous_read_pos = None;
-            let mut valid = true;
-            let minimum_quality = min_baseq.max(10);
-            for pos in window_start..=locus.pos0.saturating_add(5) {
-                let Some(base) = read.base_at_ref_pos(pos) else {
-                    valid = false;
-                    break;
+            let Some(snp_quality) = observed.qual else { continue; };
+            if snp_quality < min_baseq { continue; }
+            if flank > 0 {
+                let Some(window_start) = locus.pos0.checked_sub(u32::from(flank)) else {
+                    continue;
                 };
-                let Some(quality) = base.qual else {
-                    valid = false;
-                    break;
-                };
-                if quality < minimum_quality
-                    || previous_read_pos.is_some_and(|prev| base.read_pos != prev + 1)
-                {
-                    valid = false;
-                    break;
+                let mut flank_qualities = Vec::with_capacity(usize::from(flank) * 2);
+                let mut previous_read_pos = None;
+                let mut valid = true;
+                for pos in window_start..=locus.pos0.saturating_add(u32::from(flank)) {
+                    let Some(base) = read.base_at_ref_pos(pos) else { valid = false; break; };
+                    let Some(quality) = base.qual else { valid = false; break; };
+                    if quality < min_baseq.max(10)
+                        || previous_read_pos.is_some_and(|prev| base.read_pos != prev + 1)
+                    {
+                        valid = false;
+                        break;
+                    }
+                    previous_read_pos = Some(base.read_pos);
+                    if pos != locus.pos0 { flank_qualities.push(quality); }
                 }
-                previous_read_pos = Some(base.read_pos);
-                if pos != locus.pos0 {
-                    flank_qualities[flank_count] = quality;
-                    flank_count += 1;
-                }
-            }
-            if !valid || flank_count != 10 {
-                continue;
-            }
-            flank_qualities.sort_unstable();
-            // Median of ten values, rounded down. Allow the SNP to be at
-            // most ten Phred points below the neighboring median.
-            let median = (u16::from(flank_qualities[4])
-                + u16::from(flank_qualities[5])) / 2;
-            if u16::from(observed.qual.unwrap_or(0)) + 10 < median {
-                continue;
+                if !valid || flank_qualities.len() != usize::from(flank) * 2 { continue; }
+                flank_qualities.sort_unstable();
+                let mid = flank_qualities.len() / 2;
+                let median = (u16::from(flank_qualities[mid - 1])
+                    + u16::from(flank_qualities[mid])) / 2;
+                if u16::from(snp_quality) + 10 < median { continue; }
             }
 
             out.push(ObservedSnp { locus, observed });
@@ -400,7 +397,16 @@ impl SnpIndex {
         read: &AlignedRead,
         min_baseq: u8,
     ) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
-        let obs = self.observed_snps(&read, min_baseq);
+        self.get_ref_alt_other_ids_for_read_with_flank(read, min_baseq, 5)
+    }
+
+    pub fn get_ref_alt_other_ids_for_read_with_flank(
+        &self,
+        read: &AlignedRead,
+        min_baseq: u8,
+        flank: u8,
+    ) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
+        let obs = self.observed_snps_with_flank(read, min_baseq, flank);
         let mut reference = Vec::with_capacity(obs.len());
         let mut alternate = Vec::with_capacity(obs.len());
         let mut other = Vec::with_capacity(obs.len());
@@ -1014,6 +1020,22 @@ mod tests {
         assert_eq!(index.observed_snps(&read, 10).len(), 1);
     }
 
+
+    #[test]
+    fn zero_flank_requires_only_snp_base_quality() {
+        let index = SnpIndex::new(
+            &["chrA".to_string()], &[1_000],
+            vec![RawSnpRecord::new(0, 100, b'A', b"T", "variant", "rs1")], 100,
+        ).unwrap();
+        let read = AlignedRead::new(0, Strand::Plus, 100,
+            b"T", Some(vec![20]), &[(ReadOpKind::Match, 1)]);
+        assert_eq!(index.observed_snps_with_flank(&read, 20, 0).len(), 1);
+        assert_eq!(index.observed_snps_with_flank(&read, 21, 0).len(), 0);
+        assert_eq!(index.observed_snps_with_flank(&read, 20, 5).len(), 0);
+        let low = AlignedRead::new(0, Strand::Plus, 100,
+            b"T", Some(vec![19]), &[(ReadOpKind::Match, 1)]);
+        assert_eq!(index.observed_snps_with_flank(&low, 20, 0).len(), 0);
+    }
 
     #[test]
     fn observed_snps_requires_complete_high_quality_context() {

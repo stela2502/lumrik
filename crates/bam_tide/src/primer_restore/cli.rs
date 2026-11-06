@@ -1,7 +1,7 @@
 use clap::Parser;
 use read_tag_table::ReadTagTableCli;
 use sc_primer::PrimerCli;
-use std::path::PathBuf;
+use lumrik_clap::{ReadableFile, OutputFile};
 
 #[derive(Debug, Clone, Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -38,7 +38,7 @@ pub struct Cli {
         value_name = "FASTQ[.GZ]",
         help = "Input normalized insert FASTQ. Only R1/read sequence is needed."
     )]
-    pub fastq: PathBuf,
+    pub fastq: ReadableFile,
 
     #[arg(
         long,
@@ -46,7 +46,7 @@ pub struct Cli {
         value_name = "FASTQ[.GZ]",
         help = "Output restored FASTQ with reconstructed primer prepended."
     )]
-    pub out: PathBuf,
+    pub out: OutputFile,
 
     #[command(flatten)]
     pub read_tags: ReadTagTableCli,

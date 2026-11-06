@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use lumrik_clap::{ReadableFile, ReadableDir, OutputDir};
 use sc_vdj::{DecodedNumericRecombinationId, DecodedRecombinationId, RecombinationId, VdjIndex};
 use std::fs;
 use std::io::{self, BufRead};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 
 #[derive(Debug, Parser)]
@@ -18,7 +19,7 @@ struct Cli {
     /// Optional VDJ index. Required only for resolving legacy v1/v2 IDs to
     /// reference segments or for directory migration.
     #[arg(long)]
-    index: Option<PathBuf>,
+    index: Option<ReadableFile>,
 
     /// Recombination IDs to decode. If omitted, IDs are read from stdin.
     #[arg(value_name = "CODE", num_args = 0..)]
@@ -41,13 +42,13 @@ enum Command {
     Migrate {
         /// VDJ index used by the original run.
         #[arg(long)]
-        index: PathBuf,
+        index: ReadableFile,
         /// Existing nelrune-vdj output directory. It is never modified.
         #[arg(long)]
-        input: PathBuf,
+        input: ReadableDir,
         /// New migrated output directory, e.g. vdj_v3.
         #[arg(long)]
-        output: PathBuf,
+        output: OutputDir,
     },
 }
 

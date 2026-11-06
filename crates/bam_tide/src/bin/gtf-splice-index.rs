@@ -43,7 +43,7 @@ enum Command {
 #[derive(Args, Debug)]
 struct ExonSkipArgs {
     /// Reference GTF/GFF containing the selected transcript
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
     annotation: PathBuf,
     /// Gene name whose transcripts may be modified (e.g. TP53).
     #[arg(long)]
@@ -55,7 +55,7 @@ struct ExonSkipArgs {
     #[arg(long = "variant-pos", alias = "acceptor-pos")]
     acceptor_pos: u32,
     /// Reference genome FASTA, matching the annotation assembly.
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long)]
     genome: PathBuf,
     /// Expected reference allele at --acceptor-pos.
     #[arg(long = "ref")]
@@ -67,14 +67,14 @@ struct ExonSkipArgs {
     #[arg(long = "splice-window", alias = "acceptor-window", default_value_t = 20)]
     acceptor_window: u32,
     /// Output binary splice index
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_output_file, long)]
     index: PathBuf,
     /// Optional augmented GTF for inspection
     #[arg(long)]
-    out_gtf: Option<PathBuf>,
+    out_gtf: Option<lumrik_clap::OutputFile>,
     /// Optional transcript modification report (TSV)
     #[arg(long)]
-    report: Option<PathBuf>,
+    report: Option<lumrik_clap::OutputFile>,
     #[arg(long, default_value_t = 1_000_000)]
     bin_width: u32,
 }
@@ -82,7 +82,7 @@ struct ExonSkipArgs {
 #[derive(Args, Debug)]
 struct StatsArgs {
     /// Serialized index file
-    #[arg(long, short)]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long, short)]
     index: PathBuf,
 }
 
@@ -92,21 +92,21 @@ struct TranscriptomeArgs {
     ///
     /// The annotation remains in genomic coordinates. This command only emits
     /// transcript sequences extracted from the genome FASTA.
-    #[arg(long, short = 'a')]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long, short = 'a')]
     index: PathBuf,
 
     /// Genome FASTA used as sequence source.
     ///
     /// Plain `.fa/.fasta` and gzip-compressed `.fa.gz/.fasta.gz` are supported
     /// if the underlying Genome loader supports them.
-    #[arg(long, short = 'g')]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long, short = 'g')]
     genome: PathBuf,
 
     /// Output transcriptome FASTA.
     ///
     /// If the path ends in `.gz`, gzip-compressed FASTA is written.
     #[arg(long, short = 'o')]
-    out: PathBuf,
+    out: lumrik_clap::OutputFile,
 
     /// Optional genomic region restriction, e.g. chr17:7668402-7687550.
     ///
@@ -130,7 +130,7 @@ struct QueryArgs {
     ///
     /// Use this for quick checks without first creating a `.gtf.dat` index.
     /// Mutually exclusive with `--index`.
-    #[arg(long, short = 'a', conflicts_with = "index", required_unless_present = "index")]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long, short = 'a', conflicts_with = "index", required_unless_present = "index")]
     annotation: Option<PathBuf>,
 
     /// Load a prebuilt binary splice index.
@@ -138,7 +138,7 @@ struct QueryArgs {
     /// This is faster than rebuilding from annotation and is the preferred
     /// mode inside pipelines.
     /// Mutually exclusive with `--annotation`.
-    #[arg(long, short = 'i', conflicts_with = "annotation", required_unless_present = "annotation")]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long, short = 'i', conflicts_with = "annotation", required_unless_present = "annotation")]
     index: Option<PathBuf>,
 
     /// Bin width used when building from `--annotation`.
@@ -177,7 +177,7 @@ struct QueryArgs {
 #[derive(Args, Debug)]
 struct BuildArgs {
     /// Input annotation file (.gtf/.gff/.gff3)
-    #[arg(long, short)]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long, short)]
     annotation: PathBuf,
 
     /// Bin width in base pairs
@@ -185,7 +185,7 @@ struct BuildArgs {
     bin_width: u32,
 
     /// Output serialized index file
-    #[arg(long, short)]
+    #[arg(value_parser = lumrik_clap::parse_output_file, long, short)]
     index: PathBuf,
 
     // -------------------------

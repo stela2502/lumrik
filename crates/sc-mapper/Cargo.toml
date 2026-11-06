@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+lumrik_clap = { path = "../lumrik_clap" }
 clap = { workspace = true }
 thiserror = "2"
 shell-words = "1"

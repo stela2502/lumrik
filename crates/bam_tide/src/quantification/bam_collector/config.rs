@@ -24,16 +24,16 @@ pub enum AlignmentSpace {
 #[derive(Debug, Clone, Args)]
 pub struct BamCollectorConfig {
     #[arg(long, help = "Splice index used for gene/transcript assignment.")]
-    pub index: PathBuf,
+    pub index: lumrik_clap::ReadableFile,
 
-    #[arg(
+    #[arg(value_parser = lumrik_clap::parse_readable_file, 
         long,
         help = "Optional reference genome FASTA used for genome refinement."
     )]
     pub genome: Option<PathBuf>,
 
     #[arg(long, help = "Optional VCF used for SNP quantification.")]
-    pub vcf: Option<PathBuf>,
+    pub vcf: Option<lumrik_clap::ReadableFile>,
 
     #[arg(
         long,
@@ -113,6 +113,10 @@ pub struct BamCollectorConfig {
     )]
     pub snp_min_anchor: u8,
 
+    /// Required aligned bases on each side of a SNP (0 disables flank checks).
+    #[arg(long, default_value_t = 5)]
+    pub snp_flank: u8,
+
     #[command(flatten)]
     pub read_tags: ReadTagTableCli,
 
@@ -143,5 +147,5 @@ pub struct BamCollectorConfig {
     pub grammar_type: GrammarSelection,
 
     #[arg(long, help = "Optional BAM output for a streamed mapper input.")]
-    pub bam_out: Option<PathBuf>,
+    pub bam_out: Option<lumrik_clap::OutputFile>,
 }

@@ -1,10 +1,10 @@
-use clap::Parser;
+use lumrik_clap::{Parser, ReadableFile};
 use flate2::read::MultiGzDecoder;
 use sc_primer::{BdCellVersion, RhapsodyWhitelist};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const LINKER1: &[u8; 4] = b"GTGA";
 const LINKER2: &[u8; 4] = b"GACA";
@@ -19,7 +19,7 @@ const LINKER2: &[u8; 4] = b"GACA";
 struct Cli {
     /// R1 FASTQ or FASTQ.GZ file.
     #[arg(long)]
-    r1: PathBuf,
+    r1: ReadableFile,
 
     /// Stop after this many reads. Zero means scan the complete file.
     #[arg(long, default_value_t = 0)]

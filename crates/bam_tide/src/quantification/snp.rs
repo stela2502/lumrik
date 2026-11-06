@@ -8,6 +8,7 @@ use snp_index::{AlignedRead, SnpIndex, VcfReadOptions};
 pub struct SnpSideChannel {
     pub index: SnpIndex,
     min_anchor: u8,
+    flank: u8,
 }
 
 impl SnpSideChannel {
@@ -16,6 +17,7 @@ impl SnpSideChannel {
         chr_names: Vec<String>,
         chr_lengths: Vec<u32>,
         min_anchor: u8,
+    flank: u8,
     ) -> Result<Self> {
         let path = path.as_ref();
         let opts = VcfReadOptions::default();
@@ -25,7 +27,7 @@ impl SnpSideChannel {
 
         eprintln!("{index}");
 
-        Ok(Self { index, min_anchor })
+        Ok(Self { index, min_anchor, flank })
     }
 
     pub fn add_hits(
@@ -45,7 +47,7 @@ impl SnpSideChannel {
         //panic!("We use the min SNP quality of {} here!\nSNP index info: {}", self.min_anchor, self.index );
         let (ref_ids, alt_ids, _other_ids) = self
             .index
-            .get_ref_alt_other_ids_for_read(read, self.min_anchor);
+            .get_ref_alt_other_ids_for_read_with_flank(read, self.min_anchor, self.flank);
 
         if ref_ids.is_empty() && alt_ids.is_empty() {
             report.report("no snp hit");

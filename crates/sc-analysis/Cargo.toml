@@ -7,6 +7,7 @@ authors.workspace = true
 description = "Small sparse single-cell analysis engine for Lumrik"
 
 [dependencies]
+lumrik_clap = { path = "../lumrik_clap" }
 clap = { workspace = true }
 anyhow = "1"
 csv = "1"

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use clap::Parser;
+use lumrik_clap::{Parser, ReadableFile};
 use gtf_splice_index::IdNameKeys;
 use gtf_splice_index::SpliceIndex;
 
@@ -13,7 +13,7 @@ use gtf_splice_index::SpliceIndex;
 struct Cli {
     /// Build index from GTF/GFF annotation
     #[arg(long, conflicts_with = "index", required_unless_present = "index")]
-    annotation: Option<std::path::PathBuf>,
+    annotation: Option<ReadableFile>,
 
     /// Load prebuilt binary splice index
     #[arg(
@@ -21,7 +21,7 @@ struct Cli {
         conflicts_with = "annotation",
         required_unless_present = "annotation"
     )]
-    index: Option<std::path::PathBuf>,
+    index: Option<ReadableFile>,
 
     /// Bin width used when building the index
     #[arg(long, default_value_t = 1_000_000)]

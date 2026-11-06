@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{BufRead, BufReader},
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -19,7 +19,7 @@ struct Cli {
 
     /// FASTQ/FASTQ.GZ whose sequence lines are mapped.
     #[arg(long)]
-    fastq: PathBuf,
+    fastq: lumrik_clap::ReadableFile,
 
     /// Maximum number of reads to keep in memory and benchmark.
     #[arg(long, default_value_t = 1_000_000)]

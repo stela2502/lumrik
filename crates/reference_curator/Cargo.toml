@@ -9,5 +9,6 @@ description = "Persistent evidence-backed reference curation for Lumrik"
 [dependencies]
 anyhow = "1"
 bincode = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
+lumrik_clap = { path = "../lumrik_clap" }
 serde = { version = "1", features = ["derive"] }

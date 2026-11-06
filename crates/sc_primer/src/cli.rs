@@ -21,7 +21,7 @@ pub struct PrimerCli {
     ///
     /// For TENX_CELL this replaces the built-in chemistry whitelist. For a
     /// custom grammar, exactly one CELL:N operation is required.
-    #[arg(long, value_name = "FILE")]
+    #[arg(value_parser = lumrik_clap::parse_readable_file, long, value_name = "FILE")]
     pub whitelist: Option<PathBuf>,
 
     /// Maximum barcode mismatches corrected by --whitelist / whitelist-backed chemistries.

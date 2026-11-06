@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use bam_tide::{AdditionalFeatureSource, FeatureTagCounts};
@@ -15,7 +14,7 @@ use clap::Parser;
 struct Cli {
     /// Legacy feature_observations.bin produced by an older prepare-fastqs run.
     #[arg(long)]
-    input: PathBuf,
+    input: lumrik_clap::ReadableFile,
 
     /// Feature definition(s) used by that original prepare-fastqs run.
     /// Built-ins are bd_sample_mouse and bd_sample_human; FASTA files are also accepted.
@@ -29,7 +28,7 @@ struct Cli {
 
     /// New self-contained feature observation file. Must differ from --input.
     #[arg(long, short)]
-    out: PathBuf,
+    out: lumrik_clap::OutputFile,
 }
 
 fn main() -> Result<()> {

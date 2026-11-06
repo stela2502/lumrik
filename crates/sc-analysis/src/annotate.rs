@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
 use hdf5::{File, types::VarLenUnicode};
-use std::{collections::{BTreeMap, BTreeSet}, fs, path::{Path, PathBuf}, process::Command, str::FromStr};
+use std::{collections::{BTreeMap, BTreeSet}, fs, path::Path, process::Command, str::FromStr};
 
 const SUMMARIES: [&str; 5] = [
     "marker_expression_stats.tsv", "marker_summary.tsv", "marker_summary_general.tsv",
@@ -51,10 +51,10 @@ all other TSV columns into `obs`. Use --columns to select a subset.
 pub struct AnnotateCli {
     /// Existing H5AD file to update in place.
     #[arg(long)]
-    data: PathBuf,
+    data: lumrik_clap::ReadableFile,
     /// Tab-separated annotation table (one row per matching key).
     #[arg(long)]
-    annotations: PathBuf,
+    annotations: lumrik_clap::ReadableFile,
     /// Existing obs column used to match rows (or _index for cell IDs).
     #[arg(long, default_value = "cluster")]
     match_by: String,

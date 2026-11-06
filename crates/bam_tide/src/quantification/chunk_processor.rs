@@ -1,5 +1,6 @@
 //chunk_processor.rs
 use anyhow::Result;
+use std::time::Instant;
 use gtf_splice_index::{MatchClass, MatchOptions, QuantClass, SpliceIndex};
 use rayon::prelude::*;
 use run_stats::RunStats;
@@ -11,7 +12,6 @@ use crate::quantification::snp::SnpSideChannel;
 use scdata::{QuantData, SnpUmiEvidence};
 use crate::quantification::new_transcript_data::NewTranscriptData;
 use gtf_splice_index::{RefBlock, Transcript};
-use gtf_splice_index::transcript_naming::{gene_exon_regions, resolve_gene_exon};
 
 pub struct ChunkProcessor<'a> {
     idx: &'a SpliceIndex,
@@ -80,10 +80,15 @@ impl<'a> ChunkProcessor<'a> {
         let mut report = RunStats::new(None, 0.0, jobs.len());
 
         for job in jobs {
+            report.report("bam_tide/profile/jobs");
             let novel_id = self.add_hit(job, &mut out, &mut novel, &mut report);
+            let started = Instant::now();
             let evidence = self.add_snp_hits(job, &mut out, &mut report);
+            report.add_timer_duration("bam_tide/profile/snp", started.elapsed());
             if let Some(id) = novel_id {
+                let started = Instant::now();
                 novel.add_molecule(id, job.cell, job.umi, evidence);
+                report.add_timer_duration("bam_tide/profile/novel_molecule", started.elapsed());
             }
         }
 
@@ -91,13 +96,16 @@ impl<'a> ChunkProcessor<'a> {
     }
 
     fn add_hit(&self, job: &Job, out: &mut QuantData, novel: &mut NewTranscriptData, report: &mut RunStats) -> Option<usize> {
+        let started = Instant::now();
         let hits = self.idx.match_features(&job.spliced, self.match_opts);
+        report.add_timer_duration("bam_tide/profile/match_features", started.elapsed());
 
         if hits.is_empty() {
             report.report("no hit");
             return None;
         }
 
+        report.report("bam_tide/profile/matched");
         let hit = &hits[0];
         report.report(hit.hit.class.to_string());
 
@@ -105,8 +113,13 @@ impl<'a> ChunkProcessor<'a> {
         let feature_umi = GeneUmiHash(hit.feature_id, job.umi);
         // Only materialize a model when the alignment proves a new junction.
         // An incomplete read with a subset of reference junctions is NOT novel.
-        let novel_id = if matches!(hit.hit.class, MatchClass::JunctionMismatch | MatchClass::Intronic | MatchClass::Incompatible) {
-            self.discover_novel(job, hit.transcript, novel, report)
+        let novel_id = if matches!(hit.hit.class, MatchClass::JunctionMismatch) {
+            report.report("bam_tide/profile/novel_attempts");
+            let started = Instant::now();
+            let result = self.discover_novel(job, hit.transcript, novel, report);
+            report.add_timer_duration("bam_tide/profile/novel_discovery", started.elapsed());
+            if result.is_some() { report.report("bam_tide/profile/novel_insertions"); }
+            result
         } else { None };
         if let Some(class) = hit.hit.class.quant_class() {
             let split_name = match class {
@@ -128,8 +141,8 @@ impl<'a> ChunkProcessor<'a> {
         novel_id
     }
 
-    /// Discover exon-skipping isoforms from observed *genomic* junctions.
-    /// Do not infer complete exon boundaries from truncated ONT read blocks.
+    /// Represent one new splice junction as one event, regardless of how many
+    /// reference exons it bypasses. Only build a transcript on the first sighting.
     fn discover_novel(
         &self,
         job: &Job,
@@ -138,52 +151,59 @@ impl<'a> ChunkProcessor<'a> {
         report: &mut RunStats,
     ) -> Option<usize> {
         let exons = reference.exons();
-        if exons.len() < 3 { return None; }
-        let observed = RefBlock::junctions_from_blocks(
-            &job.spliced.blocks, self.match_opts.allowed_intronic_gap_size,
-        );
-        if observed.is_empty() { return None; }
+        if exons.is_empty() { return None; }
+
         let known = reference.junctions();
-        let mut skip = Vec::new();
-        for (donor, acceptor) in observed {
-            if known.contains(&(donor, acceptor)) { continue; }
-            let left = exons.iter().position(|e| e.end == donor);
-            let right = exons.iter().position(|e| e.start == acceptor);
-            if let (Some(left), Some(right)) = (left, right) {
-                if right > left + 1 {
-                    skip.push((left, right));
-                }
+        let mut event = None;
+        // Avoid allocating a Vec of observed junctions on this hot path.
+        for pair in job.spliced.blocks.windows(2) {
+            let donor = pair[0].end;
+            let acceptor = pair[1].start;
+            if acceptor <= donor ||
+                acceptor - donor <= self.match_opts.allowed_intronic_gap_size ||
+                known.contains(&(donor, acceptor)) {
+                continue;
+            }
+            if event.replace((donor, acceptor)).is_some() {
+                return None; // Multiple novel junctions: not a single-event model.
             }
         }
-        if skip.len() != 1 { return None; }
-        let (left, right) = skip[0];
-        let mut revised = Vec::with_capacity(exons.len() - (right-left-1));
-        revised.extend_from_slice(&exons[..=left]);
-        revised.extend_from_slice(&exons[right..]);
-        let tx_name = reference.primary_name()?;
-        let gene_name = self.idx.genes.get(reference.gene_id)?.primary_name()?;
+        let (donor, acceptor) = event?;
         let chr_name = self.idx.chr_names.get(reference.chr_id)?;
-        let (first, last) = if reference.strand == gtf_splice_index::Strand::Minus {
-            (exons.len() - right + 1, exons.len() - left - 1)
-        } else { (left + 2, right) };
-        // Gene-wide exon IDs are computed from every annotated transcript of
-        // this gene, not from the selected reference isoform alone.
-        let gene_transcripts: Vec<&Transcript> = self.idx.transcripts.iter()
-            .filter(|tx| tx.gene_id == reference.gene_id && tx.chr_id == reference.chr_id
-                && tx.strand == reference.strand)
-            .collect();
-        let regions = gene_exon_regions(&gene_transcripts).ok()?;
-        let affected: Vec<String> = (first..=last).map(|tex| {
-            let event = resolve_gene_exon(reference, tex, &regions).ok()?;
-            Some(format!("tex{tex}_gex{}_{}_{}-{}",
-                event.gene_exon, chr_name, event.genomic_start, event.genomic_end))
-        }).collect::<Option<Vec<_>>>()?;
-        let name = format!("{tx_name}_mod_{}_del", affected.join("__"));
+        let gene_name = self.idx.genes.get(reference.gene_id)?.primary_name()?;
+        // The junction is an event, not an isoform ID. Reuse either annotated
+        // effect variant before doing any exon reconstruction.
+        let base_name = format!("{gene_name}*{chr_name}:{donor}-{acceptor}*del");
+        let shifted_name = format!("{base_name}_frameshift");
+        if let Some(id) = novel.gtf_splice_index.novel_transcript_id(&base_name)
+            .or_else(|| novel.gtf_splice_index.novel_transcript_id(&shifted_name)) {
+            return Some(id);
+        }
+        let frameshift = reference.coding_bases_removed_by_junction(donor, acceptor)
+            .is_some_and(|removed| removed % 3 != 0);
+        let name = if frameshift { shifted_name } else { base_name };
+
+        // A splice boundary may lie inside an annotated exon. Reconstruct only
+        // the first model for this event; subsequent reads reuse its ID.
+        let left = exons.iter().position(|e| e.start < donor && donor <= e.end)?;
+        let right = exons.iter().position(|e| e.start <= acceptor && acceptor < e.end)?;
+        if right < left { return None; }
+        let mut revised = Vec::with_capacity(exons.len() + 1);
+        revised.extend_from_slice(&exons[..left]);
+        if exons[left].start < donor {
+            revised.push(RefBlock::new(exons[left].start, donor));
+        }
+        if acceptor < exons[right].end {
+            revised.push(RefBlock::new(acceptor, exons[right].end));
+        }
+        revised.extend_from_slice(&exons[right + 1..]);
+        if revised.is_empty() || revised == exons { return None; }
+
         match novel.gtf_splice_index.insert_novel_transcript(
             gene_name, &name, chr_name, reference.strand, &revised,
         ) {
-            Ok(id) => { report.report("novel exon skip"); Some(id) }
-            Err(err) => { eprintln!("[bam_tide] WARNING: novel transcript insertion: {err}"); None }
+            Ok(id) => { report.report("novel splice event"); Some(id) }
+            Err(err) => { eprintln!("[bam_tide] WARNING: novel splice event insertion: {err}"); None }
         }
     }
 
@@ -240,12 +260,41 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         let mut novel = NewTranscriptData::new(idx.bin_width);
         let mut report = RunStats::new(None, 0.0, 2);
         let id = processor.discover_novel(&job, &idx.transcripts[0], &mut novel, &mut report).unwrap();
-        assert_eq!(novel.gtf_splice_index.transcripts[id].primary_name(), Some("T1_mod_tex2_gex2_chr14_201-250_del"));
+        assert_eq!(novel.gtf_splice_index.transcripts[id].primary_name(), Some("Gene1*chr14:150-300*del"));
         novel.add_molecule(id, 42, 99, SnpUmiEvidence::default());
         novel.add_molecule(id, 42, 99, SnpUmiEvidence::default());
         let mut observed = 0;
         novel.scdata.for_each_umi(|_, _, _| observed += 1);
         assert_eq!(observed, 1);
+    }
+
+    #[test]
+    fn novel_name_marks_coding_frameshift_but_not_intron_or_noncoding_loss() {
+        for (cds, expected) in [
+            // Exon 2 is 50 coding bases, although the genomic gap is 150 bp.
+            (true, "Gene1*chr14:150-300*del_frameshift"),
+            (false, "Gene1*chr14:150-300*del"),
+        ] {
+            let mut gtf = concat!(
+                "chr14\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transcript_id \"T1\";\n",
+                "chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transcript_id \"T1\";\n",
+                "chr14\tsrc\texon\t301\t350\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transcript_id \"T1\";\n",
+            ).to_owned();
+            if cds {
+                gtf.push_str("chr14\tsrc\tCDS\t101\t350\t.\t+\t0\tgene_id \"G1\"; gene_name \"Gene1\"; transcript_id \"T1\";\n");
+            }
+            let idx = SpliceIndex::new(100).from_reader(Cursor::new(gtf.as_bytes()), IdNameKeys::default()).unwrap();
+            let mut read = SplicedRead::new(idx.chr_id("chr14").unwrap(), Strand::Plus,
+                vec![RefBlock::new(110, 150), RefBlock::new(300, 340)]);
+            read.finalize();
+            let job = Job { cell: 42, umi: 99, spliced: read, aligned: None };
+            let processor = ChunkProcessor::new(&idx, None, MatchOptions::default(), ProcessorOptions::default());
+            let mut novel = NewTranscriptData::new(idx.bin_width);
+            let mut report = RunStats::new(None, 0.0, 2);
+            let id = processor.discover_novel(&job, &idx.transcripts[0], &mut novel, &mut report).unwrap();
+            assert_eq!(novel.gtf_splice_index.transcripts[id].primary_name(), Some(expected));
+            assert_eq!(processor.discover_novel(&job, &idx.transcripts[0], &mut novel, &mut report), Some(id));
+        }
     }
 
     #[test]

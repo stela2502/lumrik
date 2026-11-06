@@ -21,9 +21,9 @@ use scdata::Scdata;
 )]
 struct Cli {
     #[arg(long)]
-    bam: PathBuf,
+    bam: lumrik_clap::ReadableFile,
     #[arg(long = "te-index")]
-    te_index: PathBuf,
+    te_index: lumrik_clap::ReadableFile,
     #[arg(long = "mapper-index")]
     mapper_index: PathBuf,
     #[arg(long = "mapper-bin", default_value = "STAR")]
@@ -47,7 +47,7 @@ struct Cli {
     #[arg(long, default_value_t = 16)]
     cell_barcode_len: usize,
     #[arg(long)]
-    out: PathBuf,
+    out: lumrik_clap::OutputFile,
 }
 
 fn main() -> Result<()> {

@@ -1,18 +1,18 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use lumrik_clap::{Parser, ReadableFile};
 use flate2::read::MultiGzDecoder;
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::{BufReader, Read},
-    path::PathBuf,
+    path::Path,
 };
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Cli {
     /// Input TSV, optionally .gz
-    input: PathBuf,
+    input: ReadableFile,
 
     /// Minimum number of observations for one raw_cb + raw_umi pair
     #[arg(long, default_value_t = 2)]
@@ -256,7 +256,7 @@ fn summarize(mut values: Vec<u64>) -> Summary {
     }
 }
 
-fn open_maybe_gz(path: &PathBuf) -> Result<Box<dyn Read>> {
+fn open_maybe_gz(path: &Path) -> Result<Box<dyn Read>> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
 
     let reader = BufReader::new(file);

@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
 use fast_tag_mapper::FastMapperCli;
-use std::path::PathBuf;
+use lumrik_clap::{ReadableFile, OutputFile};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PrimerRead {
@@ -92,14 +92,14 @@ pub struct Cli {
         value_name = "FASTQ[.GZ]",
         help = "Input R1 FASTQ. Usually barcode/UMI for Illumina single-cell libraries."
     )]
-    pub r1: PathBuf,
+    pub r1: ReadableFile,
 
     #[arg(
         long,
         value_name = "FASTQ[.GZ]",
         help = "Input R2 FASTQ. Usually biological insert/read-to-map."
     )]
-    pub r2: PathBuf,
+    pub r2: ReadableFile,
 
     #[arg(
         long,
@@ -107,7 +107,7 @@ pub struct Cli {
         value_name = "FASTQ[.GZ]",
         help = "Output normalized FASTQ for mapping. Usually synchronized R2."
     )]
-    pub out: PathBuf,
+    pub out: OutputFile,
 
     #[arg(
         long,
@@ -115,7 +115,7 @@ pub struct Cli {
         value_name = "TSV",
         help = "Output molecule metadata TSV. Contains read_id, original_read_id, orientation, raw_cb, quality_cb, raw_umi, quality_umi, and status."
     )]
-    pub read_tags: PathBuf,
+    pub read_tags: OutputFile,
 
     /// Maximum number of raw reads/pairs to process per input.
     #[arg(long)]

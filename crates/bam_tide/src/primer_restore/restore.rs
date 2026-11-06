@@ -41,9 +41,10 @@ impl PrimerRestore {
     }
 
     pub fn from_cli(cli: Cli) -> Result<Self> {
+        cli.out.prepare()?;
         Ok(Self::new(PrimerRestoreConfig {
-            fastq: cli.fastq,
-            out: cli.out,
+            fastq: cli.fastq.into_path_buf(),
+            out: cli.out.into_path_buf(),
             read_tags: cli.read_tags.load()?,
             primer: cli.primer.detector().map_err(anyhow::Error::msg)?,
             gzip: !cli.no_gzip,

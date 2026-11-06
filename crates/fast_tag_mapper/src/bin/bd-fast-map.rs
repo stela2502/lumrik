@@ -1,7 +1,6 @@
 use std::{
     fs::File,
     io::{self, BufRead, BufReader},
-    path::PathBuf,
 };
 
 use clap::Parser;
@@ -16,7 +15,7 @@ struct Cli {
 
     /// Input file with one sequence per line. Reads stdin if omitted.
     #[arg(short, long)]
-    input: Option<PathBuf>,
+    input: Option<lumrik_clap::ReadableFile>,
 }
 
 fn main() {

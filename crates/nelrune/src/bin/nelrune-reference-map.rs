@@ -19,7 +19,7 @@ struct Args {
     #[arg(long)]
     reference_id: String,
     #[arg(long)]
-    bam_out: Option<PathBuf>,
+    bam_out: Option<lumrik_clap::OutputFile>,
     #[command(flatten)]
     mapper: StreamingMapperCli,
 }
@@ -42,7 +42,8 @@ fn main() -> Result<()> {
 
     let bam_path = args
         .bam_out
-        .clone()
+        .as_ref()
+        .map(|path| path.to_path_buf())
         .unwrap_or_else(|| args.store.with_extension("mapping.bam"));
     if let Some(parent) = bam_path.parent() {
         fs::create_dir_all(parent)?;

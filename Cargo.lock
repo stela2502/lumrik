@@ -244,6 +244,7 @@ dependencies = [
  "gtf_splice_index",
  "hts-sys",
  "int-to-dna",
+ "lumrik_clap",
  "ommverse",
  "onehot_dna",
  "rayon",
@@ -572,6 +573,7 @@ dependencies = [
  "linfa",
  "linfa-reduction",
  "lumrik-status",
+ "lumrik_clap",
  "ndarray 0.15.6",
  "ommverse",
  "onehot_dna",
@@ -1010,6 +1012,7 @@ dependencies = [
  "clap",
  "flate2",
  "int-to-dna",
+ "lumrik_clap",
  "onehot_dna",
  "run_stats",
  "scdata",
@@ -1356,6 +1359,7 @@ dependencies = [
  "flate2",
  "int-to-dna",
  "int-to-prot",
+ "lumrik_clap",
  "scdata",
  "serde",
  "zstd",
@@ -1998,6 +2002,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumrik_clap"
+version = "0.9.3"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "lzma-sys"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2227,6 +2238,7 @@ dependencies = [
  "gtf_splice_index",
  "int-to-dna",
  "lumrik-status",
+ "lumrik_clap",
  "ommverse",
  "rayon",
  "reference_curator",
@@ -2401,6 +2413,7 @@ dependencies = [
  "int-to-dna",
  "int-to-prot",
  "lumrik-status",
+ "lumrik_clap",
  "rayon",
  "rust-htslib",
  "serde",
@@ -2931,6 +2944,7 @@ dependencies = [
  "clap",
  "csv",
  "flate2",
+ "lumrik_clap",
  "run_stats",
  "sc_primer",
  "serde",
@@ -2958,6 +2972,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "clap",
+ "lumrik_clap",
  "serde",
 ]
 
@@ -3163,6 +3178,7 @@ dependencies = [
  "leiden-rs",
  "linfa",
  "linfa-reduction",
+ "lumrik_clap",
  "manifolds-rs",
  "ndarray 0.15.6",
  "plotters",
@@ -3179,6 +3195,7 @@ dependencies = [
  "anyhow",
  "clap",
  "int-to-dna",
+ "lumrik_clap",
  "plotters",
  "rayon",
  "run_stats",
@@ -3195,6 +3212,7 @@ dependencies = [
  "bam_tide",
  "clap",
  "hts-sys",
+ "lumrik_clap",
  "nix",
  "rust-htslib",
  "shell-words",
@@ -3216,6 +3234,7 @@ dependencies = [
  "flate2",
  "gtf_splice_index",
  "int-to-dna",
+ "lumrik_clap",
  "read-tag-table",
  "run_stats",
  "rust-htslib",
@@ -3234,6 +3253,7 @@ dependencies = [
  "gtf_splice_index",
  "int-to-dna",
  "lumrik-status",
+ "lumrik_clap",
  "onehot_dna",
  "rayon",
  "run_stats",
@@ -3265,6 +3285,7 @@ dependencies = [
  "fast_tag_mapper",
  "flate2",
  "int-to-dna",
+ "lumrik_clap",
  "onehot_dna",
  "predicates",
  "pretty_assertions",
@@ -3808,6 +3829,7 @@ dependencies = [
  "flate2",
  "hdf5",
  "hmm",
+ "lumrik_clap",
  "ndarray 0.15.6",
  "ommverse",
  "plotters",

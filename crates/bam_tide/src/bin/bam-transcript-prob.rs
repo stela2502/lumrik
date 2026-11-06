@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use bam_tide::core::ref_block::record_to_blocks;
 use clap::Parser;
+use lumrik_clap::ReadableFile;
 use gtf_splice_index::{MatchClass, MatchOptions, SpliceIndex, SplicedRead, Strand};
 use ommverse::{
     Ommverse,
@@ -22,9 +23,9 @@ use std::path::{Path, PathBuf};
 )]
 struct Cli {
     #[arg(long, required = true)]
-    bam: Vec<PathBuf>,
+    bam: Vec<ReadableFile>,
     #[arg(long)]
-    index: PathBuf,
+    index: ReadableFile,
     #[arg(long)]
     gene: String,
     #[arg(long, default_value = "transcript_probability.tsv")]
@@ -71,7 +72,7 @@ struct Cli {
     /// report mode, the genomic transcript-structure SVG overlays the already
     /// genome-projected InterPro feature models stored in Ommverse.
     #[arg(long)]
-    ommverse: Option<PathBuf>,
+    ommverse: Option<ReadableFile>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]

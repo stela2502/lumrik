@@ -1,10 +1,9 @@
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use lumrik_clap::{Parser, ValueEnum, ReadableFile, OutputFile};
 use flate2::read::MultiGzDecoder;
 use sc_primer::{BdCellVersion, RhapsodyWhitelist};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Chemistry {
@@ -30,9 +29,9 @@ impl Chemistry {
 #[command(about = "Convert a nucleotide barcode column in a TSV to numeric BD/Rustody cell IDs")]
 struct Args {
     #[arg(long)]
-    input: PathBuf,
+    input: ReadableFile,
     #[arg(long)]
-    output: PathBuf,
+    output: OutputFile,
     #[arg(long, value_enum, default_value_t = Chemistry::BdV2_384)]
     chemistry: Chemistry,
     #[arg(long, default_value = "cell")]
@@ -44,8 +43,27 @@ struct Args {
     overwrite: bool,
 }
 
-fn convert<R: BufRead, W: Write>(mut reader: R, mut writer: W, args: &Args) -> Result<()> {
-    let whitelist = RhapsodyWhitelist::builtin(args.chemistry.version());
+#[derive(Debug)]
+struct ConvertOptions {
+    chemistry: Chemistry,
+    column: String,
+    output_column: String,
+    overwrite: bool,
+}
+
+impl From<&Args> for ConvertOptions {
+    fn from(args: &Args) -> Self {
+        Self {
+            chemistry: args.chemistry,
+            column: args.column.clone(),
+            output_column: args.output_column.clone(),
+            overwrite: args.overwrite,
+        }
+    }
+}
+
+fn convert<R: BufRead, W: Write>(mut reader: R, mut writer: W, options: &ConvertOptions) -> Result<()> {
+    let whitelist = RhapsodyWhitelist::builtin(options.chemistry.version());
     let mut line = String::new();
     if reader.read_line(&mut line)? == 0 {
         bail!("empty input TSV");
@@ -60,15 +78,15 @@ fn convert<R: BufRead, W: Write>(mut reader: R, mut writer: W, args: &Args) -> R
     let columns = &header;
     let source = columns
         .iter()
-        .position(|c| *c == args.column)
-        .with_context(|| format!("missing barcode column {:?}", args.column))?;
-    let target = columns.iter().position(|c| *c == args.output_column);
+        .position(|c| *c == options.column)
+        .with_context(|| format!("missing barcode column {:?}", options.column))?;
+    let target = columns.iter().position(|c| *c == options.output_column);
     writeln!(
         writer,
         "{}{}",
         header.join("\t"),
         if target.is_none() {
-            format!("\t{}", args.output_column)
+            format!("\t{}", options.output_column)
         } else {
             String::new()
         }
@@ -101,7 +119,7 @@ fn convert<R: BufRead, W: Write>(mut reader: R, mut writer: W, args: &Args) -> R
         if has_existing && calculated.as_deref() != Some(existing) {
             conflicts += 1;
         }
-        let value = if has_existing && !args.overwrite {
+        let value = if has_existing && !options.overwrite {
             preserved += 1;
             existing.to_owned()
         } else {
@@ -129,9 +147,10 @@ fn convert<R: BufRead, W: Write>(mut reader: R, mut writer: W, args: &Args) -> R
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if args.input == args.output {
+    if args.input.as_path() == args.output.as_path() {
         bail!("input and output paths must differ");
     }
+    args.output.prepare().with_context(|| format!("preparing --output {}", args.output.display()))?;
     let input =
         File::open(&args.input).with_context(|| format!("opening {}", args.input.display()))?;
     let reader: Box<dyn Read> = if args.input.extension().is_some_and(|e| e == "gz") {
@@ -141,7 +160,8 @@ fn main() -> Result<()> {
     };
     let output = File::create(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
-    convert(BufReader::new(reader), BufWriter::new(output), &args)
+    let options = ConvertOptions::from(&args);
+    convert(BufReader::new(reader), BufWriter::new(output), &options)
 }
 
 #[cfg(test)]
@@ -152,16 +172,14 @@ mod tests {
         let wl = RhapsodyWhitelist::builtin(BdCellVersion::V2_384);
         let barcode = String::from_utf8(wl.cell_id_to_seq(1234).unwrap()).unwrap();
         let input = format!("cell\trustody_cell_id\tchain\n{barcode}\tNA\tIGH\nBAD\t\tIGK\n");
-        let args = Args {
-            input: PathBuf::new(),
-            output: PathBuf::new(),
+        let options = ConvertOptions {
             chemistry: Chemistry::BdV2_384,
             column: "cell".into(),
             output_column: "rustody_cell_id".into(),
             overwrite: false,
         };
         let mut out = Vec::new();
-        convert(input.as_bytes(), &mut out, &args).unwrap();
+        convert(input.as_bytes(), &mut out, &options).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(&format!("{barcode}\t1234\tIGH")));
         assert!(text.contains("BAD\t\tIGK"));

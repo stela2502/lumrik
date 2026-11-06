@@ -1,9 +1,10 @@
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use lumrik_clap::{ReadableFile, OutputFile};
 use flate2::Compression;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
@@ -26,11 +27,11 @@ enum Command {
     UcscRmskToGtf {
         /// UCSC rmsk.txt or rmsk.txt.gz file.
         #[arg(long)]
-        input: PathBuf,
+        input: ReadableFile,
 
         /// Output .gtf or .gtf.gz file.
         #[arg(long)]
-        output: PathBuf,
+        output: OutputFile,
     },
 }
 
@@ -39,6 +40,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::UcscRmskToGtf { input, output } => {
+            output.prepare()?;
             let reader = open_reader(&input)?;
             let writer = open_writer(&output)?;
             let summary = convert_ucsc_rmsk_to_gtf(reader, writer)?;

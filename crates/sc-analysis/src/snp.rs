@@ -13,17 +13,17 @@ use std::{
 #[derive(Debug, Clone, Args)]
 pub struct SnpCli {
     /// Matrix Market folder containing reference allele counts.
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_readable_dir, long)]
     pub r#ref: PathBuf,
     /// Matrix Market folder containing alternate allele counts.
     #[arg(long)]
-    pub alt: PathBuf,
+    pub alt: lumrik_clap::ReadableDir,
     /// Optional GEX H5AD to annotate; never overwritten.
     #[arg(long)]
-    pub data: Option<PathBuf>,
+    pub data: Option<lumrik_clap::ReadableFile>,
     /// Optional text/TSV list of variant IDs to analyze (first column).
     #[arg(long)]
-    pub analyzed_snps: Option<PathBuf>,
+    pub analyzed_snps: Option<lumrik_clap::ReadableFile>,
     /// Minimum REF counts to call an individual SNP WT (when ALT=0).
     #[arg(long, default_value_t = 4)]
     pub min_ref_for_wt: u64,
@@ -31,7 +31,7 @@ pub struct SnpCli {
     #[arg(long, default_value_t = 2)]
     pub min_wt_snps: usize,
     #[arg(long, default_value = "snp_analysis")]
-    pub out: PathBuf,
+    pub out: lumrik_clap::OutputDir,
 }
 
 #[derive(Default, Clone, Copy)]

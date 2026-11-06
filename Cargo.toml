@@ -13,6 +13,7 @@ members = [
     "crates/sc_anndata",
     "crates/run_stats",
     "crates/lumrik-status",
+    "crates/lumrik_clap",
     "crates/read-tag-table",
     "crates/int_to_dna",
     "crates/int_to_prot",

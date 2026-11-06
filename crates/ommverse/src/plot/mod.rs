@@ -11,14 +11,31 @@ pub use genes_transcripts::{
 
 use std::path::{Path, PathBuf};
 
-/// Resolve a multi-gene plot output target. Existing directories and paths
-/// ending in a separator produce <gene>.svg inside that directory; every
-/// other path is treated as a filename prefix.
+/// Resolve a multi-gene plot output prefix deterministically.
+///
+/// Unlike the former implementation, the meaning never depends on whether
+/// the path happens to exist as a directory.
 pub fn gene_plot_output_path(out: &Path, gene: &str) -> PathBuf {
-    let text = out.to_string_lossy();
-    if out.is_dir() || text.ends_with(std::path::MAIN_SEPARATOR) || text.ends_with('/') {
-        out.join(format!("{gene}.svg"))
-    } else {
-        PathBuf::from(format!("{text}{gene}.svg"))
+    let mut path = out.as_os_str().to_os_string();
+    path.push(gene);
+    path.push(".svg");
+    PathBuf::from(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gene_plot_output_path;
+    use std::path::Path;
+
+    #[test]
+    fn genome_plot_output_is_always_a_prefix() {
+        assert_eq!(
+            gene_plot_output_path(Path::new("results/TP53_"), "TP53"),
+            Path::new("results/TP53_TP53.svg")
+        );
+        assert_eq!(
+            gene_plot_output_path(Path::new("results/GENE_"), "TP53"),
+            Path::new("results/GENE_TP53.svg")
+        );
     }
 }

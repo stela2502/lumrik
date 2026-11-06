@@ -1,5 +1,4 @@
 use clap::Args;
-use std::path::PathBuf;
 
 use crate::{BuiltinTagSet, FastTagMapper};
 
@@ -11,7 +10,7 @@ pub struct FastMapperCli {
 
     /// Additional FASTA file containing feature tags
     #[arg(long)]
-    pub tags: Option<PathBuf>,
+    pub tags: Option<lumrik_clap::ReadableFile>,
 
     /// Minimum supporting exact 16-bp seed hits
     #[arg(long, default_value_t = 20)]

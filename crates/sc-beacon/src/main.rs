@@ -1,8 +1,7 @@
-use std::fs;
-use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use lumrik_clap::{ReadableDir, OutputDir};
 use scdata::{MexFeatureIndex, load_mtx_feature_matrix, read_mtx_cell_ids};
 
 mod cli;
@@ -21,15 +20,15 @@ use sc_beacon::run_from_scdata;
 struct Cli {
     /// 10x raw_feature_bc_matrix directory.
     #[arg(long)]
-    raw: PathBuf,
+    raw: ReadableDir,
 
     /// 10x filtered_feature_bc_matrix directory.
     #[arg(long)]
-    filtered: PathBuf,
+    filtered: ReadableDir,
 
     /// Output directory.
     #[arg(long)]
-    out: PathBuf,
+    out: OutputDir,
 
     /// 10x feature type containing the guide counts.
     #[arg(long, default_value = "CRISPR Guide Capture")]
@@ -46,7 +45,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
+    cli.out.prepare().with_context(|| format!("creating {}", cli.out.display()))?;
 
     if let Some(threads) = cli.threads {
         rayon::ThreadPoolBuilder::new()

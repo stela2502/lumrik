@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use bam_tide::FeatureTagCounts;
@@ -22,9 +22,9 @@ use scdata::QuantData;
 #[command(about = "Quantify a STAR BAM and integrate FASTQ-derived Nelrune observations")]
 pub struct QuantCli {
     #[arg(long, num_args = 1..)]
-    bam: Vec<PathBuf>,
+    bam: Vec<lumrik_clap::ReadableFile>,
     #[arg(long, help = "Directory produced by nelrune prepare-fastqs")]
-    prepare: PathBuf,
+    prepare: lumrik_clap::ReadableDir,
     #[command(flatten)]
     primer: PrimerCli,
     #[command(flatten)]
@@ -43,7 +43,7 @@ pub struct QuantCli {
     #[arg(long, default_value_t = false)]
     no_health_server: bool,
     #[arg(long, short)]
-    outpath: PathBuf,
+    outpath: lumrik_clap::OutputDir,
 }
 
 pub fn run() -> Result<()> {
@@ -88,7 +88,8 @@ pub fn run() -> Result<()> {
         BamCollector::from_cli(args.bam_collector.clone())?.with_grammar(primer.grammar().clone());
 
     progress.stage("quantifying BAM");
-    let result = collector.run_paths_with_progress(&args.bam, |data, report| {
+    let bam_paths: Vec<_> = args.bam.iter().map(|bam| bam.to_path_buf()).collect();
+    let result = collector.run_paths_with_progress(&bam_paths, |data, report| {
         progress.update_quantification_live(data, report);
     })?;
     progress.update_quantification_live(&result.data, &result.report);

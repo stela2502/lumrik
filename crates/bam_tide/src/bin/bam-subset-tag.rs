@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use lumrik_clap::{OutputPrefix, Parser, ReadableFile};
 use rust_htslib::bam;
 //use rust_htslib::bam::record::{Aux, Record};
 use rust_htslib::bam::{Read, Writer};
@@ -7,7 +7,7 @@ use rust_htslib::bam::{Read, Writer};
 //use std::collections::BTreeMap;
 use std::fs::{self};
 //use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use bam_tide::multi_subset_bam::Subsetter;
 
@@ -22,7 +22,7 @@ use run_stats::RunStats;
 struct Cli {
     /// Input BAM file
     #[arg(short, long)]
-    bam: PathBuf,
+    bam: ReadableFile,
 
     /// BAM tag to match (must be two characters, e.g. CB, CR, UB)
     #[arg(short, long, default_value = "CR")]
@@ -30,11 +30,11 @@ struct Cli {
 
     /// One or more files containing tag values (one per line)
     #[arg(short = 'l', long = "list", required = true)]
-    lists: Vec<PathBuf>,
+    lists: Vec<ReadableFile>,
 
     /// Output prefix (directory + filename prefix)
     #[arg(short, long)]
-    prefix: String,
+    prefix: OutputPrefix,
 
     /// Also write unmatched reads
     #[arg(long)]
@@ -68,6 +68,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let mut stats = RunStats::new(None, 0.0, 0);
 
+    cli.prefix.prepare()?;
     let tag = parse_tag(&cli.tag)?;
     let threads = cli.threads;
 
@@ -82,8 +83,9 @@ fn main() -> Result<()> {
 
     let mut subsetter = Subsetter::new();
 
+    let prefix = cli.prefix.to_string_lossy();
     for list in &cli.lists {
-        subsetter.read_simple_list(list, &cli.prefix)?;
+        subsetter.read_simple_list(list, prefix.as_ref())?;
     }
 
     // Prepare output writers
@@ -102,7 +104,7 @@ fn main() -> Result<()> {
 
     // Optional unmatched writer
     let mut unmatched_writer = if cli.write_unmatched {
-        let path = PathBuf::from(format!("{}unmatched.bam", cli.prefix));
+        let path = cli.prefix.with_suffix("unmatched.bam");
         ensure_parent_dir(&path)?;
         let mut writer = Writer::from_path(&path, &header, bam::Format::Bam)
             .context("creating unmatched BAM")?;

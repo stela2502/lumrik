@@ -27,6 +27,7 @@ categories = [
 rust-version = "1.85"
 
 [dependencies]
+lumrik_clap = { path = "../lumrik_clap" }
 anyhow = "1"
 bincode = "1"
 clap = { workspace = true } 

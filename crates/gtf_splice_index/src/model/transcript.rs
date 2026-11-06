@@ -192,6 +192,19 @@ impl Transcript {
         Some((self.cds_start?, self.cds_end?))
     }
 
+    /// Coding bases removed by a new splice junction [donor, acceptor).
+    /// Intronic bases are excluded; a noncoding transcript returns None.
+    /// The result is a length change, not a protein consequence prediction.
+    pub fn coding_bases_removed_by_junction(&self, donor: u32, acceptor: u32) -> Option<u32> {
+        let (cds_start, cds_end) = self.cds_span()?;
+        if donor >= acceptor { return None; }
+        Some(self.exons.iter().map(|exon| {
+            let start = exon.start.max(donor).max(cds_start);
+            let end = exon.end.min(acceptor).min(cds_end);
+            end.saturating_sub(start)
+        }).sum())
+    }
+
     /// Length of the spliced transcript in bases.
     pub fn transcript_len(&self) -> usize {
         self.exons.iter().map(|b| b.len() as usize).sum()

@@ -1,6 +1,6 @@
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use anyhow::{Context, Result, bail};
 use bam_tide::AdditionalFeatureSource;
@@ -16,9 +16,9 @@ use sc_primer::PrimerCli;
 #[command(about = "Prepare mapper-ready single-cell FASTQ shards without running STAR")]
 pub struct PrepareFastqsCli {
     #[arg(long, num_args = 1..)]
-    r1: Vec<PathBuf>,
+    r1: Vec<lumrik_clap::ReadableFile>,
     #[arg(long, num_args = 1..)]
-    r2: Vec<PathBuf>,
+    r2: Vec<lumrik_clap::ReadableFile>,
     #[command(flatten)]
     primer: PrimerCli,
     #[arg(long, num_args = 1..)]
@@ -38,7 +38,7 @@ pub struct PrepareFastqsCli {
     #[arg(long, default_value_t = false)]
     no_health_server: bool,
     #[arg(long, short)]
-    outpath: PathBuf,
+    outpath: lumrik_clap::OutputDir,
 }
 
 pub fn run() -> Result<()> {
@@ -90,7 +90,10 @@ pub fn run() -> Result<()> {
 
     let mut normalizer = IlluminaNormalizer::new(config)?;
     progress.stage("preparing FASTQ shards");
-    let inputs: Vec<_> = args.r1.into_iter().zip(args.r2).collect();
+    let inputs: Vec<(PathBuf, PathBuf)> = args.r1.into_iter()
+        .zip(args.r2)
+        .map(|(r1, r2)| (r1.into_path_buf(), r2.into_path_buf()))
+        .collect();
     let shard_dir = args.outpath.join("prepared_fastqs");
     let shards = normalizer.prepare_fastqs_sharded(&inputs, &shard_dir, |stats| {
         progress.update_from_run_stats(stats);

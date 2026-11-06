@@ -6,6 +6,7 @@ license = "AGPL-3.0-or-later"
 description = "Clean single-cell V(D)J reconstruction for Lumrik/Nelrune"
 
 [dependencies]
+lumrik_clap = { path = "../lumrik_clap" }
 anyhow = "1"
 clap = { workspace = true }
 flate2 = "1"

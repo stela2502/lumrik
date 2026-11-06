@@ -94,6 +94,11 @@ pub struct SpliceMatch<'a> {
     pub feature_id: u64,
     pub transcript: &'a Transcript,
     pub hit: MatchHit,
+    /// Gene-wide exon bits actually overlapped by this read. None if the
+    /// gene has more than 64 distinct exon intervals.
+    pub observed_exons: Option<u64>,
+    /// Exon bits belonging to the matched transcript (same gene-wide mapping).
+    pub transcript_exons: Option<u64>,
 }
 
 pub struct SpliceFeatureIndex<'a> {
@@ -172,6 +177,13 @@ pub struct SpliceIndex {
 
     #[serde(skip, default)]
     match_mode: SpliceMatchMode,
+
+    /// Derived from transcript exon intervals, not serialized into the index.
+    /// Bit positions are shared by all transcripts of one gene.
+    #[serde(skip, default)]
+    gene_exon_catalogues: Vec<Vec<RefBlock>>,
+    #[serde(skip, default)]
+    transcript_exon_masks: Vec<Option<u64>>,
 }
 
 /// Human-readable summary of the `SpliceIndex`.
@@ -291,14 +303,66 @@ impl SpliceIndex {
             tx_span_start: Vec::new(),
             tx_span_end: Vec::new(),
             match_mode: SpliceMatchMode::default(),
+            gene_exon_catalogues: Vec::new(),
+            transcript_exon_masks: Vec::new(),
         }
     }
 
     /// sort the internal data structure by transcript start position.
     fn finalize(&mut self) {
+        self.rebuild_exon_masks();
         for cb in &mut self.chr_buckets {
             cb.finalize_by_start(&self.tx_span_start, &self.tx_span_end);
         }
+    }
+
+    /// Recompute compact exon identities from exact genomic exon intervals.
+    /// Alternative exon boundaries have distinct bits; no coordinates are
+    /// silently collapsed. Genes with >64 intervals return None.
+    fn rebuild_exon_masks(&mut self) {
+        self.gene_exon_catalogues = vec![Vec::new(); self.genes.len()];
+        for tx in &self.transcripts {
+            self.gene_exon_catalogues[tx.gene_id].extend_from_slice(tx.exons());
+        }
+        for catalogue in &mut self.gene_exon_catalogues {
+            catalogue.sort_unstable_by_key(|b| (b.start, b.end));
+            catalogue.dedup();
+        }
+        self.transcript_exon_masks = self.transcripts.iter().map(|tx| {
+            let catalogue = &self.gene_exon_catalogues[tx.gene_id];
+            if catalogue.len() > 64 { return None; }
+            let mut mask = 0u64;
+            for exon in tx.exons() {
+                let bit = catalogue.binary_search_by_key(&(exon.start, exon.end), |b| (b.start, b.end))
+                    .expect("transcript exon missing from gene catalogue");
+                mask |= 1u64 << bit;
+            }
+            Some(mask)
+        }).collect();
+    }
+
+    /// Gene-wide exon catalogue; bit N corresponds to element N.
+    pub fn gene_exon_catalogue(&self, gene_id: GeneId) -> Option<&[RefBlock]> {
+        self.gene_exon_catalogues.get(gene_id).map(Vec::as_slice)
+    }
+
+    pub fn transcript_exon_mask(&self, transcript_id: TranscriptId) -> Option<u64> {
+        self.transcript_exon_masks.get(transcript_id).copied().flatten()
+    }
+
+    /// Return the gene-wide exon bits overlapped by a read. An exon is
+    /// observed if at least one aligned block overlaps its interval.
+    /// None means the gene exceeds the 64-bit representation.
+    pub fn observed_exon_mask(&self, gene_id: GeneId, read: &SplicedRead) -> Option<u64> {
+        let catalogue = self.gene_exon_catalogues.get(gene_id)?;
+        if catalogue.len() > 64 { return None; }
+        let mut mask = 0u64;
+        for (bit, exon) in catalogue.iter().enumerate() {
+            if read.blocks.iter().any(|block| block.overlaps(*exon)) {
+                mask |= 1u64 << bit;
+            }
+        }
+        Some(mask)
     }
 
     pub fn with_match_mode(mut self, mode: SpliceMatchMode) -> Self {
@@ -332,6 +396,11 @@ impl SpliceIndex {
             idx: self,
             name_to_id,
         }
+    }
+
+    /// O(1) lookup for an already materialized novel splice event.
+    pub fn novel_transcript_id(&self, name: &str) -> Option<TranscriptId> {
+        self.transcript_by_name.get(name).copied()
     }
 
     /// Insert a transcript into an independent novel-transcript index.
@@ -377,18 +446,55 @@ impl SpliceIndex {
         self.chr_buckets[chr_id].add_span(id, start, end);
         self.chr_buckets[chr_id].finalize_by_start(&self.tx_span_start, &self.tx_span_end);
         self.transcript_by_name.insert(transcript_name.to_owned(), id);
+        self.rebuild_exon_masks();
         Ok(id)
     }
 
     /// Merge another novel-transcript index, returning source -> destination IDs.
     pub fn merge_novel_transcripts(&mut self, source: &SpliceIndex) -> Result<HashMap<u64, u64>> {
         let mut mapping = HashMap::new();
+        let mut structural_conflicts = 0usize;
         for tx in &source.transcripts {
             let name = tx.primary_name().context("unnamed source transcript")?;
             let gene = source.genes[tx.gene_id].primary_name().context("unnamed source gene")?;
             let chr = &source.chr_names[tx.chr_id];
-            let destination = self.insert_novel_transcript(gene, name, chr, tx.strand, tx.exons())?;
+            // Names of novel splice events describe a junction, not an entire
+            // transcript. Different reference isoforms can reconstruct different
+            // flanking exons for the same event. Merge their evidence by event ID.
+            let destination = if name.contains('*') && name.contains("*del") {
+                if let Some(id) = self.novel_transcript_id(name) {
+                    let existing = &self.transcripts[id];
+                    let existing_gene = self.genes[existing.gene_id].primary_name();
+                    let existing_chr = &self.chr_names[existing.chr_id];
+                    if existing_gene != Some(gene) || existing_chr != chr || existing.strand != tx.strand {
+                        anyhow::bail!(
+                            "conflicting novel splice event identity {name}: existing gene={existing_gene:?} chr={existing_chr} strand={:?}; incoming gene={gene} chr={chr} strand={:?}",
+                            existing.strand, tx.strand,
+                        );
+                    }
+                    if existing.exons() != tx.exons() {
+                        structural_conflicts += 1;
+                        if structural_conflicts <= 5 {
+                            eprintln!(
+                                "[gtf_splice_index] merging event {name} with different representative exon structures: existing={:?}, incoming={:?}; retaining existing structure and merging evidence",
+                                existing.exons(), tx.exons(),
+                            );
+                        }
+                    }
+                    id
+                } else {
+                    self.insert_novel_transcript(gene, name, chr, tx.strand, tx.exons())?
+                }
+            } else {
+                self.insert_novel_transcript(gene, name, chr, tx.strand, tx.exons())?
+            };
             mapping.insert(tx.id as u64, destination as u64);
+        }
+        if structural_conflicts > 0 {
+            eprintln!(
+                "[gtf_splice_index] merged {structural_conflicts} novel splice-event structure collisions by event ID (first {} shown)",
+                structural_conflicts.min(5),
+            );
         }
         Ok(mapping)
     }
@@ -508,6 +614,8 @@ impl SpliceIndex {
             tx_span_start: Vec::new(),
             tx_span_end: Vec::new(),
             match_mode: SpliceMatchMode::default(),
+            gene_exon_catalogues: Vec::new(),
+            transcript_exon_masks: Vec::new(),
         };
 
         idx.chr_buckets = (0..idx.chr_names.len())
@@ -916,34 +1024,36 @@ impl SpliceIndex {
             return Vec::new();
         }
 
-        let mut scored: Vec<TranscriptMatch<'a>> = Vec::with_capacity(candidates.len());
+        // Keep only matches at the highest compatibility rank. In particular,
+        // ExactJunctionChain and Compatible have equal rank and BOTH survive.
+        // Overhang affects output order, not whether a match is retained.
+        let mut best_rank: Option<u8> = None;
+        let mut winners: Vec<TranscriptMatch<'a>> = Vec::new();
         for tx_id in candidates {
             let tx = &self.transcripts[tx_id];
             let hit = tx.match_spliced_read(read, opts);
-            scored.push(TranscriptMatch {
-                transcript_id: tx_id,
-                transcript: tx,
-                hit,
-            });
+            let rank = hit.class.rank();
+            match best_rank {
+                None => {
+                    best_rank = Some(rank);
+                    winners.push(TranscriptMatch { transcript_id: tx_id, transcript: tx, hit });
+                }
+                Some(best) if rank > best => {
+                    best_rank = Some(rank);
+                    winners.clear();
+                    winners.push(TranscriptMatch { transcript_id: tx_id, transcript: tx, hit });
+                }
+                Some(best) if rank == best => {
+                    winners.push(TranscriptMatch { transcript_id: tx_id, transcript: tx, hit });
+                }
+                _ => {}
+            }
         }
 
-        // Best class among candidates (requires MatchClass: Ord implemented in model/types.rs).
-        let best_class = scored
-            .iter()
-            .map(|m| m.hit.class)
-            .max()
-            .unwrap_or(MatchClass::NoOverlap);
-
-        // Keep ties by compatibility rank, not enum identity.
-        // ExactJunctionChain and Compatible deliberately have the same rank:
-        // an observed junction chain that exhausts a short transcript must not
-        // eliminate a longer transcript that supports every observed junction.
-        scored.retain(|m| m.hit.class.rank() == best_class.rank());
-
-        // Deterministic: smaller total overhang first, then transcript_id.
-        scored.sort_by_key(|m| (m.hit.overhang_5p_bp + m.hit.overhang_3p_bp, m.transcript_id));
-
-        scored
+        // Preserve the original deterministic order among ALL tied best-rank
+        // matches. A lower overhang sorts first but does not eliminate ties.
+        winners.sort_by_key(|m| (m.hit.overhang_5p_bp + m.hit.overhang_3p_bp, m.transcript_id));
+        winners
     }
 
     /// Match a spliced read against genes by:
@@ -1054,6 +1164,8 @@ impl SpliceIndex {
                             feature_id: m.gene_id as u64,
                             transcript,
                             hit: m.best_hit,
+                            observed_exons: self.observed_exon_mask(m.gene_id, read),
+                            transcript_exons: self.transcript_exon_mask(transcript.id),
                         })
                 })
                 .collect(),
@@ -1064,6 +1176,8 @@ impl SpliceIndex {
                     feature_id: m.transcript_id as u64,
                     transcript: m.transcript,
                     hit: m.hit,
+                    observed_exons: self.observed_exon_mask(m.transcript.gene_id, read),
+                    transcript_exons: self.transcript_exon_mask(m.transcript_id),
                 })
                 .collect(),
         }
@@ -1240,7 +1354,8 @@ impl SpliceIndex {
         // read payload
         let mut payload = Vec::new();
         f.read_to_end(&mut payload)?;
-        let idx: Self = bincode::deserialize(&payload)?;
+        let mut idx: Self = bincode::deserialize(&payload)?;
+        idx.rebuild_exon_masks();
 
         Ok(idx)
     }
@@ -1341,6 +1456,46 @@ chr1\tsrc\texon\t201\t240\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T2\";
     }
 
     #[test]
+    fn match_transcripts_streaming_winners_match_reference() {
+        let gtf = "\
+chr1\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T1\";
+chr1\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T1\";
+chr1\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T2\";
+chr1\tsrc\texon\t201\t240\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T2\";
+chr1\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T3\";
+chr1\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T3\";
+";
+        let idx = SpliceIndex::new(50)
+            .from_reader(Cursor::new(gtf.as_bytes()), IdNameKeys::default())
+            .unwrap();
+        for blocks in [
+            vec![RefBlock::new(110, 150), RefBlock::new(200, 250)],
+            vec![RefBlock::new(110, 130)],
+            vec![RefBlock::new(110, 150), RefBlock::new(200, 230)],
+        ] {
+            let mut read = SplicedRead::new(0, Strand::Plus, blocks);
+            read.finalize();
+            let opts = MatchOptions::default();
+            let candidates = idx.candidates_for_read_union(&read);
+            let mut reference: Vec<_> = candidates.iter().map(|&id| {
+                let tx = &idx.transcripts[id];
+                TranscriptMatch { transcript_id: id, transcript: tx, hit: tx.match_spliced_read(&read, opts) }
+            }).collect();
+            let best_class = reference.iter().map(|m| m.hit.class).max().unwrap_or(MatchClass::NoOverlap);
+            reference.retain(|m| m.hit.class.rank() == best_class.rank());
+            reference.sort_by_key(|m| (m.hit.overhang_5p_bp + m.hit.overhang_3p_bp, m.transcript_id));
+            let optimized = idx.match_transcripts(&read, opts);
+            assert_eq!(optimized.len(), reference.len());
+            for (actual, expected) in optimized.iter().zip(reference.iter()) {
+                assert_eq!(actual.transcript_id, expected.transcript_id);
+                assert_eq!(actual.hit.class, expected.hit.class);
+                assert_eq!(actual.hit.overhang_5p_bp, expected.hit.overhang_5p_bp);
+                assert_eq!(actual.hit.overhang_3p_bp, expected.hit.overhang_3p_bp);
+            }
+        }
+    }
+
+    #[test]
     fn match_genes_returns_best_gene_and_winning_transcripts() {
         let gtf = "\
 chr1\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G1\"; transcript_id \"T1\";
@@ -1403,6 +1558,26 @@ mod tests {
     // If you already have a crate-local Result/Error type, keep using it.
     // Otherwise you can switch these tests to `anyhow::Result<()>` easily.
     type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+    #[test]
+    fn exon_masks_share_gene_wide_bits_and_report_read_coverage() {
+        let gtf = concat!(
+            "chr1\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G\"; transcript_id \"T1\";\n",
+            "chr1\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G\"; transcript_id \"T1\";\n",
+            "chr1\tsrc\texon\t101\t150\t.\t+\t.\tgene_id \"G\"; transcript_id \"T2\";\n",
+            "chr1\tsrc\texon\t301\t350\t.\t+\t.\tgene_id \"G\"; transcript_id \"T2\";\n",
+        );
+        let idx = SpliceIndex::new(100)
+            .from_reader(Cursor::new(gtf.as_bytes()), IdNameKeys::default()).unwrap();
+        let t1 = idx.transcript_by_name("T1").unwrap();
+        let t2 = idx.transcript_by_name("T2").unwrap();
+        assert_eq!(idx.gene_exon_catalogue(t1.gene_id).unwrap().len(), 3);
+        assert_eq!(idx.transcript_exon_mask(t1.id), Some(0b011));
+        assert_eq!(idx.transcript_exon_mask(t2.id), Some(0b101));
+        let mut read = SplicedRead::new(t1.chr_id, Strand::Plus, vec![RefBlock::new(110, 140)]);
+        read.finalize();
+        assert_eq!(idx.observed_exon_mask(t1.gene_id, &read), Some(0b001));
+    }
 
     #[test]
     fn transcript_lookup_accepts_stable_id_and_display_name() {

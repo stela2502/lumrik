@@ -3,6 +3,8 @@ use anyhow::{Context, Result, bail};
 use gtf_splice_index::types::RefBlock;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::io::{BufRead, BufReader};
+use flate2::read::MultiGzDecoder;
 
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -24,6 +26,35 @@ pub struct GeneTranscriptPlotOptions {
     pub transcripts: Vec<String>,
     /// Optional free-form notes rendered at the right of a transcript row.
     pub row_notes: HashMap<String, Vec<String>>,
+    /// UCSC-style 1-based inclusive interval to highlight.
+    pub highlight: Option<(String, u32, u32)>,
+    /// VCF file containing variants to mark (plain .vcf or .vcf.gz).
+    pub vcf: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug)]
+struct PlotVariant { pos: u32, label: String }
+
+fn read_plot_variants(path: &Path, chr: &str, start: u32, end: u32) -> Result<Vec<PlotVariant>> {
+    let file = std::fs::File::open(path).with_context(|| format!("opening VCF {}", path.display()))?;
+    let reader: Box<dyn BufRead> = if path.extension().is_some_and(|e| e == "gz") {
+        Box::new(BufReader::new(MultiGzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+    let mut variants = Vec::new();
+    for (line_no, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| format!("reading VCF line {}", line_no + 1))?;
+        if line.starts_with('#') || line.is_empty() { continue; }
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() < 5 { anyhow::bail!("malformed VCF line {}", line_no + 1); }
+        if cols[0].trim_start_matches("chr") != chr.trim_start_matches("chr") { continue; }
+        let pos: u32 = cols[1].parse().with_context(|| format!("invalid VCF POS on line {}", line_no + 1))?;
+        if pos < start || pos > end { continue; }
+        variants.push(PlotVariant { pos, label: format!("{}:{} {}>{}", chr, pos, cols[3], cols[4]) });
+    }
+    variants.sort_by_key(|v| v.pos);
+    Ok(variants)
 }
 
 /// Plot every annotated transcript of one gene together with the genomic
@@ -96,6 +127,30 @@ pub fn plot_gene_transcripts_with_options(
         r##"<text x="{left}" y="30" class="title">{} transcript structure and InterPro architecture</text><text x="{left}" y="51" class="label">InterPro features are stored as spliced genomic models and intersected with each transcript CDS.</text><text x="{left}" y="70" class="small">{}:{}–{} (0-based half-open); exon geometry is drawn to genomic scale.</text>"##,
         xml_escape(gene_name), xml_escape(chr_name), gstart, gend
     ));
+
+    // VCF positions are 1-based; the plot's exon coordinates are 0-based half-open.
+    let variants = if let Some(vcf) = options.vcf.as_deref() {
+        read_plot_variants(vcf, chr_name, gstart.saturating_add(1), gend)?
+    } else { Vec::new() };
+    if let Some((ref hchr, hstart, hend)) = options.highlight {
+        if hchr.trim_start_matches("chr") == chr_name.trim_start_matches("chr") {
+            let a = hstart.saturating_sub(1).max(gstart);
+            let b = hend.min(gend);
+            if a < b {
+                let x1 = gx(a);
+                let x2 = gx(b);
+                s.push_str(&format!(r##"<rect x="{x1:.1}" y="{top:.1}" width="{:.1}" height="{:.1}" fill="#ffbb44" opacity="0.28"/>"##, (x2-x1).max(1.0), h-top-bottom));
+                s.push_str(&format!(r##"<text x="{x1:.1}" y="{:.1}" class="small">{}:{}-{}</text>"##, top-8.0, xml_escape(chr_name), hstart, hend));
+            }
+        }
+    }
+    for (i, variant) in variants.iter().enumerate() {
+        let x = gx(variant.pos - 1);
+        s.push_str(&format!(r##"<line x1="{x:.1}" x2="{x:.1}" y1="{top:.1}" y2="{:.1}" stroke="#b40070" stroke-width="1.5" stroke-dasharray="4,3"/>"##, h-bottom));
+        // Stagger labels so nearby SNPs do not occupy the same row.
+        let label_y = top - 48.0 + (i % 3) as f64 * 13.0;
+        s.push_str(&format!(r##"<text x="{x:.1}" y="{label_y:.1}" class="small" fill="#b40070" transform="rotate(-25 {x:.1} {label_y:.1})">{}</text>"##, xml_escape(&variant.label)));
+    }
 
     for (ri, &tx_id) in plotted.iter().enumerate() {
         let tx = &omm.splice.transcripts[tx_id];

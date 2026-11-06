@@ -1,7 +1,6 @@
 //cli.rs
 // src/quantification/cli.rs
 
-use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args, ValueEnum};
@@ -87,15 +86,15 @@ impl FromStr for BamAuxTag {
 pub struct QuantCli {
     /// Input BAM file(s) from a single cell mapping.
     #[arg(short = 'b', long = "bam", required = true, num_args = 1..)]
-    pub bam: Vec<PathBuf>,
+    pub bam: Vec<lumrik_clap::ReadableFile>,
 
     /// Splice index path (built from GTF beforehand)
     #[arg(long, short)]
-    pub index: PathBuf,
+    pub index: lumrik_clap::ReadableFile,
 
     /// Outpath for the 10x mtx-formatted outfiles
     #[arg(long, short)]
-    pub outpath: PathBuf,
+    pub outpath: lumrik_clap::OutputDir,
 
     /// Split Intronic from rest.
     ///
@@ -137,7 +136,7 @@ pub struct QuantCli {
     ///
     /// If supplied, BAM-derived AlignedRead objects are refined against the genome.
     #[arg(long)]
-    pub genome: Option<PathBuf>,
+    pub genome: Option<lumrik_clap::ReadableFile>,
 
     #[command(flatten)]
     pub read_tags: ReadTagTableCli,
@@ -147,11 +146,15 @@ pub struct QuantCli {
     /// If supplied, SNP ref/alt matrices are written in addition to the normal
     /// gene/transcript matrix. Requires --genome.
     #[arg(long)]
-    pub vcf: Option<PathBuf>,
+    pub vcf: Option<lumrik_clap::ReadableFile>,
 
     /// Minimum SNP anchor/support passed to snp_index.match_read().
     #[arg(long, default_value_t = DEFAULT_SNP_MIN_ANCHOR)]
     pub snp_min_anchor: u8,
+
+    /// Number of aligned bases required on either side of each SNP (0 = none).
+    #[arg(long, default_value_t = 5)]
+    pub snp_flank: u8,
 
     /// Disable genome-based AlignedRead refinement even if --genome is supplied.
     #[arg(long, default_value_t = false)]

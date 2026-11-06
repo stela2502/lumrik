@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use lumrik_clap::{Parser, ReadableFile, OutputFile};
 use fast_tag_mapper::{AlignmentStrand, FastTagMapper, FeatureEntry};
 use flate2::read::MultiGzDecoder;
 use rust_htslib::bam::{self, Read};
@@ -7,7 +7,7 @@ use sc_primer::{PrimerCli, PrimerDetector, PrimerMatch};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use bam_tide::fastq::record::FastqRecord;
 
@@ -24,25 +24,25 @@ const TILE_STEP: usize = 24;
 struct Cli {
     /// FASTA containing sequences to search for. Long entries are tiled internally.
     #[arg(long)]
-    fasta: PathBuf,
+    fasta: ReadableFile,
 
     /// Output TSV.
     #[arg(short, long)]
-    out: PathBuf,
+    out: OutputFile,
 
     /// FASTQ/FASTQ.GZ input. Multiple files are processed consecutively.
     #[arg(long, num_args = 1.., conflicts_with = "bam")]
-    fastq: Vec<PathBuf>,
+    fastq: Vec<ReadableFile>,
 
     /// Optional paired R2 FASTQ/FASTQ.GZ. Both mates are searched; cell/UMI
     /// identity is recovered from R1.
     #[arg(long, num_args = 1.., requires = "fastq")]
-    r2_fastq: Vec<PathBuf>,
+    r2_fastq: Vec<ReadableFile>,
 
     /// BAM input. Records may be mapped or completely unmapped; raw record
     /// sequence is searched. Existing CB/UB tags are used when present.
     #[arg(long, num_args = 1.., conflicts_with = "fastq")]
-    bam: Vec<PathBuf>,
+    bam: Vec<ReadableFile>,
 
     /// Single-cell chemistry/read structure used to recover cell and UMI from
     /// read sequence when tags are unavailable.
@@ -104,6 +104,7 @@ fn main() -> Result<()> {
         .map_err(anyhow::Error::msg)
         .context("failed to build primer detector")?;
 
+    cli.out.prepare().context("preparing --out directory")?;
     let file = File::create(&cli.out)
         .with_context(|| format!("failed to create {}", cli.out.display()))?;
     let mut out = BufWriter::new(file);

@@ -14,6 +14,34 @@ Fast streaming GTF/GFF parsing and spatial/splice-aware genome annotation indexi
 
 Build a `SpliceIndex` from GTF/GFF and query it with `SplicedRead` objects; the parser/index types are the implementation truth used by downstream Lumrik crates.
 
+## Novel splice-event names and frameshift annotation
+
+During `bam_tide` novel-junction discovery, each distinct splice event is
+represented by one name of the form:
+
+`<Gene>*<chromosome>:<donor>-<acceptor>*del[_frameshift]`
+
+For example: `TP53*chr17:7675994-7676272*del_frameshift` is the **format** of a
+predicted frameshifting deletion; it is **not** a verified consequence for this
+particular TP53 event. Coordinates use 0-based half-open genomic boundaries,
+independent of transcription strand. A single junction can skip multiple exons
+or part of an exon; it does not require full-length read coverage.
+
+`gtf_splice_index::Transcript::coding_bases_removed_by_junction()` calculates
+the intersection of the affected genomic interval with the reference
+transcript's **coding exons** (CDS span clipped to annotated exons). Introns
+are never counted. The `_frameshift` suffix is appended only if coding bases
+are removed and their number is not divisible by three. A missing suffix does
+**not** prove an in-frame protein: the reference may lack CDS annotation, or
+the event may be noncoding. No translation or protein-effect prediction is
+performed.
+
+For speed, the first reference transcript used to create a new junction event
+provides the CDS annotation and representative exon model. Subsequent reads
+with the same gene/chromosome/junction reuse that event ID; other reference
+isoforms may have different coding consequences. The suffix is therefore a
+**reference-dependent prediction**, not a universally established effect.
+
 ## Detailed documentation
 
 

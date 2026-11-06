@@ -22,11 +22,11 @@ use scdata::FeatureIndex;
 struct Cli {
     /// Coordinate-sorted Cell Ranger / 10x BAM.
     #[arg(long)]
-    bam: PathBuf,
+    bam: lumrik_clap::ReadableFile,
 
     /// Binary index produced by `gtf-splice-index build`.
     #[arg(long = "te-index")]
-    te_index: PathBuf,
+    te_index: lumrik_clap::ReadableFile,
 
     /// Stop after this many BAM records. Omit to scan the complete BAM.
     #[arg(long)]
@@ -39,7 +39,7 @@ struct Cli {
     umi_tag: String,
 
     /// Output directory for RunStats and diagnostic TSV files.
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_output_file, long)]
     out: PathBuf,
 }
 

@@ -22,7 +22,7 @@ pub struct ReadTagTableCli {
     /// - TSV files
     /// - TSV.GZ files
     #[arg(long = "read-tag-table", num_args = 1..)]
-    pub read_tag_table: Vec<PathBuf>,
+    pub read_tag_table: Vec<lumrik_clap::ReadableFile>,
 
     #[arg(long = "rt-read-id-column", default_value = "read_id")]
     pub rt_read_id_column: String,
@@ -58,7 +58,7 @@ impl ReadTagTableCli {
             .with_context(|| format!("No --read-tag-table for id {id}"))?
             .clone();
 
-        Ok(self.config_for_path(path))
+        Ok(self.config_for_path(path.to_path_buf()))
     }
 
     pub fn to_config(&self) -> Result<ReadTagTableConfig> {
@@ -73,7 +73,7 @@ impl ReadTagTableCli {
             );
         }
 
-        Ok(self.config_for_path(self.read_tag_table[0].clone()))
+        Ok(self.config_for_path(self.read_tag_table[0].to_path_buf()))
     }
 
     pub fn load(&self) -> Result<ReadTagTable> {
@@ -732,7 +732,7 @@ mod tests {
         table.save_binary(&path).unwrap();
 
         let cli = ReadTagTableCli {
-            read_tag_table: vec![path.clone()],
+            read_tag_table: vec![path.to_pathbuff().clone()],
             rt_read_id_column: "read_id".to_string(),
             rt_cell_column: "raw_cb".to_string(),
             rt_cell_qual_column: "quality_cb".to_string(),

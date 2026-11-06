@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::{Parser, parser::ValueSource};
@@ -18,15 +17,15 @@ use sc_primer::PrimerCli;
 pub struct Cli {
     /// Illumina barcode / UMI FASTQ(s).
     #[arg(long, num_args = 1..)]
-    pub r1: Vec<PathBuf>,
+    pub r1: Vec<lumrik_clap::ReadableFile>,
 
     /// Illumina biological insert FASTQ(s).
     #[arg(long, num_args = 1..)]
-    pub r2: Vec<PathBuf>,
+    pub r2: Vec<lumrik_clap::ReadableFile>,
 
     /// ONT/Dorado BAM input. Mutually exclusive with --r1/--r2.
     #[arg(long)]
-    pub bam: Option<PathBuf>,
+    pub bam: Option<lumrik_clap::ReadableFile>,
 
     #[command(flatten)]
     pub primer: PrimerCli,
@@ -85,7 +84,7 @@ pub struct Cli {
 
     /// Output directory.
     #[arg(long, short)]
-    pub outpath: PathBuf,
+    pub outpath: lumrik_clap::OutputDir,
 
     /// Port for the live health/progress server.
     #[arg(long, default_value_t = 8787)]

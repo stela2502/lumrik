@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use lumrik_clap::{Parser, ReadableFile, ReadableDir, OutputDir};
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -30,15 +30,15 @@ only that cell. This is intended for reproducible integration/regression fixture
 struct Cli {
     /// Nelrune exonic MEX directory.
     #[arg(long, value_name = "MEX_DIR")]
-    exonic: PathBuf,
+    exonic: ReadableDir,
 
     /// Retained Nelrune mapper BAM.
     #[arg(long, value_name = "BAM")]
-    bam: PathBuf,
+    bam: ReadableFile,
 
     /// Output fixture directory.
     #[arg(long, value_name = "DIR")]
-    out: PathBuf,
+    out: OutputDir,
 
     /// Use this matrix cell instead of the richest IG/TR cell.
     #[arg(long, value_name = "BARCODE")]
@@ -158,7 +158,7 @@ fn main() -> Result<()> {
         println!("{}\t{:.0}", feature_names[*row], value);
     }
 
-    fs::create_dir_all(&cli.out).with_context(|| format!("creating {}", cli.out.display()))?;
+    cli.out.prepare().with_context(|| format!("creating {}", cli.out.display()))?;
     let exonic_out = cli.out.join("exonic");
     fs::create_dir_all(&exonic_out)?;
     write_single_cell_mex(

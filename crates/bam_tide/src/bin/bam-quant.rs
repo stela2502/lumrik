@@ -43,7 +43,7 @@ fn run(args: QuantCli) -> Result<()> {
     let config = BamCollectorConfig {
         index: args.index.clone(),
 
-        genome: args.genome.clone(),
+        genome: args.genome.as_ref().map(|path| path.to_path_buf()),
 
         vcf: args.vcf.clone(),
 
@@ -70,6 +70,7 @@ fn run(args: QuantCli) -> Result<()> {
         allowed_intronic_gap_size: args.allowed_intronic_gap_size,
 
         snp_min_anchor: args.snp_min_anchor,
+        snp_flank: args.snp_flank,
 
         read_tags: args.read_tags.clone(),
         analysis_type: args.analysis_type,
@@ -92,8 +93,9 @@ fn run(args: QuantCli) -> Result<()> {
         collector = collector.with_grammar(grammar);
     }
 
+    let bam_paths: Vec<_> = args.bam.iter().map(|path| path.to_path_buf()).collect();
     let mut result = collector
-        .run_paths(&args.bam)
+        .run_paths(&bam_paths)
         .context("collecting BAM quantification")?;
 
     result.new_transcripts.write_reports(&args.outpath)?;

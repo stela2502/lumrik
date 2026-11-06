@@ -30,15 +30,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 )]
 struct Cli {
     #[arg(long)]
-    bam: PathBuf,
+    bam: lumrik_clap::ReadableFile,
     #[arg(long)]
-    index: Option<PathBuf>,
+    index: Option<lumrik_clap::ReadableFile>,
     #[arg(long)]
-    gtf: Option<PathBuf>,
+    gtf: Option<lumrik_clap::ReadableFile>,
     #[arg(long)]
-    genome: Option<PathBuf>,
+    genome: Option<lumrik_clap::ReadableFile>,
     #[arg(long)]
-    out: PathBuf,
+    out: lumrik_clap::OutputDir,
     #[arg(long, default_value_t = 12)]
     min_sequence_overlap: usize,
     /// CPU threads for BAM decoding and independent V(D)J chain reconstruction.
@@ -47,7 +47,7 @@ struct Cli {
     /// Nelrune output directory or its final exonic MEX directory.
     /// When supplied, only barcodes present in the exonic output are admitted
     /// into the expensive V(D)J evidence pipeline.
-    #[arg(long)]
+    #[arg(value_parser = lumrik_clap::parse_readable_dir, long)]
     exonic: Option<PathBuf>,
     #[arg(long)]
     write_sequences: bool,

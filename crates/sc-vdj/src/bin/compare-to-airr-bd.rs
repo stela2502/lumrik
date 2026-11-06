@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use lumrik_clap::ReadableFile;
 use sc_primer::{Chemistry, PrimerDetector};
 
 const DEFAULT_LUMRIK: &str = "target/sc-vdj-test-output/server-ZD-4631-BcellsLaneF/vdj_calls.tsv";
@@ -21,11 +22,11 @@ const DEFAULT_BD_AIRR: &str =
 struct Args {
     /// 	Lumrik vdj_calls.tsv.
     #[arg(long, default_value = DEFAULT_LUMRIK)]
-    lumrik: PathBuf,
+    lumrik: ReadableFile,
 
     /// 	BD Rhapsody dominant AIRR TSV.
     #[arg(long, default_value = DEFAULT_BD_AIRR)]
-    bd_airr: PathBuf,
+    bd_airr: ReadableFile,
 
     /// 	Single-cell chemistry used to translate Lumrik barcode sequences
     /// 	to the numeric BD cell IDs used in the AIRR file.

@@ -1,7 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use lumrik_clap::{ExistingOrNewFile, OutputFile, Parser, Subcommand};
 use reference_curator::{CandidateFilter, ReferenceCurator};
-use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -18,13 +17,13 @@ struct Cli {
 enum Command {
     Inspect {
         #[arg(long)]
-        store: PathBuf,
+        store: ExistingOrNewFile,
     },
     ExportFasta {
         #[arg(long)]
-        store: PathBuf,
+        store: ExistingOrNewFile,
         #[arg(long)]
-        out: PathBuf,
+        out: OutputFile,
         #[arg(long, conflicts_with = "unresolved_only")]
         resolved_only: bool,
         #[arg(long, conflicts_with = "resolved_only")]
@@ -35,7 +34,7 @@ enum Command {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Inspect { store } => {
-            let curator = ReferenceCurator::open(store)?;
+            let curator = ReferenceCurator::open(store.as_path())?;
             println!("candidates\t{}", curator.len());
             println!("resolved\t{}", curator.resolved().count());
             println!("unresolved\t{}", curator.unresolved().count());
@@ -53,7 +52,8 @@ fn main() -> Result<()> {
             } else {
                 CandidateFilter::All
             };
-            ReferenceCurator::open(store)?.export_fasta(out, filter)?;
+            out.prepare()?;
+            ReferenceCurator::open(store.as_path())?.export_fasta(out.as_path(), filter)?;
         }
     }
     Ok(())
