@@ -5,6 +5,7 @@
 //! as genomic blocks (0-based, half-open).
 
 pub mod annotation;
+pub mod exon_catalog;
 pub mod capabilities;
 pub mod index;
 pub mod model;
@@ -29,3 +30,5 @@ pub use model::types::{GeneId, TranscriptId};
 // Re-export shared model matching types at crate root.
 pub use model::types::QuantClass;
 pub use model::{MatchClass, MatchOptions, OverhangClass, PlacementAudit};
+
+pub use exon_catalog::{ExonMask, GeneExonCatalog, UmiTranscriptMatch};

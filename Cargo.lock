@@ -243,6 +243,7 @@ dependencies = [
  "flate2",
  "gtf_splice_index",
  "hts-sys",
+ "indicatif",
  "int-to-dna",
  "lumrik_clap",
  "ommverse",

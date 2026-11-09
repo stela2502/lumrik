@@ -1,10 +1,10 @@
 //chunk_processor.rs
 use anyhow::Result;
 use std::time::Instant;
-use gtf_splice_index::{MatchClass, MatchOptions, QuantClass, SpliceIndex};
+use std::sync::Once;
+use gtf_splice_index::{GeneExonCatalog, MatchOptions, SpliceIndex, SpliceMatchMode};
 use rayon::prelude::*;
 use run_stats::RunStats;
-use scdata::cell_data::GeneUmiHash;
 
 use crate::quantification::job::Job;
 use crate::quantification::processor_options::ProcessorOptions;
@@ -15,6 +15,7 @@ use gtf_splice_index::{RefBlock, Transcript};
 
 pub struct ChunkProcessor<'a> {
     idx: &'a SpliceIndex,
+    exon_catalogs: Vec<GeneExonCatalog>,
     snp: Option<&'a SnpSideChannel>,
     match_opts: MatchOptions,
     #[allow(dead_code)]
@@ -28,8 +29,18 @@ impl<'a> ChunkProcessor<'a> {
         match_opts: MatchOptions,
         config: ProcessorOptions,
     ) -> Self {
+        static HOLES_WARNING: Once = Once::new();
+        if idx.match_mode() == SpliceMatchMode::Transcript {
+            HOLES_WARNING.call_once(|| eprintln!(
+                "[bam-quant] WARNING: exon/intron evidence is OR-merged per (cell, UMI, gene); holes within one UMI are ignored."
+            ));
+        }
+        let exon_catalogs = (0..idx.genes.len())
+            .map(|gene_id| idx.gene_exon_catalog(gene_id).expect("indexed gene"))
+            .collect();
         Self {
             idx,
+            exon_catalogs,
             snp,
             match_opts,
             config,
@@ -81,68 +92,80 @@ impl<'a> ChunkProcessor<'a> {
 
         for job in jobs {
             report.report("bam_tide/profile/jobs");
-            let novel_id = self.add_hit(job, &mut out, &mut novel, &mut report);
             let started = Instant::now();
-            let evidence = self.add_snp_hits(job, &mut out, &mut report);
+            let snps = self.add_snp_hits(job, &mut report);
             report.add_timer_duration("bam_tide/profile/snp", started.elapsed());
-            if let Some(id) = novel_id {
-                let started = Instant::now();
-                novel.add_molecule(id, job.cell, job.umi, evidence);
-                report.add_timer_duration("bam_tide/profile/novel_molecule", started.elapsed());
-            }
+            self.collect_gene_evidence(job, &mut novel, &mut report, snps);
         }
 
         (out, novel, report)
     }
 
-    fn add_hit(&self, job: &Job, out: &mut QuantData, novel: &mut NewTranscriptData, report: &mut RunStats) -> Option<usize> {
+    /// The only hot-path quantification operation: collect gene-wide evidence.
+    /// QuantData intentionally remains empty until UMI finalization is wired in.
+    fn collect_gene_evidence(
+        &self,
+        job: &Job,
+        novel: &mut NewTranscriptData,
+        report: &mut RunStats,
+        snps: SnpUmiEvidence,
+    ) {
         let started = Instant::now();
-        let hits = self.idx.match_features(&job.spliced, self.match_opts);
-        report.add_timer_duration("bam_tide/profile/match_features", started.elapsed());
-
-        if hits.is_empty() {
-            report.report("no hit");
-            return None;
-        }
-
-        report.report("bam_tide/profile/matched");
-        let hit = &hits[0];
-        report.report(hit.hit.class.to_string());
-
-
-        let feature_umi = GeneUmiHash(hit.feature_id, job.umi);
-        // Only materialize a model when the alignment proves a new junction.
-        // An incomplete read with a subset of reference junctions is NOT novel.
-        let novel_id = if matches!(hit.hit.class, MatchClass::JunctionMismatch) {
-            report.report("bam_tide/profile/novel_attempts");
-            let started = Instant::now();
-            let result = self.discover_novel(job, hit.transcript, novel, report);
-            report.add_timer_duration("bam_tide/profile/novel_discovery", started.elapsed());
-            if result.is_some() { report.report("bam_tide/profile/novel_insertions"); }
-            result
-        } else { None };
-        if let Some(class) = hit.hit.class.quant_class() {
-            let split_name = match class {
-                QuantClass::Exonic => QuantData::EXONIC,
-                QuantClass::Intronic => QuantData::INTRONIC,
-            };
-            out.try_insert(split_name, &job.cell, feature_umi, 1.0, report);
-            // Canonical expression contains every gene-associated molecule,
-            // independent of whether its evidence is exonic or intronic.
-            let mut exprs_report = RunStats::new(None, 0.0, 0);
-            out.try_insert(
-                QuantData::EXPRS,
-                &job.cell,
-                feature_umi,
-                1.0,
-                &mut exprs_report,
+        let mut gene_ids = Vec::new();
+        for block in &job.spliced.blocks {
+            gene_ids.extend(
+                self.idx.overlapping_genes_with_bins(job.spliced.chr_id, block.start, block.end)
+                    .into_iter().map(|(_, gene_id)| gene_id),
             );
         }
-        novel_id
+        gene_ids.sort_unstable();
+        gene_ids.dedup();
+        report.add_timer_duration("bam_tide/profile/gene_lookup", started.elapsed());
+        if gene_ids.is_empty() {
+            report.report("no hit");
+            return;
+        }
+        report.report("collect/gene_hit_reads");
+        for gene_id in gene_ids {
+            // A genomic overlap alone does not establish a strand-compatible gene.
+            // The gene has no strand field; its annotated transcripts do.
+            if self.config.require_strand
+                && !self.idx.genes[gene_id]
+                    .transcript_ids()
+                    .iter()
+                    .any(|&tx_id| {
+                        self.idx.transcripts[tx_id]
+                            .strand
+                            .is_compatible_with(job.spliced.strand)
+                    })
+            {
+                continue;
+            }
+            if let Some(catalog) = self.exon_catalogs.get(gene_id) {
+                let mask = catalog.observed_mask(&job.spliced);
+                if mask.count_ones() == 0 { continue; }
+                report.report("collect/umi_observations");
+                let has_intron = match &mask {
+                    scdata::ExonMask::Small(bits) => bits & 0xAAAA_AAAA_AAAA_AAAAu64 != 0,
+                    scdata::ExonMask::Large(words) => words.iter().any(|bits|
+                        bits & 0xAAAA_AAAA_AAAA_AAAAu64 != 0),
+                };
+                if has_intron { report.report("collect/intron_observations"); }
+                if snps.snps.iter().any(|s| s.ref_reads > 0) {
+                    report.report("collect/snp_ref_observations");
+                }
+                if snps.snps.iter().any(|s| s.alt_reads > 0) {
+                    report.report("collect/snp_alt_observations");
+                }
+                novel.add_exon_evidence(gene_id, job.cell, job.umi, mask, snps.clone());
+                report.report("bam_tide/profile/matched");
+            }
+        }
     }
 
     /// Represent one new splice junction as one event, regardless of how many
     /// reference exons it bypasses. Only build a transcript on the first sighting.
+    #[allow(dead_code)] // Retained temporarily for legacy tests; no longer used by the hot path.
     fn discover_novel(
         &self,
         job: &Job,
@@ -207,12 +230,12 @@ impl<'a> ChunkProcessor<'a> {
         }
     }
 
-    fn add_snp_hits(&self, job: &Job, out: &mut QuantData, report: &mut RunStats) -> SnpUmiEvidence {
+    fn add_snp_hits(&self, job: &Job, report: &mut RunStats) -> SnpUmiEvidence {
         let Some(snp) = self.snp else {
             return SnpUmiEvidence::default();
         };
 
-        snp.add_hits(job.aligned.as_ref(), job.cell, job.umi, out, report)
+        snp.add_hits(job.aligned.as_ref(), report)
     }
 }
 
@@ -336,12 +359,16 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
             .process_into(&[job], &mut merged, &mut novel, &mut report)
             .unwrap();
 
-        // At minimum: it must not become "no hit".
-        // Depending on QuantData internals, this may need adapting to your matrix API.
-        assert!(
-            !merged.is_empty(QuantData::EXONIC) || !merged.is_empty(QuantData::INTRONIC),
-            "expected one gene or intron count from chr14/14 alias match"
-        );
+        // Hot collection deliberately leaves QuantData empty until finalization.
+        assert!(merged.is_empty(QuantData::EXONIC));
+        let mut observed = 0;
+        novel.exon_evidence.for_each_umi(|cell, key, evidence| {
+            assert_eq!(cell, 1);
+            assert_eq!(key.1, 1);
+            assert!(evidence.splice.count_ones() > 0);
+            observed += 1;
+        });
+        assert_eq!(observed, 1, "expected one collected gene/UMI evidence entry");
     }
 
     #[test]
@@ -383,11 +410,15 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
             .process_into(&[job], &mut merged, &mut novel, &mut report)
             .unwrap();
 
-        // At minimum: it must not become "no hit".
-        // Depending on QuantData internals, this may need adapting to your matrix API.
-        assert!(
-            !merged.is_empty(QuantData::EXONIC) || !merged.is_empty(QuantData::INTRONIC),
-            "expected one gene or intron count from chr14/14 alias match"
-        );
+        // Hot collection deliberately leaves QuantData empty until finalization.
+        assert!(merged.is_empty(QuantData::EXONIC));
+        let mut observed = 0;
+        novel.exon_evidence.for_each_umi(|cell, key, evidence| {
+            assert_eq!(cell, 1);
+            assert_eq!(key.1, 1);
+            assert!(evidence.splice.count_ones() > 0);
+            observed += 1;
+        });
+        assert_eq!(observed, 1, "expected one collected gene/UMI evidence entry");
     }
 }

@@ -273,15 +273,24 @@ impl fmt::Display for SpliceIndex {
                 total_gene_hits as f64 / nbins as f64
             };
 
+            // Count distinct genes requiring ExonMask::Large (>32 exon units).
+            let large = uniq_genes.iter().filter(|&&gene_id| {
+                let gene = &self.genes[gene_id];
+                crate::exon_catalog::GeneExonCatalog::from_transcripts(
+                    gene.transcript_ids().iter().map(|&id| &self.transcripts[id]),
+                ).units.len() > 32
+            }).count();
+
             writeln!(
                 f,
-                "  - {}: bins={}, genes={}, transcripts={}, mean_genes/bin={:.3}, mean_tx/bin={:.3}",
+                "  - {}: bins={}, genes={}, transcripts={}, mean_genes/bin={:.3}, mean_tx/bin={:.3}, large={}",
                 chr_name,
                 nbins,
                 uniq_genes.len(),
                 uniq_txs.len(),
                 mean_genes_per_bin,
-                mean_tx_per_bin
+                mean_tx_per_bin,
+                large
             )?;
         }
 
@@ -417,11 +426,41 @@ impl SpliceIndex {
         if exons.is_empty() || exons.iter().any(|e| e.start >= e.end) {
             bail!("novel transcript must have nonempty valid exon blocks");
         }
+        // Normalize redundant contained exon fragments before comparing names
+        // or storing novel models. Do not merge partially overlapping exons:
+        // their distinct boundaries may encode alternative splicing.
+        let mut canonical = exons.to_vec();
+        canonical.sort_by_key(|b| (b.start, std::cmp::Reverse(b.end)));
+        let mut normalized: Vec<RefBlock> = Vec::with_capacity(canonical.len());
+        for block in canonical {
+            if normalized.last().is_some_and(|last| last.end >= block.end) {
+                continue;
+            }
+            normalized.push(block);
+        }
+        let exons = normalized.as_slice();
         if let Some(&id) = self.transcript_by_name.get(transcript_name) {
             let tx = &self.transcripts[id];
             if self.chr_names[tx.chr_id] != chr_name || tx.strand != strand || tx.exons() != exons ||
                 self.genes[tx.gene_id].primary_name() != Some(gene_name) {
-                bail!("conflicting novel transcript identity: {transcript_name}");
+                let existing_gene = self.genes[tx.gene_id].primary_name().unwrap_or("<unnamed>");
+                let existing_chr = &self.chr_names[tx.chr_id];
+                let same_chr = existing_chr == chr_name;
+                let same_strand = tx.strand == strand;
+                let same_exons = tx.exons() == exons;
+                let same_gene = existing_gene == gene_name;
+                bail!(
+                    "conflicting novel transcript identity: {transcript_name}\n\
+                     existing: gene={existing_gene} chr={existing_chr} strand={:?} exons={:?}\n\
+                     incoming: gene={gene_name} chr={chr_name} strand={strand:?} exons={exons:?}\n\
+                     differences: gene={} chr={} strand={} exons={}",
+                    tx.strand,
+                    tx.exons(),
+                    !same_gene,
+                    !same_chr,
+                    !same_strand,
+                    !same_exons,
+                );
             }
             return Ok(id);
         }
@@ -454,6 +493,7 @@ impl SpliceIndex {
     pub fn merge_novel_transcripts(&mut self, source: &SpliceIndex) -> Result<HashMap<u64, u64>> {
         let mut mapping = HashMap::new();
         let mut structural_conflicts = 0usize;
+        let mut rejected_conflicts = 0usize;
         for tx in &source.transcripts {
             let name = tx.primary_name().context("unnamed source transcript")?;
             let gene = source.genes[tx.gene_id].primary_name().context("unnamed source gene")?;
@@ -486,9 +526,23 @@ impl SpliceIndex {
                     self.insert_novel_transcript(gene, name, chr, tx.strand, tx.exons())?
                 }
             } else {
-                self.insert_novel_transcript(gene, name, chr, tx.strand, tx.exons())?
+                match self.insert_novel_transcript(gene, name, chr, tx.strand, tx.exons()) {
+                    Ok(id) => id,
+                    Err(err) if err.to_string().contains("conflicting novel transcript identity") => {
+                        rejected_conflicts += 1;
+                        if rejected_conflicts <= 20 {
+                            eprintln!("[gtf_splice_index] WARNING: {err:#}");
+                            eprintln!("  Action: omit source transcript ID {} from remapping", tx.id);
+                        }
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                }
             };
             mapping.insert(tx.id as u64, destination as u64);
+        }
+        if rejected_conflicts > 0 {
+            eprintln!("[gtf_splice_index] WARNING: rejected {rejected_conflicts} conflicting novel-transcript identities during index merge (first 20 detailed)");
         }
         if structural_conflicts > 0 {
             eprintln!(
@@ -500,6 +554,30 @@ impl SpliceIndex {
     }
 
     /// get all gene names from the index (id == gene_id)
+    /// Gene-wide exon units shared by all transcripts, without changing
+    /// existing transcript matching or the serialized index representation.
+    /// Resolve a complete UMI bitmap against this gene's reference transcripts.
+    /// No transcript identity is assigned to individual reads.
+    pub fn resolve_umi_transcript(
+        &self,
+        gene_id: GeneId,
+        observed: &crate::exon_catalog::ExonMask,
+    ) -> Option<crate::exon_catalog::UmiTranscriptMatch> {
+        let gene = self.genes.get(gene_id)?;
+        let catalogue = self.gene_exon_catalog(gene_id)?;
+        Some(catalogue.resolve_umi(
+            observed,
+            gene.transcript_ids().iter().filter_map(|&id| self.transcripts.get(id)),
+        ))
+    }
+
+    pub fn gene_exon_catalog(&self, gene_id: GeneId) -> Option<crate::exon_catalog::GeneExonCatalog> {
+        let gene = self.genes.get(gene_id)?;
+        Some(crate::exon_catalog::GeneExonCatalog::from_transcripts(
+            gene.transcript_ids().iter().filter_map(|&id| self.transcripts.get(id))
+        ))
+    }
+
     pub fn gene_names(&self) -> Vec<String> {
         self.genes
             .iter()

@@ -577,3 +577,121 @@ mod single_cell_tests {
     }
 }
 
+
+// Automatic command history for Lumrik executables. Linux startup hook:
+// no explicit call is required from individual binaries.
+#[cfg(target_os = "linux")]
+#[used]
+#[unsafe(link_section = ".init_array")]
+static LUMRIK_COMMAND_HISTORY_INIT: extern "C" fn() = lumrik_command_history_init;
+
+#[cfg(target_os = "linux")]
+extern "C" fn lumrik_command_history_init() {
+    // A logging failure must never prevent an analysis from starting.
+    let _ = std::panic::catch_unwind(|| command_history::record());
+}
+
+#[cfg(target_os = "linux")]
+mod command_history {
+    use std::{
+        env,
+        ffi::OsStr,
+        fs::{self, OpenOptions},
+        io::{self, Write},
+        os::{fd::AsRawFd, unix::ffi::OsStrExt},
+        path::{Path, PathBuf},
+        process::Command,
+    };
+
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    const LOCK_EX: i32 = 2;
+    const LOCK_UN: i32 = 8;
+    const MAX_BYTES: u64 = 10 * 1024 * 1024;
+    const ROTATIONS: usize = 5;
+
+    fn shell_quote(value: &OsStr) -> String {
+        let bytes = value.as_bytes();
+        if !bytes.is_empty()
+            && bytes.iter().all(|b| b.is_ascii_alphanumeric() || b"@%_+=:,./-".contains(b))
+        {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        // Shell-quote every argument without interpreting its contents.
+        // Most command arguments are UTF-8; non-UTF8 bytes are represented
+        // using Bash ANSI-C octal quoting to preserve them exactly.
+        if let Ok(value) = std::str::from_utf8(bytes) {
+            return format!("'{}'", value.replace('\'', "'\\''"));
+        }
+        let mut escaped = String::from("$'");
+        for &byte in bytes {
+            match byte {
+                b'\\' => escaped.push_str("\\\\"),
+                b'\'' => escaped.push_str("\\'"),
+                0x20..=0x7e => escaped.push(byte as char),
+                _ => escaped.push_str(&format!("\\{:03o}", byte)),
+            }
+        }
+        escaped.push('\'');
+        escaped
+    }
+
+    fn history_path() -> Option<PathBuf> {
+        if env::var_os("LUMRIK_COMMAND_LOG_DISABLE").as_deref() == Some(OsStr::new("1")) {
+            return None;
+        }
+        if let Some(path) = env::var_os("LUMRIK_COMMAND_LOG") {
+            return Some(PathBuf::from(path));
+        }
+        let home = env::var_os("HOME")?;
+        Some(PathBuf::from(home).join(".lumrik/commands.db"))
+    }
+
+    fn rotate(path: &Path) -> io::Result<()> {
+        for i in (1..=ROTATIONS).rev() {
+            let source = if i == 1 { path.to_path_buf() }
+                else { PathBuf::from(format!("{}.{}", path.display(), i - 1)) };
+            let dest = PathBuf::from(format!("{}.{}", path.display(), i));
+            if source.exists() { fs::rename(source, dest)?; }
+        }
+        Ok(())
+    }
+
+    pub(super) fn record() -> io::Result<()> {
+        let Some(path) = history_path() else { return Ok(()); };
+        let cwd = env::current_dir()?;
+        let args: Vec<_> = env::args_os().collect();
+        if args.is_empty() { return Ok(()); }
+        // No history for help/version invocations.
+        if args.iter().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V") {
+            return Ok(());
+        }
+        let date = Command::new("date").arg("+%Y-%m-%d %H:%M:%S %z").output()
+            .ok().filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .unwrap_or_else(|| format!("{:?}", std::time::SystemTime::now()));
+        let entry = format!(
+            "# {date}\ncd {}\n{}\n\n",
+            shell_quote(cwd.as_os_str()),
+            args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ")
+        );
+        if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+        // Separate stable lock file prevents concurrent writers from interleaving
+        // entries even while the history is being rotated.
+        let lock_path = PathBuf::from(format!("{}.lock", path.display()));
+        let lock = OpenOptions::new().create(true).write(true).open(lock_path)?;
+        if unsafe { flock(lock.as_raw_fd(), LOCK_EX) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let result = (|| {
+            if fs::metadata(&path).is_ok_and(|m| m.len() + entry.len() as u64 > MAX_BYTES) {
+                rotate(&path)?;
+            }
+            let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+            file.write_all(entry.as_bytes())
+        })();
+        unsafe { flock(lock.as_raw_fd(), LOCK_UN); }
+        result
+    }
+}

@@ -5,9 +5,10 @@ use std::process::ChildStdout;
 use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result, anyhow};
+use indicatif::{ProgressBar, ProgressStyle};
 
 use rust_htslib::bam::{self, Read, Reader, record::Aux};
-
+use gtf_splice_index::SpliceMatchMode;
 use crate::cli::AnalysisType;
 use crate::transcriptome_to_genome::BamTranscriptomeMapper;
 use crate::quantification::{
@@ -67,7 +68,7 @@ impl BamCollector {
     pub fn from_cli(config: BamCollectorConfig) -> Result<Self> {
         let index = SpliceIndex::load(&config.index)
             .with_context(|| format!("reading splice index {}", config.index.display()))?
-            .with_match_mode(config.quant_mode.splice_match_mode());
+            .with_match_mode(SpliceMatchMode::Gene);
 
         let genome = match &config.genome {
             Some(path) => Some(
@@ -194,6 +195,24 @@ impl BamCollector {
             );
         }
 
+        // Indeterminate progress: --max-reads is a cap, not a required total.
+        let bar = ProgressBar::new_spinner();
+        bar.set_style(ProgressStyle::with_template("{spinner:.cyan} {msg}")?);
+        bar.enable_steady_tick(std::time::Duration::from_millis(200));
+        let mut progress_with_bar = |data: &QuantData, stats: &RunStats| {
+            let tagged = stats.get_issue_count("cell_umi from BAM tags");
+            bar.set_message(format!(
+                "BAM={} tagged={} gene_hits={} gene_UMIs={} SNP_REF={} SNP_ALT={}",
+                stats.get_issue_count("bam_records_seen"),
+                tagged,
+                stats.get_issue_count("collect/gene_hit_reads"),
+                stats.get_issue_count("collect/unique_umis"),
+                stats.get_issue_count("collect/snp_ref_observations"),
+                stats.get_issue_count("collect/snp_alt_observations"),
+            ));
+            progress(data, stats);
+        };
+
         for (path_id, path) in paths.iter().enumerate() {
             if self.config.max_reads.is_some_and(|max| n_seen >= max) {
                 break;
@@ -227,11 +246,13 @@ impl BamCollector {
                 &mut seen_unbarcoded,
                 read_tag_table.as_ref(),
                 (path_id as u64) + 1,
-                &mut progress,
+                &mut progress_with_bar,
             )
             .with_context(|| format!("collecting BAM {}", path.display()))?;
         }
 
+        bar.finish_and_clear();
+        new_transcripts.finalize_umi_evidence(&self.index, self.config.quant_mode, &mut data, &mut report)?;
         Ok(BamCollectorResult { data, new_transcripts, report, snp })
     }
 
@@ -269,6 +290,7 @@ impl BamCollector {
             &mut no_progress,
         )?;
 
+        new_transcripts.finalize_umi_evidence(&self.index, self.config.quant_mode, &mut data, &mut report)?;
         Ok(BamCollectorResult { data, new_transcripts, report, snp })
     }
 
@@ -568,27 +590,11 @@ impl BamCollector {
 
         processor.process_into(jobs, data, new_transcripts, report)?;
 
-        // Always report completed quantification batches, independent of the
-        // caller's progress callback or whether the health server is enabled.
-        // These are cumulative, UMI-deduplicated counts after worker merges.
-        eprintln!(
-            "[bam_tide quant] batch={} BAM={} tagged={} exact={} compatible={} intronic={} incompatible={} junction_mismatch={} exonic_umis={} intronic_umis={} snp_ref_umis={} snp_alt_umis={} novel_transcripts={} novel_umis={}",
-            jobs.len(),
-            report.get_issue_count("bam_records_seen"),
-            report.get_issue_count("cell_umi from BAM tags"),
-            report.get_issue_count("ExactJunctionChain"),
-            report.get_issue_count("Compatible"),
-            report.get_issue_count("Intronic"),
-            report.get_issue_count("Incompatible"),
-            report.get_issue_count("JunctionMismatch"),
-            data.total_umis(QuantData::EXONIC),
-            data.total_umis(QuantData::INTRONIC),
-            data.total_umis(QuantData::SNP_REF),
-            data.total_umis(QuantData::SNP_ALT),
-            new_transcripts.gtf_splice_index.transcripts.len(),
-            new_transcripts.scdata.total_umis(),
-        );
-
+        // Collection metrics are cumulative. QuantData is populated only
+        // after all UMIs have been merged and finalized.
+        let unique = new_transcripts.exon_evidence.total_umis();
+        let previous_unique = report.get_issue_count("collect/unique_umis");
+        report.report_n("collect/unique_umis", unique.saturating_sub(previous_unique));
         report.stop_single_processor_time();
 
         jobs.clear();

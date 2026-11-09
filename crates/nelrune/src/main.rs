@@ -109,7 +109,8 @@ fn run(args: Cli) -> Result<()> {
         if finished.is_file() && mapper_bam.is_file() {
             let metadata = fs::read_to_string(&finished)?;
             let expected = mapping_signature(&args, bam_input)?;
-            if !mapping_signatures_compatible(&metadata, &expected) {
+            let compatibility = mapping_signature_compatibility(&metadata, &expected);
+            if !compatibility.core_matches {
                 eprintln!("[nelrune] mapping completion marker mismatch: {}", finished.display());
                 let stored: std::collections::BTreeMap<_, _> = metadata
                     .lines()
@@ -131,6 +132,12 @@ fn run(args: Cli) -> Result<()> {
                     }
                 }
                 bail!("mapping completion marker {} does not match current input/parameters; remove the marker to remap", finished.display());
+            }
+            if compatibility.mapping_limit_is_restrictive {
+                eprintln!("[nelrune] WARNING: cached BAM was mapped with a more restrictive --max-reads limit.");
+                eprintln!("[nelrune]          stored: {:?}; requested: {:?}", compatibility.stored_limit, compatibility.requested_limit);
+                eprintln!("[nelrune]          Reusing existing BAM; results may omit reads not mapped previously.");
+                eprintln!("[nelrune]          To regenerate complete mapping, remove {} and {} and rerun Nelrune.", finished.display(), mapper_bam.display());
             }
             check_bam(&mapper_bam)?;
             progress.stage("reusing completed minimap2 BAM");
@@ -353,61 +360,91 @@ fn mapping_signature(args: &Cli, input: &Path) -> Result<String> {
     ))
 }
 
-// A completed mapping with a larger input-read budget can serve a smaller
-// quantification run. The collector enforces the requested --max-reads.
-// A smaller cached mapping cannot serve a larger request.
-fn mapping_signatures_compatible(stored: &str, expected: &str) -> bool {
+// Separate mapping-affecting parameters from diagnostics and read budgets.
+// Older v1 completion markers remain readable without forcing remapping.
+struct MappingCompatibility {
+    core_matches: bool,
+    stored_limit: Option<usize>,
+    requested_limit: Option<usize>,
+    mapping_limit_is_restrictive: bool,
+}
+
+fn mapping_signature_compatibility(stored: &str, expected: &str) -> MappingCompatibility {
     fn split(signature: &str) -> Option<(String, Option<usize>)> {
         let mut lines = signature.lines();
         let version = lines.next()?;
-        let mut rest = String::from(version);
+        let mut core = String::from(version);
         let mut limit = None;
-        let mut found = false;
+        let mut found_limit = false;
         for line in lines {
             if let Some(value) = line.strip_prefix("max_reads=") {
-                if found { return None; }
-                found = true;
+                if found_limit { return None; }
+                found_limit = true;
                 limit = if value == "None" {
                     None
                 } else {
                     Some(value.strip_prefix("Some(")?.strip_suffix(')')?.parse().ok()?)
                 };
-            } else {
-                rest.push('\n');
-                rest.push_str(line);
+            } else if !line.starts_with("barcode_crosscheck=") {
+                core.push('\n');
+                core.push_str(line);
             }
         }
-        if !found { return None; }
-        Some((rest, limit))
+        if !found_limit { return None; }
+        Some((core, limit))
     }
-    let (stored_base, stored_limit) = match split(stored) { Some(v) => v, None => return false };
-    let (expected_base, expected_limit) = match split(expected) { Some(v) => v, None => return false };
-    stored_base == expected_base && match (stored_limit, expected_limit) {
-        (None, _) => true,
-        (Some(_), None) => false,
-        (Some(available), Some(requested)) => available >= requested,
+    let (stored_core, stored_limit) = match split(stored) {
+        Some(v) => v,
+        None => return MappingCompatibility { core_matches: false, stored_limit: None, requested_limit: None, mapping_limit_is_restrictive: false },
+    };
+    let (requested_core, requested_limit) = match split(expected) {
+        Some(v) => v,
+        None => return MappingCompatibility { core_matches: false, stored_limit, requested_limit: None, mapping_limit_is_restrictive: false },
+    };
+    let restrictive = match (stored_limit, requested_limit) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(available), Some(requested)) => available < requested,
+    };
+    MappingCompatibility {
+        core_matches: stored_core == requested_core,
+        stored_limit,
+        requested_limit,
+        mapping_limit_is_restrictive: restrictive,
     }
 }
 
 #[cfg(test)]
 mod mapping_marker_tests {
-    use super::mapping_signatures_compatible;
+    use super::mapping_signature_compatibility;
 
-    fn signature(limit: &str) -> String {
-        format!("nelrune-minimap2-v1\ninput=example.bam\nmax_reads={limit}\nindex=example.mmi\n")
+    fn signature(limit: &str, crosscheck: bool) -> String {
+        format!("nelrune-minimap2-v1\ninput=example.bam\nmax_reads={limit}\nindex=example.mmi\nbarcode_crosscheck={crosscheck}\n")
     }
 
     #[test]
-    fn full_mapping_can_serve_limited_quantification() {
-        assert!(mapping_signatures_compatible(&signature("None"), &signature("Some(1000000)")));
-        assert!(mapping_signatures_compatible(&signature("Some(2000000)"), &signature("Some(1000000)")));
+    fn diagnostics_do_not_invalidate_mapping() {
+        let result = mapping_signature_compatibility(&signature("None", true), &signature("Some(2000000)", false));
+        assert!(result.core_matches);
+        assert!(!result.mapping_limit_is_restrictive);
     }
 
     #[test]
-    fn insufficient_mapping_budget_cannot_be_reused() {
-        assert!(!mapping_signatures_compatible(&signature("Some(1000000)"), &signature("None")));
-        assert!(!mapping_signatures_compatible(&signature("Some(1000000)"), &signature("Some(2000000)")));
-        assert!(!mapping_signatures_compatible(&signature("Some(1000000)"), &signature("Some(1000000)").replace("index=example.mmi", "index=other.mmi")));
+    fn restrictive_cached_mapping_warns_without_invalidating() {
+        for requested in ["None", "Some(2000000)"] {
+            let result = mapping_signature_compatibility(&signature("Some(1000000)", true), &signature(requested, false));
+            assert!(result.core_matches);
+            assert!(result.mapping_limit_is_restrictive);
+        }
+    }
+
+    #[test]
+    fn changed_index_still_invalidates_mapping() {
+        let result = mapping_signature_compatibility(
+            &signature("None", false),
+            &signature("None", true).replace("index=example.mmi", "index=other.mmi"),
+        );
+        assert!(!result.core_matches);
     }
 }
 

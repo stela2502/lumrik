@@ -1,8 +1,7 @@
 //snp.rs
 use anyhow::{Context, Result};
 use run_stats::RunStats;
-use scdata::{QuantData, SnpUmiEvidence};
-use scdata::cell_data::GeneUmiHash;
+use scdata::SnpUmiEvidence;
 use snp_index::{AlignedRead, SnpIndex, VcfReadOptions};
 
 pub struct SnpSideChannel {
@@ -33,9 +32,6 @@ impl SnpSideChannel {
     pub fn add_hits(
         &self,
         aligned: Option<&AlignedRead>,
-        cell: u64,
-        umi: u64,
-        data: &mut QuantData,
         report: &mut RunStats,
     ) -> SnpUmiEvidence {
         let mut evidence = SnpUmiEvidence::default();
@@ -56,29 +52,18 @@ impl SnpSideChannel {
 
         for snp_id in ref_ids {
             evidence.add_ref(snp_id);
-            data.try_insert(
-                QuantData::SNP_REF,
-                &cell,
-                GeneUmiHash(snp_id, umi),
-                1.0,
-                report,
-            );
         }
 
         for snp_id in alt_ids {
             evidence.add_alt(snp_id);
-            data.try_insert(
-                QuantData::SNP_ALT,
-                &cell,
-                GeneUmiHash(snp_id, umi),
-                1.0,
-                report,
-            );
         }
 
         report.report("snp hit");
         evidence
     }
+
+    pub fn min_anchor_for_diagnostic(&self) -> u8 { self.min_anchor }
+    pub fn flank_for_diagnostic(&self) -> u8 { self.flank }
 
     pub fn is_empty(&self) -> bool {
         false

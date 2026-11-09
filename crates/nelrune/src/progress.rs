@@ -90,6 +90,13 @@ pub struct RunStatus {
     pub quantified_bam_records: usize,
     pub quant_gex_provenance: usize,
     pub quant_pcr_duplicates: usize,
+    pub collect_gene_hit_reads: usize,
+    pub collect_ambiguous_gene_reads: usize,
+    pub collect_umi_observations: usize,
+    pub collect_unique_umis: usize,
+    pub collect_intron_observations: usize,
+    pub collect_snp_ref_observations: usize,
+    pub collect_snp_alt_observations: usize,
     pub compatible_bam_records: usize,
     pub unmapped_bam_records: usize,
     pub retained_cells: Option<usize>,
@@ -178,6 +185,13 @@ impl Default for RunStatus {
             quantified_bam_records: 0,
             quant_gex_provenance: 0,
             quant_pcr_duplicates: 0,
+            collect_gene_hit_reads: 0,
+            collect_ambiguous_gene_reads: 0,
+            collect_umi_observations: 0,
+            collect_unique_umis: 0,
+            collect_intron_observations: 0,
+            collect_snp_ref_observations: 0,
+            collect_snp_alt_observations: 0,
             compatible_bam_records: 0,
             unmapped_bam_records: 0,
             retained_cells: None,
@@ -505,6 +519,13 @@ impl RunProgress {
             // normalization-stage candidate/duplicate/yield statistics.
             state.quant_gex_provenance = report.get_issue_count("primer provenance GEX");
             state.quant_pcr_duplicates = report.pcr_duplicates;
+            state.collect_gene_hit_reads = report.get_issue_count("collect/gene_hit_reads");
+            state.collect_ambiguous_gene_reads = report.get_issue_count("collect/ambiguous_gene_reads");
+            state.collect_umi_observations = report.get_issue_count("collect/umi_observations");
+            state.collect_unique_umis = report.get_issue_count("collect/unique_umis");
+            state.collect_intron_observations = report.get_issue_count("collect/intron_observations");
+            state.collect_snp_ref_observations = report.get_issue_count("collect/snp_ref_observations");
+            state.collect_snp_alt_observations = report.get_issue_count("collect/snp_alt_observations");
             state.quantified_bam_records = report.get_issue_count("cell_umi from BAM tags");
             state.compatible_bam_records = report.get_issue_count("Compatible");
             state.unmapped_bam_records = report.get_issue_count("unmapped");
@@ -870,6 +891,14 @@ impl ServerContent for RunStatus {
                         StatusMetric::new("BAM records seen", self.bam_records_seen.to_string()),
                         StatusMetric::new("GEX provenance alignments", self.quant_gex_provenance.to_string()),
                         StatusMetric::new("Quantification PCR duplicates", self.quant_pcr_duplicates.to_string()),
+                        StatusMetric::new("Gene-hit reads", self.collect_gene_hit_reads.to_string()),
+                        StatusMetric::new("Ambiguous-gene reads", self.collect_ambiguous_gene_reads.to_string()),
+                        StatusMetric::new("UMI observations", self.collect_umi_observations.to_string()),
+                        StatusMetric::new("Unique gene UMIs", self.collect_unique_umis.to_string()),
+                        StatusMetric::new("UMI merges", self.collect_umi_observations.saturating_sub(self.collect_unique_umis).to_string()),
+                        StatusMetric::new("Intronic observations", self.collect_intron_observations.to_string()),
+                        StatusMetric::new("SNP REF observations", self.collect_snp_ref_observations.to_string()),
+                        StatusMetric::new("SNP ALT observations", self.collect_snp_alt_observations.to_string()),
                         StatusMetric::new(
                             "BAM records with cell / UMI",
                             format!(
