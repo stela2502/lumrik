@@ -172,9 +172,14 @@ impl BamTranscriptomeMapper {
         let tx = match self.index.transcript_by_name(transcript_name) {
             Ok(tx) => tx,
             Err(_) => {
-                self.stats.unknown_transcript += 1;
-                return Ok(false);
+                anyhow::bail!(
+                "FATAL: Transcript '{}' exists in the mapper BAM but not in \
+                 the Lumrik annotation index. \
+                 The mapper and annotation indices are incompatible!",
+                 transcript_name
+             );
             }
+
         };
 
         let tx_start0 = u32::try_from(record.pos()).with_context(|| {

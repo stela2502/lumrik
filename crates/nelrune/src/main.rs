@@ -149,9 +149,38 @@ fn run(args: Cli) -> Result<()> {
             (FeatureTagCounts::default(), 0)
         } else {
             if finished.exists() { fs::remove_file(&finished)?; }
-            progress.stage("normalizing ONT into temporary FASTQ");
-            let (count, features) = normalize_ont_fastq(&args, &primer, bam_input, &mut progress)?;
-            if count == 0 { bail!("normalization emitted no mapper-ready reads"); }
+            // Normalization is independent of the mapper reference. Keep its
+            // FASTQ and completion marker across remapping runs.
+            let fastq = args.outpath.join("normalized.minimap2.fastq");
+            let norm_marker = args.outpath.join("normalized.minimap2.fastq.finished");
+            let norm_signature = normalization_signature(&args, bam_input)?;
+            let reusable = fastq.is_file()
+                && norm_marker.is_file()
+                && fs::read_to_string(&norm_marker)
+                    .map(|stored| stored == norm_signature)
+                    .unwrap_or(false);
+            let (count, features) = if reusable {
+                if !args.additional_features.is_empty() {
+                    bail!("cached ONT FASTQ cannot restore additional-feature counts; normalization must be rerun");
+                }
+                progress.stage("reusing normalized ONT FASTQ");
+                eprintln!("[nelrune] reusing normalized FASTQ {}", fastq.display());
+                (1, FeatureTagCounts::default())
+            } else {
+                if norm_marker.exists() {
+                    fs::remove_file(&norm_marker)
+                        .with_context(|| format!("removing stale normalization marker {}", norm_marker.display()))?;
+                }
+                progress.stage("normalizing ONT into persistent FASTQ");
+                let result = normalize_ont_fastq(&args, &primer, bam_input, &mut progress)?;
+                if result.0 == 0 { bail!("normalization emitted no mapper-ready reads"); }
+                let tmp = norm_marker.with_extension("finished.partial");
+                fs::write(&tmp, &norm_signature)
+                    .with_context(|| format!("writing normalization marker {}", tmp.display()))?;
+                fs::rename(&tmp, &norm_marker)
+                    .with_context(|| format!("publishing normalization marker {}", norm_marker.display()))?;
+                result
+            };
             progress.stage("minimap2 | samtools: writing mapped BAM");
             map_minimap2_bam(&args, &mapper_bam)?;
             check_bam(&mapper_bam)?;
@@ -159,7 +188,6 @@ fn run(args: Cli) -> Result<()> {
             let marker_tmp = PathBuf::from(format!("{}.finished.partial", mapper_bam.display()));
             fs::write(&marker_tmp, signature)?;
             fs::rename(&marker_tmp, &finished)?;
-            let _ = fs::remove_file(args.outpath.join("normalized.minimap2.fastq"));
             (features, count)
         }
     } else {
@@ -345,6 +373,20 @@ fn run(args: Cli) -> Result<()> {
     Ok(())
 }
 
+// Deliberately excludes mapper index, mapper threads, and quantification
+// settings: none of these affect the normalized ONT read sequences.
+fn normalization_signature(args: &Cli, input: &Path) -> Result<String> {
+    let meta = fs::metadata(input)
+        .with_context(|| format!("reading ONT input metadata {}", input.display()))?;
+    let mtime = meta.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    Ok(format!(
+        "nelrune-ont-normalization-v1\ninput={}\nsize={}\nmtime={}\nprimer={:?}\nmax_reads={:?}\nmin_transcript_len={}\nadditional_features={:?}\nadditional_feature_min_hits={:?}\n",
+        input.canonicalize()?.display(), meta.len(), mtime,
+        args.primer, args.bam_collector.max_reads, args.min_transcript_len,
+        args.additional_features, args.additional_feature_min_hits,
+    ))
+}
+
 fn mapping_signature(args: &Cli, input: &Path) -> Result<String> {
     let input_meta = fs::metadata(input)?;
     let index_meta = fs::metadata(&args.mapper.mapper_index)?;
@@ -352,10 +394,10 @@ fn mapping_signature(args: &Cli, input: &Path) -> Result<String> {
         Ok(m.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos())
     };
     Ok(format!(
-        "nelrune-minimap2-v1\ninput={}\ninput_size={}\ninput_mtime={}\nindex={}\nindex_size={}\nindex_mtime={}\nprimer={:?}\nmapper_options={:?}\nmapper_threads={}\nmax_reads={:?}\nmin_transcript_len={}\nbarcode_crosscheck={}\n",
+        "nelrune-minimap2-v2\ninput={}\ninput_size={}\ninput_mtime={}\nindex={}\nindex_size={}\nindex_mtime={}\nprimer={:?}\nmapper_options={:?}\nmapper_threads={}\nmax_reads={:?}\nmin_transcript_len={}\nbarcode_crosscheck={}\n",
         input.canonicalize()?.display(), input_meta.len(), modified(&input_meta)?,
         args.mapper.mapper_index.canonicalize()?.display(), index_meta.len(), modified(&index_meta)?,
-        args.primer, args.mapper.mapper_options, args.mapper.mapper_threads,
+        args.primer, args.mapper.launch()?.options, args.mapper.mapper_threads,
         args.bam_collector.max_reads, args.min_transcript_len, args.barcode_crosscheck,
     ))
 }
@@ -419,7 +461,7 @@ mod mapping_marker_tests {
     use super::mapping_signature_compatibility;
 
     fn signature(limit: &str, crosscheck: bool) -> String {
-        format!("nelrune-minimap2-v1\ninput=example.bam\nmax_reads={limit}\nindex=example.mmi\nbarcode_crosscheck={crosscheck}\n")
+        format!("nelrune-minimap2-v2\ninput=example.bam\nmax_reads={limit}\nindex=example.mmi\nbarcode_crosscheck={crosscheck}\n")
     }
 
     #[test]

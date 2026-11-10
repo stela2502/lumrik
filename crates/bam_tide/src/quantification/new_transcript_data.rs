@@ -207,24 +207,39 @@ impl NewTranscriptData {
                         .ok_or_else(|| anyhow::anyhow!("no reference for gene {gene_id}"))?;
                     let closest_tx = &reference.transcripts[closest_id];
                     let reference_name = closest_tx.primary_name().unwrap_or(gene_name);
-                    // Only *internal* missing reference exons contribute an event.
-                    // The current bitmap does not retain splice-junction connectivity;
-                    // call these candidates, never confirmed deletions.
+                    // Describe actual reference-relative changes using genomic intervals.
+                    // An unobserved terminal exon is UNKNOWN, not a deletion.
                     let mut events = Vec::new();
+                    let mut missing_coding_bases = 0u32;
+                    let mut has_missing_cds = false;
                     for exon in closest_tx.exons() {
                         if exon.start <= observed_first || exon.end >= observed_last { continue; }
                         if !blocks.iter().any(|b| b.overlaps(*exon)) {
-                            events.push(format!("{chr}:{}-{}_internal_missing", exon.start + 1, exon.end));
+                            events.push(format!("skip_{chr}:{}-{}", exon.start + 1, exon.end));
+                            if let Some(removed) = closest_tx.coding_bases_removed_by_junction(exon.start, exon.end) {
+                                missing_coding_bases += removed;
+                                has_missing_cds |= removed > 0;
+                            }
                         }
                     }
-                    // Additional observed regions are coverage, not structural events.
-                    // Keep them in per-UMI supported_regions instead of transcript IDs.
+                    // A fragment inside an annotated exon is ordinary partial coverage.
+                    // Only disjoint blocks can represent a genuinely added region.
+                    for block in &blocks {
+                        if !closest_tx.exons().iter().any(|exon| exon.overlaps(*block)) {
+                            events.push(format!("add_{chr}:{}-{}", block.start + 1, block.end));
+                        }
+                    }
                     events.sort();
                     events.dedup();
-                    if events.is_empty() {
-                        events.push("unresolved".to_owned());
+                    // Do not invent a novel transcript when no structural change
+                    // can be described. Such UMIs remain unassigned to a novel model.
+                    if events.is_empty() { continue; }
+                    let mut name = format!("{reference_name}_{}", events.join("_"));
+                    // This is a conditional coding prediction, not evidence that
+                    // an unobserved exon was actually spliced out.
+                    if has_missing_cds && missing_coding_bases % 3 != 0 {
+                        name.push_str("_frameshift");
                     }
-                    let name = format!("{reference_name}_mod_{}", events.join("_"));
                     // Construct the model from the closest full reference, not
                     // the truncated read footprint. Remove only internal exons
                     // absent from the observed interval.
@@ -249,20 +264,9 @@ impl NewTranscriptData {
                         canonical.push(block);
                     }
                     let model_blocks = canonical;
-                    // Event labels alone are not unique transcript identities:
-                    // distinct exon structures can have the same `_observed` event.
-                    // Include a deterministic fingerprint of the full structure,
-                    // without changing the human-readable genomic event prefix.
-                    let mut fingerprint = 0xcbf29ce484222325u64;
-                    for value in std::iter::once(gene_id as u64).chain(
-                        model_blocks.iter().flat_map(|b| [b.start as u64, b.end as u64])
-                    ) {
-                        for byte in value.to_le_bytes() {
-                            fingerprint ^= byte as u64;
-                            fingerprint = fingerprint.wrapping_mul(0x100000001b3);
-                        }
-                    }
-                    let name = format!("{name}_structure_{fingerprint:016x}");
+                    // IDs describe the biological structural change, never a hash.
+                    // insert_novel_transcript validates that an existing name has
+                    // identical exon coordinates; incompatible collisions are rejected.
                     let id = match self.gtf_splice_index.insert_novel_transcript(
                         gene_name, &name, chr, closest_tx.strand, &model_blocks) {
                         Ok(id) => id,

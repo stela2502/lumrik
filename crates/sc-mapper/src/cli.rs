@@ -89,7 +89,17 @@ impl StreamingMapperCli {
                 prepare_star_options(&mut options)?;
             }
 
-            MapperKind::Minimap2 => {}
+            MapperKind::Minimap2 => {
+                // Splice-aware genomic alignment is the ONT default. An explicit
+                // -x preset (including -ax splice) always takes precedence.
+                let has_preset = options.iter().any(|arg| {
+                    arg == "-x" || arg.starts_with("-x") && arg.len() > 2
+                        || arg == "-ax" || arg.starts_with("-ax") && arg.len() > 3
+                });
+                if !has_preset {
+                    options.splice(0..0, ["-x".to_string(), "splice".to_string()]);
+                }
+            }
 
             MapperKind::Bwa => {}
         }
@@ -194,4 +204,38 @@ fn prepare_star_options(options: &mut Vec<String>) -> Result<()> {
     ]);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod minimap2_preset_tests {
+    use super::*;
+
+    fn cli(options: Option<&str>) -> StreamingMapperCli {
+        StreamingMapperCli {
+            mapper: MapperKind::Minimap2,
+            mapper_bin: None,
+            mapper_index: "genome.mmi".into(),
+            mapper_options: options.map(str::to_owned),
+            mapper_threads: 4,
+            mapper_paired: false,
+            mapper_keep_multimappers: true,
+        }
+    }
+
+    #[test]
+    fn defaults_to_genomic_splice() {
+        assert_eq!(cli(None).launch().unwrap().options, ["-x", "splice"]);
+    }
+
+    #[test]
+    fn explicit_preset_overrides_default() {
+        assert_eq!(cli(Some("-x map-ont")).launch().unwrap().options, ["-x", "map-ont"]);
+        assert_eq!(cli(Some("-ax splice:hq")).launch().unwrap().options, ["-ax", "splice:hq"]);
+    }
+
+    #[test]
+    fn other_options_keep_splice_default() {
+        assert_eq!(cli(Some("--secondary=yes")).launch().unwrap().options,
+            ["-x", "splice", "--secondary=yes"]);
+    }
 }
