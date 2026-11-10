@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai_llm_con"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -240,7 +240,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bam_tide"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -640,9 +640,9 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "crc32fast"
-version = "1.5.4"
+version = "1.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f97d3416d5337d15c4b0d78c8c91df922ca143f57ec20e2d1c188333047ef04"
+checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
 dependencies = [
  "cfg-if",
 ]
@@ -789,7 +789,7 @@ checksum = "ef8ae57c4978a2acd8b869ce6b9ca1dfe817bff704c220209fdef2c0b75a01b9"
 
 [[package]]
 name = "data_table"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1016,7 +1016,7 @@ dependencies = [
 
 [[package]]
 name = "fast_tag_mapper"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1361,7 +1361,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "gtf_splice_index"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1491,7 +1491,7 @@ checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hmm"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "hts-sys"
@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-dna"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
  "int-to-prot",
@@ -1713,7 +1713,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-prot"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "interpol"
@@ -1868,9 +1868,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libz-sys"
-version = "1.1.32"
+version = "1.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69965d2409bff8c8cea3829009fff66a86f05a0570656552ef70f616e8e4bd85"
+checksum = "fee3f59f4321dab0c78d828942e7aa09d0bd8ad6e78a501977e6bf3d02938045"
 dependencies = [
  "cc",
  "cmake",
@@ -2006,14 +2006,14 @@ dependencies = [
 
 [[package]]
 name = "lumrik-status"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "lumrik_clap"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
 ]
@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "nelrune"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -2420,7 +2420,7 @@ dependencies = [
 
 [[package]]
 name = "ommverse"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -2957,7 +2957,7 @@ dependencies = [
 
 [[package]]
 name = "read-tag-table"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2987,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "reference_curator"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3041,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "run_stats"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "atty",
  "chrono",
@@ -3187,7 +3187,7 @@ dependencies = [
 
 [[package]]
 name = "sc-analysis"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3210,7 +3210,7 @@ dependencies = [
 
 [[package]]
 name = "sc-beacon"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3226,7 +3226,7 @@ dependencies = [
 
 [[package]]
 name = "sc-mapper"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -3242,11 +3242,11 @@ dependencies = [
 
 [[package]]
 name = "sc-regnet"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "sc-te"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -3264,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "sc-vdj"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3285,7 +3285,7 @@ dependencies = [
 
 [[package]]
 name = "sc_anndata"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "data_table",
@@ -3297,7 +3297,7 @@ dependencies = [
 
 [[package]]
 name = "sc_primer"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3315,7 +3315,7 @@ dependencies = [
 
 [[package]]
 name = "scdata"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3521,7 +3521,7 @@ checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 
 [[package]]
 name = "snp-index"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3841,7 +3841,7 @@ dependencies = [
 
 [[package]]
 name = "traconmech"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ai_llm_con",
  "anyhow",
