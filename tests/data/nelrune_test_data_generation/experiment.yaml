@@ -1,0 +1,28 @@
+# Reproducible synthetic ONT experiment. Paths are relative to this YAML.
+# Run: cargo run -r -p nelrune -- materialize-norn-test-data --config tests/data/nelrune_test_data_generation/experiment.yaml --out tests/data/nelrune_test_data
+reference:
+  fasta: genome.fa.gz
+  gtf: genes.gtf.gz
+  vcf: variants.vcf.gz
+  gene_id: SYNTH_SPLICE4
+chemistry: tenx-3p-v3
+# Shared by read synthesis and Nelrune ONT detection.
+primer_structure: "TYPE:GEX+FIXED:CTACACGACGCTCTTCCGATCT:mm=2+TENX_CELL:3p-v3+UMI:12"
+cell_barcode: AAACCCAAGAAACACT
+reads_per_umi: 10
+# Exactly three additional PCR copies of existing fragments (0-based fragment index).
+# Each copy retains the same cell, UMI and insert; only its read ID changes.
+pcr_duplicates:
+  - {haplotype: splice_mutant, umi: ACGTACGTACGT, fragment: 0}
+  - {haplotype: splice_mutant, umi: TGCATGCATGCA, fragment: 4}
+  - {haplotype: canonical, umi: AACCGGTTAACC, fragment: 7}
+seed: 42
+haplotypes:
+  - name: splice_mutant
+    allele: 0
+    umis: [ACGTACGTACGT, TGCATGCATGCA]
+    exons: [1, 3, 4]
+  - name: canonical
+    allele: 1
+    umis: [AACCGGTTAACC, TTGGCCAATTGG]
+    exons: [1, 2, 3, 4]

@@ -13,6 +13,8 @@ anyhow = "1"
 clap = { workspace = true }
 rayon = "1"
 flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
 
 bam_tide = { path = "../bam_tide" }
 gtf_splice_index = { path = "../gtf_splice_index" }

@@ -2258,6 +2258,8 @@ dependencies = [
  "sc-vdj",
  "sc_primer",
  "scdata",
+ "serde",
+ "serde_yaml",
  "snp-index",
  "sprs",
 ]

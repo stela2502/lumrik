@@ -21,3 +21,7 @@ MEIS2.*
 AUTS*
 ETV*
 scripts/__pycache__/
+
+# Generated Nelrune synthetic-reference mapper indexes.
+# Integration-test outputs under /target/ are already ignored.
+/tests/data/nelrune_test_data/indexes/

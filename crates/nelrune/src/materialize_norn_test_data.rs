@@ -3,6 +3,9 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
+#[path = "ont_fixture.rs"]
+mod ont_fixture;
+
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use int_to_dna::TwoBitReader;
@@ -26,7 +29,7 @@ const LOCUS_SPACER: usize = 101;
 struct Args {
     /// Ommverse index whose source genome supplies the fixture chromosomes.
     #[arg(long)]
-    ommverse_index: lumrik_clap::ReadableFile,
+    ommverse_index: Option<lumrik_clap::ReadableFile>,
 
     /// Output directory for genome.fa, genes.gtf, R1.fastq and R2.fastq.
     #[arg(value_parser = lumrik_clap::parse_output_file, long)]
@@ -34,7 +37,7 @@ struct Args {
 
     /// Rich one-cell VDJ BAM whose read/UMI evidence is rehydrated as raw BD reads.
     #[arg(long)]
-    vdj_bam: lumrik_clap::ReadableFile,
+    vdj_bam: Option<lumrik_clap::ReadableFile>,
 
     /// GEX genes to include. Defaults to Actb and Gapdh.
     #[arg(long, num_args = 1..)]
@@ -43,16 +46,29 @@ struct Args {
     /// Official one-based BD/Rustody v2.384 cell id used by the fixture.
     #[arg(long, default_value_t = DEFAULT_CELL_ID)]
     cell_id: u64,
+
+    /// Reference-backed YAML experiment (FASTA/GTF/VCF, haplotypes and UMIs).
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Verify an existing generated experiment without rewriting it.
+    #[arg(long, requires = "config")]
+    verify: bool,
 }
 
 pub fn run() -> Result<()> {
     let args = Args::parse_from(std::env::args().skip(1));
+    if let Some(config) = &args.config {
+        return ont_fixture::execute(config, &args.out, args.verify);
+    }
+    if args.verify { bail!("--verify requires --config"); }
     materialize(args)
 }
 
 fn materialize(args: Args) -> Result<()> {
-    let omm = Ommverse::load(&args.ommverse_index)
-        .with_context(|| format!("loading Ommverse index {}", args.ommverse_index.display()))?;
+    let index = args.ommverse_index.as_ref().context("--ommverse-index is required without --config")?;
+    let omm = Ommverse::load(index)
+        .with_context(|| format!("loading Ommverse index {}", index.display()))?;
     let mut genome = TwoBitReader::open(&omm.genome_twobit)
         .with_context(|| format!("opening source genome {}", omm.genome_twobit.display()))?;
 
@@ -210,7 +226,7 @@ fn materialize(args: Args) -> Result<()> {
         }
     }
 
-    let vdj_bam = args.vdj_bam;
+    let vdj_bam = args.vdj_bam.context("--vdj-bam is required without --config")?;
     let mut bam = bam::Reader::from_path(&vdj_bam)
         .with_context(|| format!("opening one-cell VDJ fixture {}", vdj_bam.display()))?;
     let mut vdj_umis = BTreeSet::new();
