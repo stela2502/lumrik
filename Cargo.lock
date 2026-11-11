@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ai_llm_con"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -240,7 +240,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bam_tide"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -789,7 +789,7 @@ checksum = "ef8ae57c4978a2acd8b869ce6b9ca1dfe817bff704c220209fdef2c0b75a01b9"
 
 [[package]]
 name = "data_table"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1016,7 +1016,7 @@ dependencies = [
 
 [[package]]
 name = "fast_tag_mapper"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1361,7 +1361,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "gtf_splice_index"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1491,7 +1491,7 @@ checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hmm"
-version = "1.0.2"
+version = "1.0.3"
 
 [[package]]
 name = "hts-sys"
@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-dna"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "clap",
  "int-to-prot",
@@ -1713,7 +1713,7 @@ dependencies = [
 
 [[package]]
 name = "int-to-prot"
-version = "1.0.2"
+version = "1.0.3"
 
 [[package]]
 name = "interpol"
@@ -2006,14 +2006,14 @@ dependencies = [
 
 [[package]]
 name = "lumrik-status"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "lumrik_clap"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "clap",
 ]
@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "nelrune"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -2422,7 +2422,7 @@ dependencies = [
 
 [[package]]
 name = "ommverse"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "read-tag-table"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2989,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "reference_curator"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3043,7 +3043,7 @@ dependencies = [
 
 [[package]]
 name = "run_stats"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "atty",
  "chrono",
@@ -3189,7 +3189,7 @@ dependencies = [
 
 [[package]]
 name = "sc-analysis"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3212,7 +3212,7 @@ dependencies = [
 
 [[package]]
 name = "sc-beacon"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3228,7 +3228,7 @@ dependencies = [
 
 [[package]]
 name = "sc-mapper"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -3244,11 +3244,11 @@ dependencies = [
 
 [[package]]
 name = "sc-regnet"
-version = "1.0.2"
+version = "1.0.3"
 
 [[package]]
 name = "sc-te"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "bam_tide",
@@ -3266,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "sc-vdj"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3287,7 +3287,7 @@ dependencies = [
 
 [[package]]
 name = "sc_anndata"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "data_table",
@@ -3299,7 +3299,7 @@ dependencies = [
 
 [[package]]
 name = "sc_primer"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3317,7 +3317,7 @@ dependencies = [
 
 [[package]]
 name = "scdata"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3523,7 +3523,7 @@ checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 
 [[package]]
 name = "snp-index"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "flate2",
@@ -3843,7 +3843,7 @@ dependencies = [
 
 [[package]]
 name = "traconmech"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ai_llm_con",
  "anyhow",
