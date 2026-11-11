@@ -1,6 +1,6 @@
 //job.rs
 use anyhow::{Context, Result};
-use rust_htslib::bam::record::Aux;
+use rust_htslib::bam::record::{Aux, Cigar};
 use rust_htslib::bam::{HeaderView, Record};
 
 use crate::core::ref_block::record_to_blocks;
@@ -346,6 +346,22 @@ impl<'a> JobBuilder<'a> {
         };
 
         let mut spliced = SplicedRead::new(chr_id, strand, blocks);
+        // Extract junctions from the original CIGAR, not the block gaps:
+        // deletions (D) and distinct alignments never establish a splice.
+        let mut pos = rec.pos() as u64;
+        for op in rec.cigar().iter() {
+            match *op {
+                Cigar::RefSkip(n) => {
+                    let end = pos + n as u64;
+                    if end <= u32::MAX as u64 && n > 0 {
+                        spliced.junctions.push((pos as u32, end as u32));
+                    }
+                    pos = end;
+                }
+                Cigar::Match(n) | Cigar::Equal(n) | Cigar::Diff(n) | Cigar::Del(n) => pos += n as u64,
+                _ => {},
+            }
+        }
         spliced.finalize();
 
         Some(spliced)

@@ -29,7 +29,7 @@ pub struct PrimerDetector {
     primer_translation: HashMap<u64, (u64, usize)>,
     umi_translation: HashMap<u64, usize>,
     alternates: Vec<PrimerDetector>,
-    barcode_crosscheck: Option<Arc<Vec<(TenxVersion, TenxWhitelist)>>>,
+    barcode_crosscheck: Option<Arc<std::sync::OnceLock<Vec<(TenxVersion, TenxWhitelist)>>>>,
 }
 
 impl PrimerDetector {
@@ -102,25 +102,22 @@ impl PrimerDetector {
                 "--barcode-crosscheck currently requires a TENX_CELL grammar",
             ));
         };
-        let versions = [
-            TenxVersion::ThreePrimeV2,
-            TenxVersion::ThreePrimeV3, TenxVersion::ThreePrimeV4,
-            TenxVersion::FivePrime, TenxVersion::MultiomeArcV1,
-        ];
-        let mut alternatives = Vec::new();
-        for version in versions {
-            if version != primary.version() {
-                match TenxWhitelist::builtin(version) {
-                    Ok(whitelist) => alternatives.push((version, whitelist)),
-                    Err(error) => eprintln!(
-                        "[nelrune] barcode crosscheck: skipping unsupported {:?} whitelist: {}",
-                        version, error
-                    ),
-                }
-            }
-        }
-        self.barcode_crosscheck = Some(Arc::new(alternatives));
+        // Enabling diagnostics must not load every 10x whitelist at startup.
+        // Only a rejected, anchored barcode triggers the alternative lookup.
+        let _ = primary;
+        self.barcode_crosscheck = Some(Arc::new(std::sync::OnceLock::new()));
         Ok(self)
+    }
+
+    fn crosscheck_models(&self) -> Option<&Vec<(TenxVersion, TenxWhitelist)>> {
+        let cache = self.barcode_crosscheck.as_ref()?;
+        let SingleCellSystem::Tenx(primary) = self.single_cell_system.as_ref()? else { return None };
+        Some(cache.get_or_init(|| [
+            TenxVersion::ThreePrimeV2, TenxVersion::ThreePrimeV3,
+            TenxVersion::ThreePrimeV4, TenxVersion::FivePrime,
+            TenxVersion::MultiomeArcV1,
+        ].into_iter().filter(|v| *v != primary.version())
+            .map(|v| (v, TenxWhitelist::lazy_builtin(v))).collect()))
     }
 
     /// Exhaustive independent primer/whitelist diagnostic. Enabled only by
@@ -264,7 +261,7 @@ impl PrimerDetector {
     pub fn crosscheck_rejected(
         &self, seq: &[u8], _qual: &[u8], accepted: &[PrimerMatch],
     ) -> Vec<&'static str> {
-        let Some(models) = &self.barcode_crosscheck else { return Vec::new() };
+        let Some(models) = self.crosscheck_models() else { return Vec::new() };
         let ops = match self.grammar.ops.as_slice() {
             [GrammarOp::Search { .. }, rest @ ..] => rest,
             ops => ops,
@@ -1243,8 +1240,8 @@ mod optional_barcode_crosscheck_tests {
             .expect("valid detector")
             .with_barcode_crosscheck()
             .expect("optional models must not abort detector initialization");
-        let models = detector.barcode_crosscheck.as_ref().expect("crosscheck enabled");
-        assert!(models.iter().all(|(_, whitelist)| whitelist.len() > 0));
+        let models = detector.crosscheck_models().expect("crosscheck enabled");
+        assert!(!models.is_empty());
         assert!(models.iter().all(|(version, _)| *version != TenxVersion::ThreePrimeV4));
     }
 }

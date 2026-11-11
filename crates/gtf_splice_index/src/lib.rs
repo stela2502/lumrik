@@ -32,3 +32,8 @@ pub use model::types::QuantClass;
 pub use model::{MatchClass, MatchOptions, OverhangClass, PlacementAudit};
 
 pub use exon_catalog::{ExonMask, GeneExonCatalog, UmiTranscriptMatch};
+
+pub mod transcript_posterior;
+pub use transcript_posterior::{posterior_for_partial_observation, TranscriptPosterior, TranscriptPrior};
+
+pub use transcript_posterior::{posterior_with_snp_evidence, MoleculeSnpEvidence, TranscriptSnpSupport};

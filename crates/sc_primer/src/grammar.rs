@@ -110,7 +110,7 @@ impl Grammar {
                 GrammarOp::TenxCell { version } => {
                     cell_len += version.cell_len();
 
-                    system = Some(SingleCellSystem::Tenx(TenxWhitelist::builtin(*version)?));
+                    system = Some(SingleCellSystem::Tenx(TenxWhitelist::lazy_builtin(*version)));
                 }
 
                 GrammarOp::Fixed { seq, mismatches } if anchor_search.is_none() => {

@@ -1,3 +1,4 @@
+mod bam_quant;
 mod materialize_norn_test_data;
 mod prepare_fastqs;
 mod quant;
@@ -33,6 +34,7 @@ fn main() -> Result<()> {
         Some("prepare-fastqs") => return prepare_fastqs::run(),
         Some("materialize-norn-test-data") => return materialize_norn_test_data::run(),
         Some("quant") => return quant::run(),
+        Some("bam-quant") => return bam_quant::run(),
         Some("vdj") => return vdj::run(),
         _ => {}
     }
@@ -213,36 +215,72 @@ fn run(args: Cli) -> Result<()> {
     progress.stop_timer("nelrune/startup");
     if submitted > 0 { eprintln!("[nelrune] submitted {submitted} normalization batches"); }
 
+    quantify_mapped_bam(
+        &mapper_bam, &args.bam_collector, &args.outpath, args.min_umi_count,
+        Some(primer.grammar().clone()), cell_barcode_len, feature_counts, &mut progress,
+    )?;
+
+    Ok(())
+}
+
+// Deliberately excludes mapper index, mapper threads, and quantification
+// settings: none of these affect the normalized ONT read sequences.
+fn normalization_signature(args: &Cli, input: &Path) -> Result<String> {
+    let meta = fs::metadata(input)
+        .with_context(|| format!("reading ONT input metadata {}", input.display()))?;
+    let mtime = meta.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    Ok(format!(
+        "nelrune-ont-normalization-v1\ninput={}\nsize={}\nmtime={}\nprimer={:?}\nmax_reads={:?}\nmin_transcript_len={}\nadditional_features={:?}\nadditional_feature_min_hits={:?}\n",
+        input.canonicalize()?.display(), meta.len(), mtime,
+        args.primer, args.bam_collector.max_reads, args.min_transcript_len,
+        args.additional_features, args.additional_feature_min_hits,
+    ))
+}
+
+/// Quantify existing Nelrune alignments without repeating ONT normalization or mapping.
+///
+/// Encoded QNAME cell/UMI evidence is decoded by bam-tide; the same Bayesian
+/// transcript resolution and matrix export are used by normal Nelrune runs.
+pub(crate) fn quantify_mapped_bam(
+    mapper_bam: &Path,
+    config: &bam_tide::quantification::bam_collector::BamCollectorConfig,
+    outpath: &Path,
+    min_umi_count: Option<usize>,
+    grammar: Option<sc_primer::Grammar>,
+    cell_barcode_len: usize,
+    mut feature_counts: FeatureTagCounts,
+    progress: &mut RunProgress,
+) -> Result<()> {
     progress.stage("quantifying mapper BAM");
     progress.start_timer("nelrune/quantification");
 
-    let collector = BamCollector::from_cli(args.bam_collector.clone())
-        .context("configuring BAM collector")?
-        .with_grammar(primer.grammar().clone());
+    let mut collector = BamCollector::from_cli(config.clone())
+        .context("configuring BAM collector")?;
+    if let Some(grammar) = grammar { collector = collector.with_grammar(grammar); }
     let mut result = collector
-        .run_paths_with_progress(std::slice::from_ref(&mapper_bam), |data, report| {
+        .run_paths_with_progress(std::slice::from_ref(&mapper_bam.to_path_buf()), |data, report| {
             progress.update_quantification_live(data, report);
         })
         .context("collecting BAM quantification")?;
     progress.update_quantification_live(&result.data, &result.report);
-    result.new_transcripts.write_reports(&args.outpath)?;
+    result.new_transcripts.write_reports(&outpath)?;
     let mut data = result.data;
     let mut report = result.report;
     progress.stop_timer("nelrune/quantification");
 
-    let index = SpliceIndex::load(&args.bam_collector.index)
+    let index = SpliceIndex::load(&config.index)
         .with_context(|| {
             format!(
                 "reading splice index {} for export",
-                args.bam_collector.index.display()
+                config.index.display()
             )
         })?
-        .with_match_mode(args.bam_collector.quant_mode.splice_match_mode());
+        .with_match_mode(config.quant_mode.splice_match_mode());
 
     progress.stage("writing quantification");
     progress.start_timer("nelrune/writing");
 
-    let (retained_cells, calling) = if let Some(min_umi_count) = args.min_umi_count {
+    let (retained_cells, calling) = if let Some(min_umi_count) = min_umi_count {
         println!("Applying user-defined cell UMI cutoff: {}", min_umi_count);
         (data.cells_with_min_exonic_umis(min_umi_count), None)
     } else {
@@ -250,15 +288,15 @@ fn run(args: Cli) -> Result<()> {
 
         let calling = bam_tide::results::beacon_cell_calling(&data).map_err(anyhow::Error::msg)?;
 
-        std::fs::create_dir_all(&args.outpath)
-            .with_context(|| format!("creating {}", args.outpath.display()))?;
+        std::fs::create_dir_all(&outpath)
+            .with_context(|| format!("creating {}", outpath.display()))?;
 
         calling
-            .write_tsv(args.outpath.join("cell_calling.tsv"))
+            .write_tsv(outpath.join("cell_calling.tsv"))
             .map_err(anyhow::Error::msg)?;
 
         calling
-            .write_qc(args.outpath.join("qc"))
+            .write_qc(outpath.join("qc"))
             .map_err(anyhow::Error::msg)?;
 
         let retained = calling.retained.clone();
@@ -277,7 +315,7 @@ fn run(args: Cli) -> Result<()> {
     progress.stage("writing raw and filtered quantification matrices");
     let cell_accounting = data
         .write_raw_and_filtered_for_cells(
-            &args.outpath,
+            &outpath,
             &retained_cells,
             &indexes,
             Some(cell_barcode_len),
@@ -290,14 +328,14 @@ fn run(args: Cli) -> Result<()> {
     // only the canonical GEX cells under filtered/.
     progress.stage("writing raw additional-feature tables");
     feature_counts
-        .finalize_and_write_all(cell_barcode_len, &args.outpath.join("raw"))
+        .finalize_and_write_all(cell_barcode_len, &outpath.join("raw"))
         .context("writing raw additional feature tables")?;
     progress.stage("writing filtered additional-feature tables");
     feature_counts
         .finalize_and_write(
             &retained_cells,
             cell_barcode_len,
-            &args.outpath.join("filtered"),
+            &outpath.join("filtered"),
         )
         .context("writing filtered additional feature tables")?;
     progress.stage("quantification output files written");
@@ -327,14 +365,13 @@ fn run(args: Cli) -> Result<()> {
                 calling.fit.score,
                 retained_cells.len(),
                 cell_accounting.exonic_cells.saturating_sub(retained_cells.len()),
-                args.outpath.join("cell_calling.tsv").display(),
-                args.outpath.join("qc").display(),
+                outpath.join("cell_calling.tsv").display(),
+                outpath.join("qc").display(),
                 cell_accounting,
             ),
         );
     } else {
-        let cutoff = args
-            .min_umi_count
+        let cutoff = min_umi_count
             .expect("fixed cell calling requires --min-umi-count");
         progress.report_block(
             "Cell calling",
@@ -354,13 +391,13 @@ fn run(args: Cli) -> Result<()> {
     progress.report_timings();
     progress.report_block("Quantification report", &report);
 
-    fs::write(args.outpath.join("nelrune-report.txt"), report.to_string())
+    fs::write(outpath.join("nelrune-report.txt"), report.to_string())
         .context("writing nelrune-report.txt")?;
 
-    progress.stage(format!("mapper BAM retained at {}", mapper_bam.display()));
+    progress.stage(format!("quantified mapped BAM {}", mapper_bam.display()));
 
     progress.finish();
-    progress.write_final_status(&args.outpath, "nelrune")?;
+    progress.write_final_status(&outpath, "nelrune")?;
 
     eprintln!(
         "[nelrune] complete: {} reads in {:.1}s ({:.0} reads/s overall, {:.0} reads/s steady after first progress)",
@@ -371,20 +408,6 @@ fn run(args: Cli) -> Result<()> {
     );
 
     Ok(())
-}
-
-// Deliberately excludes mapper index, mapper threads, and quantification
-// settings: none of these affect the normalized ONT read sequences.
-fn normalization_signature(args: &Cli, input: &Path) -> Result<String> {
-    let meta = fs::metadata(input)
-        .with_context(|| format!("reading ONT input metadata {}", input.display()))?;
-    let mtime = meta.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-    Ok(format!(
-        "nelrune-ont-normalization-v1\ninput={}\nsize={}\nmtime={}\nprimer={:?}\nmax_reads={:?}\nmin_transcript_len={}\nadditional_features={:?}\nadditional_feature_min_hits={:?}\n",
-        input.canonicalize()?.display(), meta.len(), mtime,
-        args.primer, args.bam_collector.max_reads, args.min_transcript_len,
-        args.additional_features, args.additional_feature_min_hits,
-    ))
 }
 
 fn mapping_signature(args: &Cli, input: &Path) -> Result<String> {

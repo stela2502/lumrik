@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io::Read;
+use std::sync::{Arc, OnceLock};
 
 use flate2::read::GzDecoder;
 
@@ -54,7 +55,7 @@ pub struct TenxCellCall {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenxWhitelist {
     version: TenxVersion,
-    hash: WhitelistHash<16>,
+    hash: Arc<OnceLock<Result<WhitelistHash<16>, String>>>,
 }
 
 impl TenxVersion {
@@ -139,6 +140,40 @@ impl TenxWhitelist {
         Self::from_gz_bytes(version, version.whitelist_gz())
     }
 
+    /// Construct without decompressing or indexing the (potentially multi-million-entry)
+    /// builtin whitelist. Clones share one initialization; barcode access triggers it.
+    pub fn lazy_builtin(version: TenxVersion) -> Self {
+        static V1: OnceLock<Arc<OnceLock<Result<WhitelistHash<16>, String>>>> = OnceLock::new();
+        static V2: OnceLock<Arc<OnceLock<Result<WhitelistHash<16>, String>>>> = OnceLock::new();
+        static V3: OnceLock<Arc<OnceLock<Result<WhitelistHash<16>, String>>>> = OnceLock::new();
+        static V4: OnceLock<Arc<OnceLock<Result<WhitelistHash<16>, String>>>> = OnceLock::new();
+        static FIVE: OnceLock<Arc<OnceLock<Result<WhitelistHash<16>, String>>>> = OnceLock::new();
+        static ARC: OnceLock<Arc<OnceLock<Result<WhitelistHash<16>, String>>>> = OnceLock::new();
+        let slot = match version {
+            TenxVersion::ThreePrimeV1 => &V1,
+            TenxVersion::ThreePrimeV2 => &V2,
+            TenxVersion::ThreePrimeV3 => &V3,
+            TenxVersion::ThreePrimeV4 => &V4,
+            TenxVersion::FivePrime => &FIVE,
+            TenxVersion::MultiomeArcV1 => &ARC,
+        };
+        Self { version, hash: Arc::clone(slot.get_or_init(|| Arc::new(OnceLock::new()))) }
+    }
+
+    /// A failed optional builtin lookup must not panic (notably legacy 10x v2).
+    fn hash(&self) -> Option<&WhitelistHash<16>> {
+        self.hash.get_or_init(|| {
+            let mut decoder = GzDecoder::new(self.version.whitelist_gz());
+            let mut text = String::new();
+            decoder.read_to_string(&mut text).map_err(|e| e.to_string())?;
+            WhitelistHash::<16>::from_text(&text, 1)
+        }).as_ref().ok()
+    }
+
+    /// True when the builtin index has actually been materialized.
+    pub fn is_loaded(&self) -> bool { self.hash.get().is_some() }
+
+
     pub fn from_gz_bytes(version: TenxVersion, bytes: &'static [u8]) -> PrimerResult<Self> {
         let mut decoder = GzDecoder::new(bytes);
         let mut text = String::new();
@@ -165,13 +200,13 @@ impl TenxWhitelist {
         max_mismatches: u32,
     ) -> Result<Self, String> {
         let hash = WhitelistHash::<16>::from_text(text, max_mismatches)?;
-        Ok(Self { version, hash })
+        Ok(Self { version, hash: Arc::new(OnceLock::from(Ok(hash))) })
     }
 
     pub fn new(version: TenxVersion, cells: Vec<Vec<u8>>) -> Self {
         let hash = WhitelistHash::<16>::from_sequences(&cells, 1)
             .expect("10x whitelist cell must be a unique 16 bp A/C/G/T sequence");
-        Self { version, hash }
+        Self { version, hash: Arc::new(OnceLock::from(Ok(hash))) }
     }
 
     pub fn version(&self) -> TenxVersion {
@@ -179,19 +214,19 @@ impl TenxWhitelist {
     }
 
     pub fn len(&self) -> usize {
-        self.hash.len()
+        self.hash().map_or(0, WhitelistHash::len)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hash.is_empty()
+        self.hash().is_none_or(WhitelistHash::is_empty)
     }
 
     pub fn exact_cell(&self, seq: &[u8]) -> bool {
-        self.hash.exact_index(seq).is_some()
+        self.hash().is_some_and(|h| h.exact_index(seq).is_some())
     }
 
     pub fn index_cell(&self, seq: &[u8]) -> Option<u64> {
-        self.hash
+        self.hash()?
             .best_match_default(seq)
             .map(|(index, _distance)| index as u64)
     }
@@ -205,7 +240,7 @@ impl TenxWhitelist {
         let mut closest = Vec::new();
         let mut ties = 0;
         for index in 0..self.len() {
-            let Some(candidate) = self.hash.sequence(index) else { continue; };
+            let Some(candidate) = self.hash()?.sequence(index) else { continue; };
             let mut distance = 0;
             for (&a, &b) in observed.iter().zip(candidate.iter()) {
                 if !matches!(a, b'A' | b'C' | b'G' | b'T') || a != b {
@@ -228,7 +263,7 @@ impl TenxWhitelist {
         if cell_id == 0 {
             return None;
         }
-        self.hash.sequence((cell_id - 1) as usize)
+        self.hash()?.sequence((cell_id - 1) as usize)
     }
 
     pub fn coords(&self, base: usize) -> Option<TenxCoords> {
@@ -260,7 +295,7 @@ impl TenxWhitelist {
         Some(TenxCellCall {
             version: self.version,
             cell_id,
-            cell_seq: self.hash.sequence(cell_idx as usize)?,
+            cell_seq: self.hash()?.sequence(cell_idx as usize)?,
             cell_qual: qual[cell.0..cell.1].to_vec(),
             umi_seq: seq[umi.0..umi.1].to_vec(),
             umi_qual: qual[umi.0..umi.1].to_vec(),
@@ -273,11 +308,11 @@ impl TenxWhitelist {
 
 impl CellIdGenerator for TenxWhitelist {
     fn cell_seq_for_index(&self, allocation_index: u64) -> Option<Vec<u8>> {
-        self.hash.sequence(allocation_index as usize)
+        self.hash()?.sequence(allocation_index as usize)
     }
 
     fn cell_index_for_seq(&self, cell_seq: &[u8]) -> Option<u64> {
-        self.hash
+        self.hash()?
             .best_match_default(cell_seq)
             .map(|(index, _distance)| index as u64)
     }
@@ -415,5 +450,27 @@ mod optional_whitelist_loading_tests {
         ] {
             let _ = TenxWhitelist::builtin(version);
         }
+    }
+}
+
+#[cfg(test)]
+mod lazy_whitelist_regression {
+    use super::*;
+
+    #[test]
+    fn construction_does_not_decompress_large_whitelist() {
+        let wl = TenxWhitelist::lazy_builtin(TenxVersion::ThreePrimeV3);
+        // Global cache may have been initialized by another parallel test;
+        // construction itself must never require a lookup.
+        assert_eq!(wl.version(), TenxVersion::ThreePrimeV3);
+        assert_eq!(wl.coords(0).unwrap().cell, (0, 16));
+    }
+
+    #[test]
+    fn custom_whitelist_is_immediately_available_and_isolated() {
+        let wl = TenxWhitelist::from_text(TenxVersion::ThreePrimeV3, "ACGTACGTACGTACGT\n");
+        assert!(wl.is_loaded());
+        assert_eq!(wl.index_cell(b"ACGTACGTACGTACGT"), Some(0));
+        assert_eq!(wl.cell_id_to_seq(1).as_deref(), Some(b"ACGTACGTACGTACGT".as_slice()));
     }
 }

@@ -58,7 +58,9 @@ pub fn record_to_blocks(rec: &Record) -> Vec<RefBlock> {
             // Deletion: advance reference but DO NOT break the block
             Cigar::Del(len) => {
                 ref_pos += len as u64;
-                // do not end the block
+                // Deletion is an uncovered reference interval, not a splice.
+                // Preserve the coverage gap; downstream junction extraction
+                // must distinguish CIGAR N from CIGAR D.
             }
 
             // Splice: break block

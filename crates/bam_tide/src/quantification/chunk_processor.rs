@@ -9,7 +9,7 @@ use run_stats::RunStats;
 use crate::quantification::job::Job;
 use crate::quantification::processor_options::ProcessorOptions;
 use crate::quantification::snp::SnpSideChannel;
-use scdata::{QuantData, SnpUmiEvidence};
+use scdata::{QuantData, SnpUmiEvidence, UmiCoverageRange};
 use crate::quantification::new_transcript_data::NewTranscriptData;
 use gtf_splice_index::{RefBlock, Transcript};
 
@@ -157,7 +157,14 @@ impl<'a> ChunkProcessor<'a> {
                 if snps.snps.iter().any(|s| s.alt_reads > 0) {
                     report.report("collect/snp_alt_observations");
                 }
-                novel.add_exon_evidence(gene_id, job.cell, job.umi, mask, snps.clone());
+                let mut coverage = UmiCoverageRange::default();
+                let blocks: Vec<_> = job.spliced.blocks.iter().map(|b| (b.start, b.end)).collect();
+                coverage.observe_blocks(&blocks);
+                for &(donor, acceptor) in &job.spliced.junctions {
+                    coverage.observe_junction(donor, acceptor);
+                }
+                novel.add_exon_evidence_with_coverage(gene_id, job.cell, job.umi,
+                    mask, snps.clone(), coverage);
                 report.report("bam_tide/profile/matched");
             }
         }

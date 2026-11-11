@@ -202,3 +202,46 @@ mod tests {
         assert!(a.contains(&b));
     }
 }
+
+#[cfg(test)]
+mod partial_flank_skip_regression {
+    use super::*;
+    use crate::types::Strand;
+
+    #[test]
+    fn minus_strand_partial_flank_still_calls_internal_exon_skip() {
+        // Transcript order on the minus strand: exon 2 (highest coordinate),
+        // exon 3 (middle), exon 4 (lowest coordinate).
+        // The read spans exon 2 -> exon 4 but covers only 10 bp of exon 4.
+        let mut reference = Transcript::new(0, 0, "TP53_reference", 0, Strand::Minus);
+        for exon in [
+            RefBlock::new(100, 150),
+            RefBlock::new(200, 250),
+            RefBlock::new(300, 350),
+        ] {
+            reference.add_exon(exon);
+        }
+        reference.finalize();
+        let catalog = GeneExonCatalog::from_transcripts([&reference]);
+        let mut read = SplicedRead::new(0, Strand::Minus, vec![
+            RefBlock::new(140, 150), // only 10/50 bp of exon 4
+            RefBlock::new(300, 350), // exon 2
+        ]);
+        read.finalize();
+        let observed = catalog.observed_mask(&read);
+        assert_eq!(
+            catalog.resolve_umi(&observed, [&reference]),
+            UmiTranscriptMatch::Novel(observed.clone()),
+            "10 bp of the distal flank must suffice to call the internal skip"
+        );
+        // With only one flank, the missing terminal exons are NOT called skips.
+        let mut terminal_only = SplicedRead::new(0, Strand::Minus, vec![RefBlock::new(140, 150)]);
+        terminal_only.finalize();
+        let terminal_mask = catalog.observed_mask(&terminal_only);
+        assert_eq!(
+            catalog.resolve_umi(&terminal_mask, [&reference]),
+            UmiTranscriptMatch::Reference(reference.id),
+            "missing terminal coverage must not be called a skip"
+        );
+    }
+}

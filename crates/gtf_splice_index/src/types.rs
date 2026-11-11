@@ -97,6 +97,8 @@ pub struct SplicedRead {
     pub chr_id: usize,
     pub strand: Strand,
     pub blocks: Vec<RefBlock>,
+    /// Splice junctions observed as CIGAR N, never inferred from coverage gaps.
+    pub junctions: Vec<(u32, u32)>,
     finalized: bool,
 }
 
@@ -106,6 +108,7 @@ impl SplicedRead {
             chr_id,
             strand,
             blocks,
+            junctions: Vec::new(),
             finalized: false,
         }
     }

@@ -74,17 +74,68 @@ impl UmiEvidence for ExonMask {
     fn merge(&mut self, other: &Self) { ExonMask::merge(self, other); }
 }
 
+/// Genomic coverage of one UMI, in 0-based half-open coordinates.
+/// The outer span is useful for bounds, but only junctions observed *within*
+/// an individual spliced alignment are evidence of exon skipping. Never infer
+/// junctions from the gap between two separate reads sharing a UMI.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UmiCoverageRange {
+    pub start: Option<u32>,
+    pub end: Option<u32>,
+    /// Observed splice gaps (donor_end, acceptor_start), not uncovered intervals.
+    pub junctions: Vec<(u32, u32)>,
+}
+
+impl UmiCoverageRange {
+    /// Update directly from one read's ordered, reference-covered CIGAR blocks.
+    /// `N`-separated blocks provide junction evidence; disconnected UMIs do not.
+    pub fn observe_blocks(&mut self, blocks: &[(u32, u32)]) {
+        for &(start, end) in blocks {
+            if start >= end { continue; }
+            self.start = Some(self.start.map_or(start, |old| old.min(start)));
+            self.end = Some(self.end.map_or(end, |old| old.max(end)));
+        }
+    }
+
+    /// Record a verified CIGAR N junction from a single alignment.
+    pub fn observe_junction(&mut self, donor: u32, acceptor: u32) {
+        if donor < acceptor && !self.junctions.contains(&(donor, acceptor)) {
+            self.junctions.push((donor, acceptor));
+        }
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        if let Some(start) = other.start {
+            self.start = Some(self.start.map_or(start, |old| old.min(start)));
+        }
+        if let Some(end) = other.end {
+            self.end = Some(self.end.map_or(end, |old| old.max(end)));
+        }
+        for &junction in &other.junctions {
+            if !self.junctions.contains(&junction) { self.junctions.push(junction); }
+        }
+    }
+
+    /// A reference exon is positively bypassed only by an observed junction.
+    pub fn bypasses(&self, exon_start: u32, exon_end: u32) -> bool {
+        self.junctions.iter().any(|&(donor, acceptor)|
+            donor <= exon_start && exon_end <= acceptor && donor < acceptor)
+    }
+}
+
 /// Splice and variant observations from the same (cell, UMI, gene).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TranscriptUmiEvidence {
     pub splice: ExonMask,
     pub snps: SnpUmiEvidence,
+    pub coverage: UmiCoverageRange,
 }
 
 impl UmiEvidence for TranscriptUmiEvidence {
     fn merge(&mut self, other: &Self) {
         self.splice.merge(&other.splice);
         self.snps.merge(&other.snps);
+        self.coverage.merge(&other.coverage);
     }
 }
 
@@ -173,6 +224,20 @@ mod tests {
         assert_eq!(a.snps.snps[0].ref_reads, 1);
         assert_eq!(a.snps.snps[0].alt_reads, 1);
     }
+    #[test]
+    fn umi_range_merges_without_inventing_cross_read_junctions() {
+        let mut a = UmiCoverageRange::default();
+        a.observe_blocks(&[(100, 150), (454, 500)]); // 304N
+        assert_eq!(a.junctions, vec![(150, 454)]);
+        assert!(a.bypasses(200, 250));
+        let mut b = UmiCoverageRange::default();
+        b.observe_blocks(&[(700, 750)]);
+        a.merge(&b);
+        assert_eq!((a.start, a.end), (Some(100), Some(750)));
+        assert_eq!(a.junctions, vec![(150, 454)]);
+        assert!(!a.bypasses(550, 600));
+    }
+
     #[test]
     fn saturates_and_detects_conflicts() {
         let mut evidence = SnpUmiEvidence::default();
