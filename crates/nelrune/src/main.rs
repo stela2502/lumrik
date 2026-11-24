@@ -263,6 +263,7 @@ pub(crate) fn quantify_mapped_bam(
         })
         .context("collecting BAM quantification")?;
     progress.update_quantification_live(&result.data, &result.report);
+    result.coverage.write_tsv(&outpath.join("gene_exonic_coverage_by_length.tsv"))?;
     result.new_transcripts.write_reports(&outpath)?;
     let mut data = result.data;
     let mut report = result.report;

@@ -98,6 +98,7 @@ fn run(args: QuantCli) -> Result<()> {
         .run_paths(&bam_paths)
         .context("collecting BAM quantification")?;
 
+    result.coverage.write_tsv(&args.outpath.join("gene_exonic_coverage_by_length.tsv"))?;
     result.new_transcripts.write_reports(&args.outpath)?;
     let mut data = result.data;
     let mut report = result.report;

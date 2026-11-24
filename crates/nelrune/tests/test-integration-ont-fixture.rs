@@ -266,3 +266,88 @@ fn ont_reference_backed_star_and_minimap2_recover_molecules() {
     // Keep generated indexes, run summaries and alignments for diagnosis and reruns.
     eprintln!("[fixture integration] results: {}", out.display());
 }
+
+
+/// Adversarial ONT ingestion regression: one raw BAM record must yield all
+/// 43 original 10x cassettes, despite 105 unrelated leading bases.
+/// This deliberately tests the BAM -> cassette -> mapper boundary, not bam-quant.
+#[test]
+fn ont_single_long_read_recovers_all_stacked_10x_cassettes() {
+    check_tool("minimap2", "--version");
+    let source = root().join("tests/data/nelrune_test_data_generation");
+    let out = root().join("target/nelrune-ont-stacked-cassettes-integration");
+    if out.exists() { fs::remove_dir_all(&out).unwrap(); }
+    fs::create_dir_all(&out).unwrap();
+    let binary = env!("CARGO_BIN_EXE_nelrune");
+    run("generate", Command::new(binary)
+        .args(["materialize-norn-test-data", "--config"])
+        .arg(source.join("experiment.yaml")).arg("--out").arg(&out), &out);
+    assert_eq!(count_distinct_truth_molecules(&out.join("expected_reads.tsv")), 4);
+
+    // Every original fixture FASTQ record is stacked, in order, into ONE
+    // unaligned ONT BAM record. The 105-nt prefix contains no primer anchor.
+    let fastq = fs::read_to_string(out.join("ont_reads.fastq")).unwrap();
+    let mut lines = fastq.lines();
+    let mut long_read = "G".repeat(105);
+    let mut originals = 0;
+    while let Some(name) = lines.next() {
+        assert!(name.starts_with('@'));
+        let seq = lines.next().expect("FASTQ sequence");
+        assert_eq!(lines.next(), Some("+"));
+        let quality = lines.next().expect("FASTQ quality");
+        assert_eq!(seq.len(), quality.len());
+        long_read.push_str(seq);
+        originals += 1;
+    }
+    assert_eq!(originals, 43);
+    assert_eq!(&long_read[..105], "G".repeat(105));
+
+    let mut header = bam::Header::new();
+    header.push_record(bam::header::HeaderRecord::new(b"HD")
+        .push_tag(b"VN", "1.6").push_tag(b"SO", "unsorted"));
+    let stacked_bam = out.join("stacked_43_in_one.bam");
+    {
+        let mut writer = bam::Writer::from_path(&stacked_bam, &header, bam::Format::Bam).unwrap();
+        let mut record = bam::Record::new();
+        record.set(b"stacked_43_after_105bp_junk", None, long_read.as_bytes(),
+            &vec![40; long_read.len()]);
+        record.set_flags(4);
+        writer.write(&record).unwrap();
+    }
+    let mut input = bam::Reader::from_path(&stacked_bam).unwrap();
+    assert_eq!(input.records().count(), 1, "fixture must have exactly one ONT BAM record");
+
+    let fasta = out.join("genome.fa");
+    let gtf = out.join("genes.gtf");
+    uncompress(&out.join("genome.fa.gz"), &fasta);
+    uncompress(&out.join("genes.gtf.gz"), &gtf);
+    let index = out.join("reference.splice.idx");
+    AnnotationBuilder::new(1000).build_from_path(&gtf).unwrap().save(&index).unwrap();
+    let mmi = out.join("genome.mmi");
+    run("minimap2-index", Command::new("minimap2").arg("-d").arg(&mmi).arg(&fasta), &out);
+    let experiment: serde_yaml::Value = serde_yaml::from_reader(
+        File::open(out.join("experiment.yaml")).unwrap()).unwrap();
+    let grammar = experiment["primer_structure"].as_str().unwrap();
+    let mapped_out = out.join("mapped");
+    fs::create_dir_all(&mapped_out).unwrap();
+    run("stacked-minimap2", Command::new(binary)
+        .arg("--bam").arg(&stacked_bam)
+        .args(["--primer-structure", grammar, "--detect-reverse-complement",
+            "--mapper", "minimap2", "--mapper-index"])
+        .arg(&mmi).arg("--genome").arg(&fasta)
+        .args(["--mapper-threads", "2", "--index"]).arg(&index)
+        .args(["--quant-mode", "transcript", "--min-umi-count", "1",
+            "--min-mapq", "0", "--min-transcript-len", "20",
+            "--threads", "2", "--no-health-server", "--outpath"])
+        .arg(&mapped_out), &out);
+    let summary = mapped_out.join("nelrunelog.jaml");
+    assert_eq!(summary_number(&summary, "reads_processed"), 1,
+        "one physical ONT record was supplied");
+    assert_eq!(summary_number(&summary, "multi_cassette"), 1,
+        "the single ONT read must be recognized as multi-cassette");
+    assert_eq!(summary_number(&summary, "emitted_molecules"), 40,
+        "all 43 embedded 10x observations must survive cassette extraction");
+    assert_eq!(summary_number(&summary, "multi_cassette_emitted_molecules"), 40,
+        "all emitted molecules must originate from the one multi-cassette read");
+}
+

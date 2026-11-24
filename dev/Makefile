@@ -63,6 +63,7 @@ lumrik_tar_file:
 		--exclude='*/target/*' \
 		--exclude='*/out/*' \
 		--exclude='*/.git' \
+		--exclude='*.rej' \
 		--exclude='*/.git/*' \
 		--exclude='*.tar.gz' \
 		--exclude='_STARtmp' \
@@ -150,6 +151,7 @@ install-sc-ont-mut-quant:
 		--exclude '.git' \
 		--exclude '.github' \
 		--exclude '.build' \
+                --exclude='*.rej' \
 		--exclude '.bam' \
 		--exclude 'work' \
 		--exclude '.nextflow*' \
@@ -351,6 +353,7 @@ norn_tar_file:
 		--exclude='*.fq.gz' \
 		--exclude='*.sif' \
 		--exclude='*.rds' \
+                --exclude='*.rej' \
 		--exclude='*.h5' \
 		--exclude='*.h5ad' \
 		--exclude='*.mtx' \
@@ -360,6 +363,12 @@ norn_tar_file:
 		--exclude='*/.idea' \
 		--exclude='*/.vscode' \
 		--exclude='*.swp' \
+	        --exclude='work' \
+                --exclude='.nextflow' \
+                --exclude='.nextflow.log*' \
+                --exclude='results' \
+                --exclude='*.mmi' \
+                --exclude='*.img' \
 		norn
 	@du -h norn-source.tar.gz
 
@@ -494,7 +503,10 @@ norn-deploy-sens:
 	echo "Done: Norn + Lumrik $$tag deployed to COSMOS-SENS"
 
 
-PROJECT ?= lumrik
+# PROJECT ?= lumrik
+# TARFILE := $(PROJECT)-source.tar.gz
+
+PROJECT ?= $(notdir $(abspath $(CURDIR)/$(notdir $(PWD))))
 TARFILE := $(PROJECT)-source.tar.gz
 
 source_tar:
@@ -512,6 +524,7 @@ source_tar:
 		--exclude='*.sif' \
 		--exclude='*.rds' \
 		--exclude='*.h5' \
+                --exclude='*.rej' \
 		--exclude='*.h5ad' \
 		--exclude='*.mtx' \
 		--exclude='*.mtx.gz' \

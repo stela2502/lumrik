@@ -26,6 +26,7 @@ use read_tag_table::{ReadTagRecord, ReadTagTable};
 use sc_primer::Grammar;
 
 use gtf_splice_index::{MatchOptions, SpliceIndex};
+use crate::summary_table::SummaryTable;
 
 use run_stats::RunStats;
 use snp_index::Genome;
@@ -35,6 +36,7 @@ const BAM_DECODE_THREADS: usize = 4;
 
 pub struct BamCollectorResult {
     pub data: QuantData,
+    pub coverage: SummaryTable,
     pub new_transcripts: NewTranscriptData,
     pub report: RunStats,
     pub snp: Option<SnpSideChannel>,
@@ -159,6 +161,7 @@ impl BamCollector {
     {
         let mut data = QuantData::standard();
         let mut new_transcripts = NewTranscriptData::new(self.index.bin_width);
+        let mut coverage = SummaryTable::new(&self.index);
         let Some(first_path) = paths.first() else {
             anyhow::bail!("no BAM files supplied");
         };
@@ -241,6 +244,7 @@ impl BamCollector {
                 snp.as_ref(),
                 &mut data,
                 &mut new_transcripts,
+                &mut coverage,
                 &mut report,
                 &mut n_seen,
                 &mut seen_unbarcoded,
@@ -253,7 +257,7 @@ impl BamCollector {
 
         bar.finish_and_clear();
         new_transcripts.finalize_umi_evidence(&self.index, self.config.quant_mode, &mut data, &mut report)?;
-        Ok(BamCollectorResult { data, new_transcripts, report, snp })
+        Ok(BamCollectorResult { data, new_transcripts, coverage, report, snp })
     }
 
     fn collect(&self, mut reader: Reader) -> Result<BamCollectorResult> {
@@ -264,6 +268,7 @@ impl BamCollector {
 
         let mut data = QuantData::standard();
         let mut new_transcripts = NewTranscriptData::new(self.index.bin_width);
+        let mut coverage = SummaryTable::new(&self.index);
 
         let mut report = RunStats::new(
             None,
@@ -282,6 +287,7 @@ impl BamCollector {
             snp.as_ref(),
             &mut data,
             &mut new_transcripts,
+            &mut coverage,
             &mut report,
             &mut n_seen,
             &mut seen_unbarcoded,
@@ -291,7 +297,7 @@ impl BamCollector {
         )?;
 
         new_transcripts.finalize_umi_evidence(&self.index, self.config.quant_mode, &mut data, &mut report)?;
-        Ok(BamCollectorResult { data, new_transcripts, report, snp })
+        Ok(BamCollectorResult { data, new_transcripts, coverage, report, snp })
     }
 
     fn collect_reader(
@@ -300,6 +306,7 @@ impl BamCollector {
         snp: Option<&SnpSideChannel>,
         data: &mut QuantData,
         new_transcripts: &mut NewTranscriptData,
+        coverage: &mut SummaryTable,
         report: &mut RunStats,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
@@ -314,7 +321,7 @@ impl BamCollector {
         let mut projector = match self.config.alignment_space {
             AlignmentSpace::Genomic => None,
             AlignmentSpace::Transcriptomic => Some(BamTranscriptomeMapper::from_index_and_genome(
-                self.index.clone(),
+                self.index.clone().with_match_mode(SpliceMatchMode::Transcript),
                 self.genome.as_ref().expect("validated in from_cli").clone(),
             )?),
         };
@@ -370,6 +377,7 @@ impl BamCollector {
                     &mut jobs,
                     data,
                     new_transcripts,
+                    coverage,
                     report,
                     n_seen,
                     seen_unbarcoded,
@@ -393,6 +401,7 @@ impl BamCollector {
                     &mut jobs,
                     data,
                     new_transcripts,
+                    coverage,
                     report,
                     n_seen,
                     seen_unbarcoded,
@@ -402,7 +411,7 @@ impl BamCollector {
             }
         }
 
-        self.flush_jobs(&processor, &mut jobs, data, new_transcripts, report)?;
+        self.flush_jobs(&processor, &mut jobs, data, new_transcripts, coverage, report)?;
         progress(data, report);
         Ok(())
     }
@@ -417,6 +426,7 @@ impl BamCollector {
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
         new_transcripts: &mut NewTranscriptData,
+        coverage: &mut SummaryTable,
         report: &mut RunStats,
         n_seen: &mut usize,
         seen_unbarcoded: &mut HashSet<(u64, u64)>,
@@ -443,7 +453,7 @@ impl BamCollector {
                     jobs,
                     n_seen,
                 );
-                if self.after_job(processor, jobs, data, new_transcripts, report, *n_seen, progress)? {
+                if self.after_job(processor, jobs, data, new_transcripts, coverage, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -481,7 +491,7 @@ impl BamCollector {
                 record.push_aux(b"UY", Aux::String(umi_qual))?;
 
                 self.push_job(job_builder.build(record, report)?, jobs, n_seen);
-                if self.after_job(processor, jobs, data, new_transcripts, report, *n_seen, progress)? {
+                if self.after_job(processor, jobs, data, new_transcripts, coverage, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -530,7 +540,7 @@ impl BamCollector {
                     jobs,
                     n_seen,
                 );
-                if self.after_job(processor, jobs, data, new_transcripts, report, *n_seen, progress)? {
+                if self.after_job(processor, jobs, data, new_transcripts, coverage, report, *n_seen, progress)? {
                     return Ok(true);
                 }
             }
@@ -542,7 +552,7 @@ impl BamCollector {
         // record-for-record identical to the previous JobBuilder path.
         for record in group.records() {
             self.push_job(job_builder.build(record, report)?, jobs, n_seen);
-            if self.after_job(processor, jobs, data, new_transcripts, report, *n_seen, progress)? {
+            if self.after_job(processor, jobs, data, new_transcripts, coverage, report, *n_seen, progress)? {
                 return Ok(true);
             }
         }
@@ -563,12 +573,13 @@ impl BamCollector {
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
         new_transcripts: &mut NewTranscriptData,
+        coverage: &mut SummaryTable,
         report: &mut RunStats,
         n_seen: usize,
         progress: &mut dyn FnMut(&QuantData, &RunStats),
     ) -> Result<bool> {
         if jobs.len() >= CHUNK {
-            self.flush_jobs(processor, jobs, data, new_transcripts, report)?;
+            self.flush_jobs(processor, jobs, data, new_transcripts, coverage, report)?;
             progress(data, report);
         }
         Ok(self.config.max_reads.is_some_and(|max| n_seen >= max))
@@ -580,6 +591,7 @@ impl BamCollector {
         jobs: &mut Vec<Job>,
         data: &mut QuantData,
         new_transcripts: &mut NewTranscriptData,
+        coverage: &mut SummaryTable,
         report: &mut RunStats,
     ) -> Result<()> {
         if jobs.is_empty() {
@@ -588,7 +600,9 @@ impl BamCollector {
 
         report.stop_file_io_time();
 
-        processor.process_into(jobs, data, new_transcripts, report)?;
+        let mut counts = coverage.empty_counts();
+        processor.process_into(jobs, data, new_transcripts, report, &mut counts)?;
+        coverage.merge(&counts);
 
         // Collection metrics are cumulative. QuantData is populated only
         // after all UMIs have been merged and finalized.
@@ -607,7 +621,7 @@ impl BamCollector {
             AlignmentSpace::Genomic => Ok(header.clone()),
             AlignmentSpace::Transcriptomic => {
                 let mapper = BamTranscriptomeMapper::from_index_and_genome(
-                    self.index.clone(),
+                    self.index.clone().with_match_mode(SpliceMatchMode::Transcript),
                     self.genome.as_ref().expect("validated in from_cli").clone(),
                 )?;
                 Ok(bam::HeaderView::from_header(&mapper.make_header(header)?))

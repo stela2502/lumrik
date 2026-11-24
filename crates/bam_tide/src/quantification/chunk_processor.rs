@@ -1,5 +1,6 @@
 //chunk_processor.rs
 use anyhow::Result;
+use crate::summary_table::CoverageCounts;
 use std::time::Instant;
 use std::sync::Once;
 use gtf_splice_index::{GeneExonCatalog, MatchOptions, SpliceIndex, SpliceMatchMode};
@@ -16,6 +17,7 @@ use gtf_splice_index::{RefBlock, Transcript};
 pub struct ChunkProcessor<'a> {
     idx: &'a SpliceIndex,
     exon_catalogs: Vec<GeneExonCatalog>,
+    gene_lengths: Vec<u64>,
     snp: Option<&'a SnpSideChannel>,
     match_opts: MatchOptions,
     #[allow(dead_code)]
@@ -38,8 +40,10 @@ impl<'a> ChunkProcessor<'a> {
         let exon_catalogs = (0..idx.genes.len())
             .map(|gene_id| idx.gene_exon_catalog(gene_id).expect("indexed gene"))
             .collect();
+        let gene_lengths = crate::summary_table::SummaryTable::new(idx).lengths().to_vec();
         Self {
             idx,
+            gene_lengths,
             exon_catalogs,
             snp,
             match_opts,
@@ -53,6 +57,7 @@ impl<'a> ChunkProcessor<'a> {
         merged: &mut QuantData,
         novel: &mut NewTranscriptData,
         report: &mut RunStats,
+        coverage: &mut CoverageCounts,
     ) -> Result<()> {
         if jobs.is_empty() {
             return Ok(());
@@ -64,7 +69,7 @@ impl<'a> ChunkProcessor<'a> {
         report.start_counter();
         report.start_timer("bam_tide/multi_cpu/quantify_chunk");
 
-        let partials: Vec<(QuantData, NewTranscriptData, RunStats)> = jobs
+        let partials: Vec<(QuantData, NewTranscriptData, RunStats, CoverageCounts)> = jobs
             .par_chunks(chunk_size)
             .map(|chunk| self.process_partial(chunk))
             .collect();
@@ -73,7 +78,8 @@ impl<'a> ChunkProcessor<'a> {
         report.stop_multi_processor_time();
 
         report.start_timer("bam_tide/single_cpu/merge_quantification");
-        for (partial_data, partial_novel, partial_report) in partials {
+        for (partial_data, partial_novel, partial_report, partial_coverage) in partials {
+            coverage.merge(&partial_coverage);
             novel.merge(partial_novel)?;
             let merge_report = merged.merge(&partial_data);
             report.merge(&partial_report);
@@ -85,20 +91,21 @@ impl<'a> ChunkProcessor<'a> {
         Ok(())
     }
 
-    fn process_partial(&self, jobs: &[Job]) -> (QuantData, NewTranscriptData, RunStats) {
+    fn process_partial(&self, jobs: &[Job]) -> (QuantData, NewTranscriptData, RunStats, CoverageCounts) {
         let mut out = QuantData::standard();
         let mut novel = NewTranscriptData::new(self.idx.bin_width);
         let mut report = RunStats::new(None, 0.0, jobs.len());
+        let mut coverage = CoverageCounts::new(self.gene_lengths.len());
 
         for job in jobs {
             report.report("bam_tide/profile/jobs");
             let started = Instant::now();
             let snps = self.add_snp_hits(job, &mut report);
             report.add_timer_duration("bam_tide/profile/snp", started.elapsed());
-            self.collect_gene_evidence(job, &mut novel, &mut report, snps);
+            self.collect_gene_evidence(job, &mut novel, &mut report, snps, &mut coverage);
         }
 
-        (out, novel, report)
+        (out, novel, report, coverage)
     }
 
     /// The only hot-path quantification operation: collect gene-wide evidence.
@@ -109,6 +116,7 @@ impl<'a> ChunkProcessor<'a> {
         novel: &mut NewTranscriptData,
         report: &mut RunStats,
         snps: SnpUmiEvidence,
+        coverage: &mut CoverageCounts,
     ) {
         let started = Instant::now();
         let mut gene_ids = Vec::new();
@@ -144,6 +152,13 @@ impl<'a> ChunkProcessor<'a> {
             if let Some(catalog) = self.exon_catalogs.get(gene_id) {
                 let mask = catalog.observed_mask(&job.spliced);
                 if mask.count_ones() == 0 { continue; }
+                // Aligned blocks exclude genomic introns; do not retain read lengths in UMI evidence.
+                let aligned_bases: u64 = catalog.units.iter().map(|exon| {
+                    job.spliced.blocks.iter().map(|block| {
+                        u64::from(exon.end.min(block.end).saturating_sub(exon.start.max(block.start)))
+                    }).sum::<u64>()
+                }).sum();
+                coverage.add(gene_id, self.gene_lengths[gene_id], aligned_bases);
                 report.report("collect/umi_observations");
                 let has_intron = match &mask {
                     scdata::ExonMask::Small(bits) => bits & 0xAAAA_AAAA_AAAA_AAAAu64 != 0,
@@ -363,7 +378,7 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         let mut report = RunStats::new(None, 0.0, 1);
 
         processor
-            .process_into(&[job], &mut merged, &mut novel, &mut report)
+            .process_into(&[job], &mut merged, &mut novel, &mut report, &mut CoverageCounts::new(idx.genes.len()))
             .unwrap();
 
         // Hot collection deliberately leaves QuantData empty until finalization.
@@ -414,7 +429,7 @@ chr14\tsrc\texon\t201\t250\t.\t+\t.\tgene_id \"G1\"; gene_name \"Gene1\"; transc
         let mut report = RunStats::new(None, 0.0, 1);
 
         processor
-            .process_into(&[job], &mut merged, &mut novel, &mut report)
+            .process_into(&[job], &mut merged, &mut novel, &mut report, &mut CoverageCounts::new(idx.genes.len()))
             .unwrap();
 
         // Hot collection deliberately leaves QuantData empty until finalization.

@@ -172,12 +172,22 @@ impl BamTranscriptomeMapper {
         let tx = match self.index.transcript_by_name(transcript_name) {
             Ok(tx) => tx,
             Err(_) => {
+                let example_names = self.index.transcript_names();
+                let examples = example_names
+                    .iter()
+                    .take(10)
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 anyhow::bail!(
-                "FATAL: Transcript '{}' exists in the mapper BAM but not in \
-                 the Lumrik annotation index. \
-                 The mapper and annotation indices are incompatible!",
-                 transcript_name
-             );
+                    "FATAL: Transcript '{}' exists in the mapper BAM but not in \
+                     the Lumrik annotation index. \
+                     The mapper and annotation indices may be incompatible! \
+                     Index has {} transcripts; first 10 names: [{}]",
+                    transcript_name,
+                    example_names.len(),
+                    examples,
+                );
             }
 
         };

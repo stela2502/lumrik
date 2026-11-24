@@ -30,3 +30,4 @@ pub mod transcriptome_to_genome;
 pub use feature_tag_counts::{AdditionalFeatureSource, FeatureTagCounts};
 pub use scdata::QuantData;
 pub mod transcript_tags;
+pub mod summary_table;
