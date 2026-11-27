@@ -732,7 +732,7 @@ mod tests {
         table.save_binary(&path).unwrap();
 
         let cli = ReadTagTableCli {
-            read_tag_table: vec![path.to_pathbuff().clone()],
+            read_tag_table: vec![lumrik_clap::ReadableFile::from_path_buf(path.clone()).unwrap()],
             rt_read_id_column: "read_id".to_string(),
             rt_cell_column: "raw_cb".to_string(),
             rt_cell_qual_column: "quality_cb".to_string(),

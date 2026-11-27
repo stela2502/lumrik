@@ -229,7 +229,7 @@ impl Grammar {
         let cell = cell.ok_or_else(|| PrimerError::invalid_coordinates("missing CELL sequence"))?;
         let umi = umi.ok_or_else(|| PrimerError::invalid_coordinates("missing UMI sequence"))?;
 
-        let cell_id = Self::encode_molecule_key(cell)?;
+        let cell_id = Self::encode_cell_id(cell)?;
 
         let mut hard_key = Vec::with_capacity(MOLECULE_KEY_BASES);
         hard_key.extend_from_slice(umi);
@@ -240,6 +240,11 @@ impl Grammar {
             cell_id,
             molecule_id: Self::encode_molecule_key(&hard_key)?,
         })
+    }
+
+    /// Encode a cell barcode using the same numeric ID as molecule identity.
+    pub fn encode_cell_id(cell: &[u8]) -> PrimerResult<u64> {
+        Self::encode_molecule_key(cell)
     }
 
     fn encode_molecule_key(seq: &[u8]) -> PrimerResult<u64> {

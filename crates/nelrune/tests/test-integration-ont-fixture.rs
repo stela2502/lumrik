@@ -251,17 +251,16 @@ fn ont_reference_backed_star_and_minimap2_recover_molecules() {
         assert!(summary.is_file(), "{mapper}: missing run summary {}", summary.display());
         assert_eq!(summary_number(&summary, "reads_processed"), 43,
             "{mapper}: ONT input read count differs from fixture");
-        assert_eq!(summary_number(&summary, "exonic_umis"), 2,
-            "{mapper}: expected two canonical gene-associated molecules in transcript mode");
+        // Novel transcript molecules are also retained in ordinary exonic expression.
+        assert_eq!(summary_number(&summary, "exonic_umis"), 4,
+            "{mapper}: expected four total exonic molecules in transcript mode");
         let (mapped, spliced, exon_skip) = inspect_alignment(&mapped_out.join("nelrune.mapper.bam"));
         assert!(mapped > 0, "{mapper}: no primary mapped reads");
         assert!(spliced > 0, "{mapper}: no spliced genomic alignments; exon junctions lost");
         assert!(exon_skip > 0,
             "{mapper}: failed to reconstruct mutant exon 1 -> exon 3 junction (chrSyntheticMouse1:380 -> 1300)");
         let novel_umis = assert_novel_transcript(mapper, &mapped_out);
-        assert_eq!(summary_number(&summary, "exonic_umis") as usize + novel_umis, 4,
-            "{mapper}: canonical and novel transcript UMIs do not account for all four molecules");
-        eprintln!("[fixture integration] {mapper}: {mapped} mapped primary records, {spliced} spliced, {exon_skip} exon-skip alignments, 2 canonical + {novel_umis} mutant transcript UMIs with SNP evidence and matrix expression");
+        eprintln!("[fixture integration] {mapper}: {mapped} mapped primary records, {spliced} spliced, {exon_skip} exon-skip alignments, 4 total exonic UMIs, including {novel_umis} mutant transcript UMIs with SNP evidence and matrix expression");
     }
     // Keep generated indexes, run summaries and alignments for diagnosis and reruns.
     eprintln!("[fixture integration] results: {}", out.display());

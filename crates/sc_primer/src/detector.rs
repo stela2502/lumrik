@@ -874,6 +874,32 @@ impl PrimerDetector {
         Ok("no complete primer match".to_string())
     }
 
+    /// Report the failed operation from the orientation that progressed furthest.
+    pub fn explain_grammar_failure(&self, seq: &[u8], qual: &[u8]) -> PrimerResult<String> {
+        Self::validate_read(seq, qual)?;
+        let mut forward = None;
+        self.match_from_start(seq, qual, 0, Orientation::Forward, None, &mut forward)?;
+        let mut reverse = None;
+        if self.detect_reverse_complement {
+            let rc_seq = Self::reverse_complement(seq);
+            let rc_qual = qual.iter().rev().copied().collect::<Vec<_>>();
+            self.match_from_start(
+                &rc_seq, &rc_qual, 0, Orientation::ReverseComplement, None, &mut reverse,
+            )?;
+        }
+
+        Ok(match (forward, reverse) {
+            (Some((a, left)), Some((b, right))) if a == b && left != right => {
+                format!("{left}_or_{right}_at_op_{}", a + 1)
+            }
+            (Some((a, _)), Some((b, right))) if b > a => format!("{right}_at_op_{}", b + 1),
+            (Some((index, reason)), _) | (None, Some((index, reason))) => {
+                format!("{reason}_at_op_{}", index + 1)
+            }
+            (None, None) => "no_complete_primer_match".to_string(),
+        })
+    }
+
     /// Primary grammar after rejection-cost ordering. Kept for legacy callers
     /// that configure one chemistry or need one representative grammar.
     pub fn grammar(&self) -> &Grammar {
@@ -918,6 +944,18 @@ impl PrimerDetector {
         orientation: Orientation,
         packed: Option<&OneHotSequence>,
     ) -> PrimerResult<Option<PrimerMatch>> {
+        self.match_from_start(seq, qual, start, orientation, packed, &mut None)
+    }
+
+    fn match_from_start(
+        &self,
+        seq: &[u8],
+        qual: &[u8],
+        start: usize,
+        orientation: Orientation,
+        packed: Option<&OneHotSequence>,
+        failure: &mut Option<(usize, &'static str)>,
+    ) -> PrimerResult<Option<PrimerMatch>> {
         // Most candidate starts fail.  Do not clone the chemistry name for
         // every failed attempt; attach it only when the whole grammar matches.
         let mut primer_match = PrimerMatch::new(String::new(), orientation);
@@ -925,10 +963,13 @@ impl PrimerDetector {
         let mut pos = start;
         let mut search = (0usize, 0usize);
 
-        //let mut saw_insert_constraint = false;
-        //let matched_insert = false;
-
-        for op in &self.grammar.ops {
+        for (index, op) in self.grammar.ops.iter().enumerate() {
+            macro_rules! reject {
+                ($reason:literal) => {{
+                    *failure = Some((index, $reason));
+                    return Ok(None);
+                }};
+            }
             match op {
                 GrammarOp::Fixed {
                     seq: fixed,
@@ -936,7 +977,7 @@ impl PrimerDetector {
                 } => {
                     let chosen = Self::find_fixed(seq, packed, pos, fixed, *mismatches, search)?;
                     let Some(next_pos) = chosen else {
-                        return Ok(None);
+                        reject!("FIXED_not_found");
                     };
                     if pos == start && search != (0, 0) {
                         primer_match.primer_start = next_pos;
@@ -946,16 +987,16 @@ impl PrimerDetector {
                 }
                 GrammarOp::Cell { len } => {
                     if !Self::has_range(seq, pos, *len) || !Self::has_range(qual, pos, *len) {
-                        return Ok(None);
+                        reject!("CELL_too_short");
                     }
 
                     if let Some(SingleCellSystem::Whitelist(whitelist)) = &self.single_cell_system {
                         let observed = &seq[pos..pos + *len];
                         let Some((cell_index, _distance)) = whitelist.best_match(observed) else {
-                            return Ok(None);
+                            reject!("CELL_not_in_whitelist");
                         };
                         let Some(corrected) = whitelist.sequence(cell_index) else {
-                            return Ok(None);
+                            reject!("CELL_not_in_whitelist");
                         };
                         primer_match.add_cell_seq(&corrected);
                     }
@@ -965,7 +1006,7 @@ impl PrimerDetector {
                 }
                 GrammarOp::Umi { len } => {
                     if !Self::has_range(seq, pos, *len) || !Self::has_range(qual, pos, *len) {
-                        return Ok(None);
+                        reject!("UMI_too_short");
                     }
                     primer_match.add_segment("UMI", pos..pos + *len);
                     pos += *len;
@@ -973,7 +1014,7 @@ impl PrimerDetector {
                 GrammarOp::PolyT { min } => {
                     let count = Self::count_base(seq, pos, b'T');
                     if count < *min {
-                        return Ok(None);
+                        reject!("POLYT_too_short");
                     }
                     pos += count;
                 }
@@ -992,7 +1033,7 @@ impl PrimerDetector {
                             String::from_utf8_lossy(seq),
                             pos
                         );*/
-                        return Ok(None);
+                        reject!("INSERT_not_found");
                     };
 
                     primer_match.insert_start = pos;
@@ -1004,7 +1045,7 @@ impl PrimerDetector {
                 }
                 GrammarOp::Skip { len } => {
                     if !Self::has_range(seq, pos, *len) {
-                        return Ok(None);
+                        reject!("SKIP_too_short");
                     }
                     pos += *len;
                 }
@@ -1014,11 +1055,11 @@ impl PrimerDetector {
                 GrammarOp::BdCell { version } => {
                     let Some(SingleCellSystem::Rhapsody(rhapsody)) = &self.single_cell_system
                     else {
-                        return Ok(None);
+                        reject!("BD_CELL_not_found");
                     };
 
                     if rhapsody.version() != *version {
-                        return Ok(None);
+                        reject!("BD_CELL_not_found");
                     }
 
                     let call = match packed {
@@ -1035,7 +1076,7 @@ impl PrimerDetector {
                         _ => rhapsody.call(seq, qual, pos, search.0, search.1),
                     };
                     let Some(call) = call else {
-                        return Ok(None);
+                        reject!("BD_CELL_not_found");
                     };
 
                     primer_match.bd_cell_id = Some(call.cell_id);
@@ -1074,7 +1115,7 @@ impl PrimerDetector {
                     let len = version.cell_len();
 
                     if seq.len() < pos + len {
-                        return Ok(None);
+                        reject!("TENX_CELL_too_short");
                     }
 
                     let Some(SingleCellSystem::Tenx(tenx)) = &self.single_cell_system else {
@@ -1085,10 +1126,10 @@ impl PrimerDetector {
 
                     let observed = &seq[pos..pos + len];
                     let Some(cell_index) = tenx.index_cell(observed) else {
-                        return Ok(None);
+                        reject!("TENX_CELL_not_in_whitelist");
                     };
                     let Some(corrected) = tenx.cell_id_to_seq(cell_index + 1) else {
-                        return Ok(None);
+                        reject!("TENX_CELL_not_in_whitelist");
                     };
 
                     primer_match.add_segment("CELL", pos..pos + len);
@@ -1098,14 +1139,14 @@ impl PrimerDetector {
                 }
                 GrammarOp::Tag { len } => {
                     if !Self::has_range(seq, pos, *len) || !Self::has_range(qual, pos, *len) {
-                        return Ok(None);
+                        reject!("TAG_too_short");
                     }
                     primer_match.add_segment("TAG", pos..pos + *len);
                     pos += *len;
                 }
                 GrammarOp::Feature { len } => {
                     if !Self::has_range(seq, pos, *len) || !Self::has_range(qual, pos, *len) {
-                        return Ok(None);
+                        reject!("FEATURE_too_short");
                     }
                     primer_match.add_segment("FEATURE", pos..pos + *len);
                     pos += *len;

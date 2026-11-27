@@ -1,10 +1,13 @@
 use lumrik_clap::{Parser, ReadableFile};
 use flate2::read::MultiGzDecoder;
-use sc_primer::{BdCellVersion, Chemistry, PrimerDetector, RhapsodyWhitelist};
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use sc_primer::{BdCellVersion, Chemistry, Grammar, Orientation, PrimerDetector, RhapsodyWhitelist};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
 
 const LINKER1: &[u8; 4] = b"GTGA";
 const LINKER2: &[u8; 4] = b"GACA";
@@ -21,9 +24,21 @@ struct Cli {
     #[arg(long)]
     r1: ReadableFile,
 
+    /// Write resolved R1 reads with cell IDs to a new FASTQ. A .gz suffix enables gzip.
+    #[arg(long)]
+    out_fastq: Option<PathBuf>,
+
+    /// Write rejected R1 reads with the failure cause in the read ID. A .gz suffix enables gzip.
+    #[arg(long)]
+    failed_fastq: Option<PathBuf>,
+
     /// Primer chemistry to diagnose.
     #[arg(long, value_enum, default_value_t = Chemistry::BdV2_384)]
     chemistry: Chemistry,
+
+    /// Custom sc_primer structure, e.g. 'FIXED:ACGT+CELL:8+UMI:6'.
+    #[arg(long, conflicts_with = "chemistry")]
+    grammar: Option<String>,
 
     /// Stop after this many reads. Zero means scan the complete file.
     #[arg(long, default_value_t = 0)]
@@ -48,12 +63,7 @@ fn open_fastq(path: &Path) -> Result<Box<dyn BufRead>, String> {
     let file =
         File::open(path).map_err(|e| format!("failed to open R1 '{}': {e}", path.display()))?;
 
-    let is_gz = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"));
-
-    let reader: Box<dyn Read> = if is_gz {
+    let reader: Box<dyn Read> = if is_gzip_path(path) {
         Box::new(MultiGzDecoder::new(file))
     } else {
         Box::new(file)
@@ -62,10 +72,71 @@ fn open_fastq(path: &Path) -> Result<Box<dyn BufRead>, String> {
     Ok(Box::new(BufReader::new(reader)))
 }
 
+struct FastqRecord {
+    header: Vec<u8>,
+    seq: Vec<u8>,
+    qual: Vec<u8>,
+}
+
+impl FastqRecord {
+    fn uppercase_sequence(&self) -> Cow<'_, [u8]> {
+        if self.seq.iter().any(u8::is_ascii_lowercase) {
+            Cow::Owned(self.seq.to_ascii_uppercase())
+        } else {
+            Cow::Borrowed(&self.seq)
+        }
+    }
+
+    fn write_with_cell_id(&self, out: &mut dyn Write, cell_id: u64) -> std::io::Result<()> {
+        self.write_annotated(out, format_args!("#cell_id:{cell_id}"))
+    }
+
+    fn write_failure(&self, out: &mut dyn Write, reason: &str) -> std::io::Result<()> {
+        let label: String = reason.chars().map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        }).collect();
+        self.write_annotated(out, format_args!("#failure:{label}"))
+    }
+
+    fn write_annotated(
+        &self,
+        out: &mut dyn Write,
+        suffix: std::fmt::Arguments<'_>,
+    ) -> std::io::Result<()> {
+        let id_end = self.header
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(self.header.len());
+        out.write_all(&self.header[..id_end])?;
+        out.write_fmt(suffix)?;
+        out.write_all(&self.header[id_end..])?;
+        out.write_all(b"\n")?;
+        out.write_all(&self.seq)?;
+        out.write_all(b"\n+\n")?;
+        out.write_all(&self.qual)?;
+        out.write_all(b"\n")
+    }
+}
+
+fn export_read(
+    out: &mut dyn Write,
+    record: &FastqRecord,
+    cell_id: u64,
+    record_no: u64,
+) -> Result<(), String> {
+    record
+        .write_with_cell_id(out, cell_id)
+        .map_err(|e| format!("failed to write FASTQ record {record_no}: {e}"))
+}
+
 fn read_fastq_record<R: BufRead>(
     reader: &mut R,
     record_no: u64,
-) -> Result<Option<(Vec<u8>, Vec<u8>)>, String> {
+) -> Result<Option<FastqRecord>, String> {
     let mut header = Vec::new();
     let mut seq = Vec::new();
     let mut plus = Vec::new();
@@ -122,8 +193,7 @@ fn read_fastq_record<R: BufRead>(
         ));
     }
 
-    seq.make_ascii_uppercase();
-    Ok(Some((seq, qual)))
+    Ok(Some(FastqRecord { header, seq, qual }))
 }
 
 fn trim_newline(line: &mut Vec<u8>) {
@@ -150,7 +220,12 @@ fn bd_version(chemistry: Chemistry) -> Option<BdCellVersion> {
     }
 }
 
-fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
+fn run_bd(
+    cli: &Cli,
+    version: BdCellVersion,
+    mut out: Option<&mut dyn Write>,
+    mut rejected: Option<&mut dyn Write>,
+) -> Result<(), String> {
     let mut reader = open_fastq(&cli.r1)?;
     let whitelist = RhapsodyWhitelist::builtin(version);
 
@@ -173,26 +248,31 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
             break;
         }
 
-        let Some((seq, qual)) = read_fastq_record(&mut reader, total)? else {
+        let Some(record) = read_fastq_record(&mut reader, total)? else {
             break;
         };
         total += 1;
+        let seq = record.uppercase_sequence();
+        let qual = &record.qual;
 
         // BD cell cassettes are positional. SEARCH supplies only the small
         // tolerated cassette shift; diagnostics must not scan transcript
         // sequence for linker-like motifs.
-        let mut call = whitelist.call(&seq, &qual, 0, cli.shift_start, cli.shift_end);
+        let mut call = whitelist.call(&seq, qual, 0, cli.shift_start, cli.shift_end);
         let mut reverse = false;
 
         if call.is_none() {
             let rc_seq = PrimerDetector::reverse_complement(&seq);
-            let mut rc_qual = qual.clone();
+            let mut rc_qual = qual.to_vec();
             rc_qual.reverse();
             call = whitelist.call(&rc_seq, &rc_qual, 0, cli.shift_start, cli.shift_end);
             reverse = call.is_some();
         }
 
         if let Some(call) = call {
+            if let Some(writer) = out.as_deref_mut() {
+                export_read(writer, &record, call.cell_id, total)?;
+            }
             called += 1;
             if reverse {
                 reverse_calls += 1;
@@ -204,6 +284,12 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
                 *linker_counts.entry(bd.linker_signature).or_default() += 1;
             }
             continue;
+        }
+
+        if let Some(writer) = rejected.as_deref_mut() {
+            let reason = whitelist.explain_call_failure(&seq, 0, cli.shift_start, cli.shift_end);
+            record.write_failure(writer, &reason)
+                .map_err(|e| format!("failed to write rejected FASTQ record {total}: {e}"))?;
         }
 
         if cli.deep_failures {
@@ -277,7 +363,7 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
                                 profile.c1_mismatches,
                                 profile.c2_mismatches,
                                 profile.c3_mismatches,
-                                seq.clone(),
+                                seq.as_ref().to_vec(),
                             ));
                         }
                     }
@@ -502,9 +588,15 @@ fn run_bd(cli: &Cli, version: BdCellVersion) -> Result<(), String> {
     Ok(())
 }
 
-fn run_generic(cli: &Cli) -> Result<(), String> {
+fn run_generic(
+    cli: &Cli,
+    detector: PrimerDetector,
+    mut out: Option<&mut dyn Write>,
+    mut rejected: Option<&mut dyn Write>,
+) -> Result<(), String> {
     let mut reader = open_fastq(&cli.r1)?;
-    let detector = PrimerDetector::from_chemistry(cli.chemistry).map_err(|e| e.to_string())?;
+    let chemistry_name = &detector.grammar().name;
+    let mut exported = 0u64;
     let mut total = 0u64;
     let mut called = 0u64;
     let mut failures = HashMap::<String, u64>::new();
@@ -513,20 +605,53 @@ fn run_generic(cli: &Cli) -> Result<(), String> {
         if cli.max_reads != 0 && total >= cli.max_reads {
             break;
         }
-        let Some((seq, qual)) = read_fastq_record(&mut reader, total)? else {
+        let Some(record) = read_fastq_record(&mut reader, total)? else {
             break;
         };
         total += 1;
+        let seq = record.uppercase_sequence();
+        let qual = &record.qual;
 
         match detector
-            .detect_first(&seq, &qual)
+            .detect_first(&seq, qual)
             .map_err(|e| e.to_string())?
         {
-            Some(_) => called += 1,
+            Some(hit) => {
+                if let Some(writer) = out.as_deref_mut() {
+                    let cell_id = hit.bd_cell_id.or_else(|| {
+                        let cell = if let Some(corrected) = &hit.cell_seq {
+                            Cow::Borrowed(corrected.as_slice())
+                        } else {
+                            let observed = hit.get_cell(&seq, qual).ok()?.seq;
+                            Cow::Owned(match hit.orientation {
+                                Orientation::Forward => observed,
+                                Orientation::ReverseComplement => {
+                                    PrimerDetector::reverse_complement(&observed)
+                                }
+                            })
+                        };
+                        Grammar::encode_cell_id(&cell).ok()
+                    });
+                    if let Some(cell_id) = cell_id {
+                        export_read(writer, &record, cell_id, total)?;
+                        exported += 1;
+                    }
+                }
+                called += 1;
+            }
             None => {
                 let reason = detector
-                    .explain_failure(&seq, &qual)
+                    .explain_failure(&seq, qual)
                     .unwrap_or_else(|e| format!("diagnostic error: {e}"));
+                if let Some(writer) = rejected.as_deref_mut() {
+                    let header_reason = if cli.grammar.is_some() || reason == "no complete primer match" {
+                        detector.explain_grammar_failure(&seq, qual)?
+                    } else {
+                        reason.clone()
+                    };
+                    record.write_failure(writer, &header_reason)
+                        .map_err(|e| format!("failed to write rejected FASTQ record {total}: {e}"))?;
+                }
                 *failures.entry(reason).or_default() += 1;
             }
         }
@@ -534,12 +659,17 @@ fn run_generic(cli: &Cli) -> Result<(), String> {
 
     println!("# summary");
     println!("metric\tvalue");
-    println!("chemistry\t{}", cli.chemistry.name());
+    println!("chemistry\t{chemistry_name}");
     println!("reads_scanned\t{total}");
     println!("reads_resolved\t{called}");
     println!("reads_failed\t{}", total.saturating_sub(called));
     if total != 0 {
         println!("resolved_fraction\t{:.8}", called as f64 / total as f64);
+    }
+
+    if out.is_some() {
+        println!("reads_exported\t{exported}");
+        println!("resolved_without_cell_id\t{}", called - exported);
     }
 
     if !failures.is_empty() {
@@ -562,7 +692,7 @@ fn run_generic(cli: &Cli) -> Result<(), String> {
     }
 
     eprintln!("R1: {}", cli.r1.display());
-    eprintln!("chemistry: {}", cli.chemistry.name());
+    eprintln!("chemistry: {chemistry_name}");
     eprintln!("reads scanned: {total}");
     eprintln!("reads resolved: {called}");
     if total != 0 {
@@ -574,6 +704,42 @@ fn run_generic(cli: &Cli) -> Result<(), String> {
     Ok(())
 }
 
+fn is_gzip_path(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gz"))
+}
+
+enum FastqOutput {
+    Plain(BufWriter<File>),
+    Gzip(GzEncoder<BufWriter<File>>),
+}
+
+impl FastqOutput {
+    fn create(path: &Path) -> Result<Self, String> {
+        let file = File::create_new(path)
+            .map_err(|e| format!("failed to create FASTQ '{}': {e}", path.display()))?;
+        let writer = BufWriter::new(file);
+        Ok(if is_gzip_path(path) {
+            Self::Gzip(GzEncoder::new(writer, Compression::default()))
+        } else {
+            Self::Plain(writer)
+        })
+    }
+
+    fn writer(&mut self) -> &mut dyn Write {
+        match self {
+            Self::Plain(writer) => writer,
+            Self::Gzip(writer) => writer,
+        }
+    }
+
+    fn finish(self) -> std::io::Result<()> {
+        match self {
+            Self::Plain(mut writer) => writer.flush(),
+            Self::Gzip(writer) => writer.finish()?.flush(),
+        }
+    }
+}
+
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
     if cli.shift_start > cli.shift_end {
@@ -583,11 +749,43 @@ fn main() -> Result<(), String> {
         ));
     }
 
-    match bd_version(cli.chemistry) {
-        Some(BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj) => run_bd(
-            &cli,
-            bd_version(cli.chemistry).expect("matched BD chemistry"),
-        ),
-        _ => run_generic(&cli),
+    let custom_grammar = cli.grammar.as_deref()
+        .map(|structure| Grammar::parse("custom", structure))
+        .transpose()?;
+    let version = if custom_grammar.is_some() { None } else { bd_version(cli.chemistry) };
+    let detector = match (custom_grammar, version) {
+        (Some(grammar), _) => Some(PrimerDetector::from_grammar(grammar)?),
+        (None, Some(BdCellVersion::V2_96 | BdCellVersion::V2_384 | BdCellVersion::V2_384Vdj)) => None,
+        (None, _) => Some(PrimerDetector::from_chemistry(cli.chemistry)?),
+    };
+    if cli.out_fastq.is_some() {
+        if let Some(detector) = &detector {
+            let cell_len = detector.grammar().cell_len();
+            if cell_len == 0 || cell_len > 32 {
+                return Err("--out-fastq requires a cell barcode of 1 to 32 bases".to_string());
+            }
+        }
     }
+    let mut out = cli.out_fastq.as_deref().map(FastqOutput::create).transpose()?;
+    let mut rejected = cli.failed_fastq.as_deref().map(FastqOutput::create).transpose()?;
+
+    let accepted_writer = out.as_mut().map(FastqOutput::writer);
+    let rejected_writer = rejected.as_mut().map(FastqOutput::writer);
+    if let Some(detector) = detector {
+        run_generic(&cli, detector, accepted_writer, rejected_writer)?;
+    } else {
+        run_bd(
+            &cli,
+            version.expect("BD V2 diagnostics require a BD version"),
+            accepted_writer,
+            rejected_writer,
+        )?;
+    }
+    for (writer, path) in [(out, &cli.out_fastq), (rejected, &cli.failed_fastq)] {
+        if let (Some(writer), Some(path)) = (writer, path) {
+            writer.finish()
+                .map_err(|e| format!("failed to finish FASTQ '{}': {e}", path.display()))?;
+        }
+    }
+    Ok(())
 }

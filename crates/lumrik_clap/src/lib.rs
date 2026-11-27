@@ -31,6 +31,17 @@ pub use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEn
 pub struct ReadableFile(PathBuf);
 
 impl ReadableFile {
+
+    pub fn from_path_buf(path: PathBuf) -> Result<Self, String> {
+        let file = File::open(&path)
+            .map_err(|error| format!("cannot read input file '{}': {error}", path.display()))?;
+        let metadata = file.metadata()
+            .map_err(|error| format!("cannot inspect input file '{}': {error}", path.display()))?;
+        if !metadata.is_file() {
+            return Err(format!("input path '{}' is not a regular file", path.display()));
+        }
+        Ok(Self(path))
+    }
     pub fn as_path(&self) -> &Path {
         &self.0
     }
