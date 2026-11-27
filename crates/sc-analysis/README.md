@@ -1,11 +1,20 @@
 # sc-analysis
 
-`sc-analysis` is Lumrik’s Rust crate for single-cell gene expression analysis.
-Its `sc-analyse gex` command takes raw UMI matrices from one or more samples
-through QC, PCA, graph clustering, marker analysis, and SVG reporting. It
-exports an `analysis.h5ad` with normalized expression and cell annotations.
+`sc-analysis` is Lumrik’s Rust crate for single-cell analysis. The
+`sc-analyse` CLI covers expression analysis, SNP evidence, and H5AD annotation
+and splitting.
 
-## How the analysis works
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `gex` | Analyze raw UMI counts from one or more samples through QC, PCA, Leiden clustering, marker statistics, and SVG plots. Export normalized expression and cell annotations in `analysis.h5ad`. |
+| `snp` | Classify cells by alternate-allele evidence across a panel of known variants. See [How SNP evidence is classified](#how-snp-evidence-is-classified). |
+| `annotate` | Match rows in a TSV to cells by an existing `obs` column or cell ID and import selected columns into the H5AD in place. Every distinct cell key must be covered and extra TSV keys are rejected. A successful import keeps all cells. Use `--replace` to allow overwriting existing columns. |
+| `split` | Write one H5AD per group defined by an `obs` column, such as cell type, sample, or cluster. |
+| `help` | List commands with `sc-analyse help`, or show command options with `sc-analyse help <command>`. |
+
+## How GEX analysis works
 
 1. **Load one or more samples.** Read 10x-style Matrix Market (MEX) folders,
    Norn sample folders with an exonic matrix, or H5AD files with raw integer
@@ -60,6 +69,28 @@ exports an `analysis.h5ad` with normalized expression and cell annotations.
     SVGs for initial and merged Leiden labels, sample membership when available,
     UMI depth, and QC fractions. Also export PCA explained variance and UMI
     rank plots. ([UMAP](src/embedding.rs), [Plots](src/report.rs))
+
+## How SNP evidence is classified
+
+Use `snp` for a panel where any observed alternate allele is intended to
+flag the cell. Supply separate REF and ALT Matrix Market count folders with
+the same variant set. Use `--analyzed-snps` to restrict the panel.
+
+- **Per variant and cell**, any ALT count gives `MUT`. With zero ALT counts,
+  the variant is `WT` if its REF count reaches `--min-ref-for-wt`, and
+  `NO_INFO` otherwise.
+- **Across the panel**, any `MUT` variant makes the cell `MUT`. Otherwise,
+  the cell is `WT` if at least `--min-wt-snps` variants are `WT`, and
+  `NO_INFO` if there is insufficient evidence.
+
+These are panel-level evidence labels. A single ALT count can trigger a
+call regardless of allele fraction. Use a genotype caller for variant
+discovery, zygosity inference, or a model of sequencing error.
+
+The command writes `snp_variant_evidence.tsv` and `snp_cell_genotypes.tsv`.
+With `--data`, it also writes `snp_enriched.h5ad`, a copy of the supplied
+H5AD with SNP evidence added to `obs`. Cells without matched evidence
+receive `NO_INFO`. [Implementation](src/snp.rs)
 
 ## How to get it
 
