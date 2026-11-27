@@ -8,10 +8,11 @@ Grammar-driven primer/read-structure detection for 10x, BD Rhapsody and custom s
 
 ## Binaries
 
+- `bd-linker-survey`
 - `identify_primers`
 - `primer-diagnostics`
 - `primer-stress`
-- `bd-linker-survey`
+- `sc-cell-id-convert`
 
 ## Library use
 

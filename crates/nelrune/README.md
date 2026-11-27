@@ -40,7 +40,10 @@ BAM processing + quantification
 
 ## Binaries
 
+- `convert-feature-observations`
+- `mex-compare`
 - `nelrune` — the production integration binary.
+- `nelrune-reference-map`
 
 V(D)J reconstruction is implemented in the separate [`sc-vdj`](../sc-vdj/README.md) crate and exposed through `nelrune-vdj`. Keeping it downstream means the primary mapper BAM can be reused as receptor evidence rather than requiring Nelrune's core FASTQ/mapping orchestration to contain receptor-specific logic.
 

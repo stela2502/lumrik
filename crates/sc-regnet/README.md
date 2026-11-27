@@ -2,9 +2,13 @@
 
 **Trainable, biology-constrained regulatory-network inference for single-cell data.**
 
-**Status:** design proposal, October 2026. No training implementation is claimed here.
+**Status:** The crate defines regulatory graph and cell observation types and validates graph edges. The training workflow below is a design proposal.
 
 `sc-regnet` is a proposed independent Rust crate in the Lumrik workspace. Its purpose is to learn which transcription-factor (TF) activities, TF partnerships, and regulatory-element routes are consistent with observed cell-specific expression responses. The model is **not** intended merely to reconstruct an expression matrix: it should produce ranked, testable regulatory hypotheses, preserve competing explanations, and identify observations it cannot explain.
+
+## Binaries
+
+Library only.
 
 ## Motivation
 

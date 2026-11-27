@@ -8,7 +8,7 @@ Ambient-aware single-cell feature calling used for guide/tag assignment against 
 
 ## Binaries
 
-None. This crate is library-only.
+- `lumrik-guides`
 
 ## Library use
 

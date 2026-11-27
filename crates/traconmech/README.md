@@ -13,6 +13,10 @@ regions behave like differential transcriptional "light switches".
 A missing experimental modality is not an error. TraConMech should continue
 with the evidence that is available and report what could not be assessed.
 
+## Binaries
+
+- `traconmech`
+
 ## panc8 test data
 
 `scripts/export_panc8_traconmech.R` exports the SeuratData `panc8` object to

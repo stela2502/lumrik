@@ -10,6 +10,10 @@ without replacing the sequence that was originally observed.
 
 The canonical genome/annotation is never modified by the store.
 
+## Binaries
+
+- `reference-curator`
+
 ## Data model
 
 Each exact observed sequence has one stable `ReferenceCandidate`:

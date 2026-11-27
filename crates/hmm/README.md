@@ -36,6 +36,10 @@ ObservationSource<O>
        biological answer
 ```
 
+## Binaries
+
+Library only.
+
 ## Why this crate exists
 
 Lumrik increasingly needs to recognize *patterns along ordered biological data* rather than only exact strings or fixed thresholds.

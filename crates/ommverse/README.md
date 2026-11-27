@@ -9,6 +9,10 @@ The normal workflow has two phases:
 1. build the base genome/reference models;
 2. enrich one or many base models with InterPro protein annotations in a single streaming pass.
 
+## Binaries
+
+- `ommverse`
+
 ## Build
 
 From the Lumrik repository root:

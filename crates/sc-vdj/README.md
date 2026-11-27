@@ -8,13 +8,12 @@ Single-cell V(D)J reference indexing, receptor reconstruction and AIRR-compatibl
 
 ## Binaries
 
-- `nelrune-vdj`
-- `vdj-index`
-- `vdj-summary`
-- `vdj-decode`
-- `vdj-rich-cell`
 - `compare-to-airr-bd`
 - `create-test-vdj-index`
+- `vdj-decode`
+- `vdj-index`
+- `vdj-rich-cell`
+- `vdj-summary`
 
 ## Library use
 

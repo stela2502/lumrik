@@ -6,6 +6,12 @@ builds HC families using the same HC/CDR3 rules across the complete input pool,
 validates mutation alignments, assigns light-chain clones, and writes cell-level
 and family-level outputs.
 
+## Binaries
+
+- `clonomap`
+- `clonomap_batch`
+- `tree_viewer`
+
 ## Joint multi-sample analysis
 
 `clonomap analyze` accepts one or more paths after `--vdj-out`:

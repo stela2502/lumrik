@@ -145,6 +145,18 @@ Lumrik is a workspace, not a single monolithic implementation. The crate READMEs
 | [`onehot_dna`](crates/onehot_dna/README.md) | Compact fixed-length DNA matching |
 | [`int_to_dna`](crates/int_to_dna/README.md) | Compact sequence/integer identifier conversion |
 | [`lumrik-status`](crates/lumrik-status/README.md) | Live run-status HTTP server/dashboard |
+| [`sc-regnet`](crates/sc-regnet/README.md) | Regulatory graph and cell observation types |
+| [`sc_anndata`](crates/sc_anndata/README.md) | AnnData/H5AD interchange for dense and sparse expression matrices and typed metadata, with warnings for unsupported content. |
+| [`lumrik_clap`](crates/lumrik_clap/README.md) | Reusable Clap argument types and validators for paths and single-cell matrix formats. |
+| [`int-to-prot`](crates/int_to_prot/README.md) | Compact 5-bit amino-acid encoding, residue chemistry and in silico protease digestion. |
+| [`hmm`](crates/hmm/README.md) | Generic log-space hidden Markov models |
+| [`ommverse`](crates/ommverse/README.md) | Integrated genome-to-protein reference models |
+| [`traconmech`](crates/traconmech/README.md) | Biological context and candidate mechanism analysis |
+| [`ai_llm_con`](crates/ai_llm_con/README.md) | Shared chat transport for Ollama and OpenAI-compatible endpoints, with request and response audit logs. |
+| [`sc-analysis`](crates/sc-analysis/README.md) | Single-cell expression analysis, SNP evidence, and H5AD utilities |
+| [`data_table`](crates/data_table/README.md) | Numeric and categorical data tables |
+| [`reference_curator`](crates/reference_curator/README.md) | Persistent evidence-backed reference curation |
+| [`rust-htslib`](crates/rust-htslib/README.md) | Vendored HTSlib bindings for alignment and variant file I/O |
 
 ### Main capabilities
 

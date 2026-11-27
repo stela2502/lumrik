@@ -8,7 +8,7 @@ Compact DNA/string-to-integer and integer-to-string conversion helpers used for 
 
 ## Binaries
 
-None. This crate is library-only.
+- `int-to-dna`
 
 ## Library use
 

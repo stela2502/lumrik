@@ -8,18 +8,16 @@ High-throughput BAM/FASTQ normalization, quantification, coverage, tag handling 
 
 ## Binaries
 
-- `bam-ont-normalizer`
-- `illumina_normalizer`
-- `bam-quant`
-- `gtf-splice-index`
-- `bam-transcriptome-to-genome`
 - `bam-coverage`
-- `bw-compare`
-- `bam-subset-tag`
+- `bam-quant`
 - `bam-read-tag-stats`
+- `bam-subset-tag`
+- `bam-transcript-prob`
+- `bam-transcriptome-to-genome`
+- `bw-compare`
 - `fastq-primer-restore`
-- `sc-identify-cells`
-- `bam-quant-collector`
+- `find-sequences`
+- `gtf-splice-index`
 - `sum_up_ont_tab_result`
 
 ## Library use
